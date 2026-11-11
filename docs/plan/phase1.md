@@ -51,7 +51,8 @@ Pravidla:
 - `musubi-model` nezávisí na žádném crate projektu a nedělá I/O.
 - Engine nezná SQLite ani Google. Pracuje proti traitům. V testech dostane `musubi-store-sqlite` nad dočasným adresářem a `FakeProvider` z `musubi-testkit`: skriptované stránky, chyby (`CursorExpired`, `ReauthRequired`, `RateLimited`) a oznámení, s počítadlem volání. Obojí jsou dev-závislosti. `musubi-google` engine nepoužívá ani v testech; cestu engine + adaptér + falešný server Google testuje `musubi-syncd` v K6 a K7. Proto K5 nezávisí na K4.
 - Adaptér nezná engine ani úložiště.
-- `musubi-store-sqlite` a `musubi-google` smí přímo použít jen `musubi-syncd` (a testy). Dev-závislosti pro testy jsou povolené. CI to hlídá: `cargo-deny` v sekci `bans` s výčtem `wrappers` **(neověřeno: přesná syntaxe a to, zda jde odlišit dev-závislosti, se ověří v K0)**.
+- `musubi-store-sqlite` a `musubi-google` smí přímo použít jen `musubi-syncd` (a testy). Dev-závislosti pro testy jsou povolené. CI to hlídá testem `crates/musubi-testkit/tests/dependency_direction.rs`, který běží v `cargo test --workspace`: přečte `cargo metadata` a porovná interní závislosti každého crate s tabulkou povolených (tabulka výše); dev-závislosti povoluje kromě `musubi-engine` → `musubi-google`. Nový crate, který v tabulce chybí, test také zastaví. Pravidla a postup změny jsou v `CONTRIBUTING.md`.
+- Proč ne `cargo-deny` (ověřeno v K0 s cargo-deny 0.20): `[[bans.deny]]` s `wrappers` nerozliší dev-závislosti, takže zakáže i povolené `musubi-engine` → `musubi-store-sqlite` v `[dev-dependencies]`. Volba `[graph] exclude-dev = true` je globální: pustí i zakázané `musubi-engine` → `musubi-google` v testech a vyřadí dev-závislosti i z kontroly licencí a advisories.
 
 Co záměrně nevzniká:
 
@@ -72,7 +73,7 @@ Hlavní externí závislosti podle kapitoly 8 návrhu: `tokio`, `reqwest` (rustl
 <data>/backups/<čas>/…                    snímky
 ```
 
-- `tenant_id` je náhodný 128bitový identifikátor v base32. Do cesty nikdy nejde vstup od volajícího.
+- `tenant_id` je náhodný 128bitový identifikátor; textově 26 znaků malé base32hex (RFC 4648, bez paddingu), stejně jako všechny naše identifikátory (`musubi-model::id`). Base32hex proto, že je to zároveň platné klientské ID události u Googlu a řazení textu odpovídá řazení čísel. Do cesty nikdy nejde vstup od volajícího.
 - `control.db`: tenanti, klíče API (jen hash), účty a šifrované tokeny, trvalá fronta úloh, watch kanály (id kanálu → tenant, účet, kolekce, tajný token kanálu). Zápisy `synchronous=FULL`.
 - `main.db`: tabulky podle spiku ([storage.md](../research/phase0/storage.md), 3.1): `raw`, `items`, `entities`, `placements`, `occurrences`, `changes`, k tomu `collections` (kurzor, pokrytí, stav) a `meta` (verze schématu; vodoznak `projected` je rezervovaný pro fázi 3). Pět indexů podle kapitoly 5.6 návrhu. Žádné `WITHOUT ROWID` u tabulek s těly.
 - `outbox.db`: mutace, doručení, odchozí zprávy. Ve fázi 1 nevzniká, protože fáze 1 nemá mutace. Jméno, umístění v adresáři tenanta a pořadí v záloze jsou ale dané už teď a test zálohy s ním počítá.
@@ -150,14 +151,24 @@ pub trait TenantStore: Send {
 }
 ```
 
+Závazné signatury, typy a jejich kontrakty jsou od K0 v `crates/musubi-model/src/store.rs` a `control.rs`; náčrt výše je jejich zkratka. Upřesnění z K0 proti původnímu náčrtu:
+
+- `ReadId` přiděluje engine, musí být větší než `CollectionState::last_read` (o jedna víc je vždy platné). `CollectionState::active_read` drží rozběhnuté úplné čtení, aby po pádu pokračovalo se stejným `ReadId`.
+- `PageWrite` nese kromě `upserts` a `removals` i seznam `unchanged`: klíče, které přišly se stejným validátorem nebo hashem surového obsahu. Nic se pro ně nezapíše, jen se označí jako viděné čtením `read` (jinak by je `finish_full_read` smazal).
+- Hash surového obsahu je SHA-256 (`Raw::hash`, typ `RawHash`).
+- Každá položka nese `schema_version` kanonického tvaru (`Kind::SCHEMA_VERSION`) a `mapping_version` kodeku.
+- Výjimky série u Googlu jsou ve fázi 1 samostatné položky a entity. Spojuje je `Correlation { uid, recurrence_id }`: výskyt hlavní série nahrazený výjimkou se z `range` vynechá.
+- Pravidla opakování jsou v kanonickém tvaru textem RRULE; rozbalení dělá engine přes `musubi-recurrence` a výsledek zapíše jako `Occurrences` (řádky plus `SeriesSpan` s `indexed_until`).
+- `RangePage::unindexed` (jen na první stránce) vrací série, jejichž index končí dřív než okno dotazu; volající je pro tento dotaz rozbalí sám přes `musubi-recurrence`. Index posouvá `series_to_extend` a `extend_occurrences`.
+
 Obnova (`restore`) je offline příkaz `musubi-syncd restore`, ne operace traitu: nesmí běžet nad otevřeným tenantem.
 
-`ControlStore` je samostatný trait nad `control.db` (zhruba 12 operací): tenanti, klíče API (vložit hash, najít podle hashe, zneplatnit), účty a jejich stav, šifrované tokeny (zapsat, přečíst), fronta úloh (zařadit se sloučením duplicit, pronajmout splatné, dokončit nebo přeplánovat) a watch kanály (zapsat, najít podle id kanálu).
+`ControlStore` je samostatný trait nad `control.db` (18 operací, synchronní, `&self`): tenanti (vložit, smazat), klíče API (vložit hash, najít podle hashe, zneplatnit), účty a jejich stav, šifrované tokeny (zapsat, přečíst), fronta úloh (zařadit se sloučením duplicit podle klíče `dedup`, kdy platí dřívější `due`; pronajmout splatné na dobu `lease_for`; dokončit nebo přeplánovat, obojí jen s platným `LeaseId`, jinak `LeaseLost`) a watch kanály (zapsat, najít podle id kanálu, smazat, vypsat ty, kterým brzy vyprší platnost).
 
 Invarianty, které hlídají kontraktní testy traitu (běží proti každé implementaci):
 
 - stránka je celá i s kurzorem, nebo není vůbec;
-- opakovaná stránka se stejnými validátory nezapíše nic a neposune `seq`;
+- opakovaná stránka se stejnými validátory nezmění položky, entity ani žurnál a neposune `seq`; jen zaznamená, že ji úplné čtení vidělo;
 - `seq` roste a nikdy se znovu nepoužije, ani po prořezu a pádu;
 - `finish_full_read` označí jako smazané jen položky, které čtení s daným `ReadId` nevidělo;
 - jedna položka na (kolekce, vzdálený klíč), jedna entita na položku (ve fázi 1);
@@ -177,14 +188,16 @@ pub trait Provider: Send + Sync {
         -> BoxStream<'a, Result<ChangePage, SyncError>>;
     async fn fetch(&self, cx: &AccountCx, refs: &[RemoteRef])
         -> Result<Vec<RemoteObject>, SyncError>;
+    async fn refresh(&self, refresh_token: &SecretString) -> Result<AccessToken, SyncError>;
     fn push(&self) -> Option<&dyn PushSource> { None }
 }
 
 #[async_trait]
 pub trait PushSource: Send + Sync {
-    async fn subscribe(&self, cx: &AccountCx, col: &CollectionRef, callback: &Url)
+    async fn subscribe(&self, cx: &AccountCx, col: &CollectionRef, callback: &http::Uri)
         -> Result<Subscription, SyncError>;              // nese skutečnou `expiration`
     async fn unsubscribe(&self, cx: &AccountCx, s: &Subscription) -> Result<(), SyncError>;
+    fn channel_of(&self, headers: &HeaderMap) -> Option<ChannelId>;
     fn verify(&self, headers: &HeaderMap, known: &Subscription) -> Result<PushHint, PushRejected>;
 }
 
@@ -197,15 +210,24 @@ pub trait Codec<K: Kind> {
 // Fáze 4: `project` a `lift`.
 ```
 
+Závazné signatury jsou od K0 v `crates/musubi-model/src/provider.rs`. Upřesnění z K0 proti původnímu náčrtu:
+
+- `refresh` je nová metoda: výměna refresh tokenu za přístupový u token endpointu poskytovatele. Volá ji engine, nejvýš jednou na účet najednou; adaptér sám tokeny neobnovuje.
+- `channel_of` je nová metoda: webhook potřebuje z hlaviček zjistit id kanálu, aby našel `Subscription` v `ControlStore`, a teprve potom volá `verify`.
+- Callback je `http::Uri` (crate `http`, který používá `reqwest` i `axum`), ne `Url`.
+- `discover` vrací `Ok` jen s úplným seznamem; při selhání uprostřed vrátí `SyncError::PartialDiscovery { found, .. }` a engine nic nesmaže.
+- `ChangePage` má tvar `{ pass, upserts, removals, cursor: Option<Cursor>, last }`. `pass` je `Window`, `Full` nebo `Delta`. Kurzor je na každé stránce úplného čtení i delty (poslední nese kurzor pro příští delta), u okna je `None`: okno se opakuje, nepokračuje. `FetchHint { start: Start::Full | Start::Window(okno), page_size }` určuje, jaké čtení začít, když kurzor chybí.
+- `Decoded` je `Canonical(T)` nebo `Unsupported { reason }`: objekt bez kanonického tvaru se uloží jen surově, není to chyba čtení. `Codec` nemá `self`, takže není object-safe; engine ho dostává jako typový parametr.
+
 Co už ve fázi 1 drží tvar pro zápis:
 
 - `RemoteObject` nese surový obsah beze změny a validátor (u Googlu `etag`). To je základ podmíněného zápisu.
 - `Decoded` zachová neznámá pole v surové vrstvě; kanonický tvar je jen pohled.
 - `ProviderDescriptor` hlásí všechny schopnosti z kapitoly 6.2 včetně `conditional_update`, `conditional_delete` a vytvoření s klientským ID (Google: base32hex, 5–1024 znaků). API je vystaví hned.
 - Identifikátory umístění jsou naše, vzdálený klíč je zvlášť. Předem přidělené vzdálené ID ve fázi 3 tak nic nemění.
-- `AccountCx` dává adaptéru přístupový token, HTTP klienta, omezovač a hodiny. Obnovu tokenu dělá engine jednou na účet najednou; `invalid_grant` je `SyncError::ReauthRequired`.
+- `AccountCx` dává adaptéru id účtu, přístupový token, omezovač a hodiny. HTTP klienta v něm není: je to pole adaptéru (sdílený klient na poskytovatele), aby `musubi-model` nezávisel na `reqwest`. Obnovu tokenu dělá engine přes `Provider::refresh` jednou na účet najednou; `invalid_grant` je `SyncError::ReauthRequired`.
 
-Chyby jsou typované podle toho, co má engine udělat: `ReauthRequired`, `RateLimited { retry_after }`, `CursorExpired`, `Transient`, `Permanent`, `PartialDiscovery`.
+Chyby jsou typované podle toho, co má engine udělat: `ReauthRequired`, `Unauthorized` (odmítnutý přístupový token: engine zavolá `refresh` a zkusí to jednou znovu), `RateLimited { retry_after }`, `CursorExpired`, `Transient`, `Permanent`, `PartialDiscovery`.
 
 Google ve fázi 1 (fakta z [providers.md](../research/phase0/providers.md)):
 
@@ -235,8 +257,8 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
 - **Dále:** `rust-toolchain.toml`, `.cargo/config.toml` s `LIBSQLITE3_FLAGS`, `deny.toml`, workflow CI (kapitola 7), `CONTRIBUTING.md` s pravidly směru závislostí.
 - **Přijetí:**
   - CI je zelené na prázdném workspace: fmt, clippy `-D warnings`, test, `cargo deny check`;
-  - porušení směru závislostí (třeba `musubi-engine` → `musubi-store-sqlite` v `[dependencies]`) CI zastaví;
-  - `cargo deny check` projde jen s dokumentovanými výjimkami (RUSTSEC-2023-0071 s důvodem a datem revize);
+  - porušení směru závislostí (třeba `musubi-engine` → `musubi-store-sqlite` v `[dependencies]`) CI zastaví (job test, kapitola 2);
+  - `cargo deny check` projde jen s dokumentovanými výjimkami (RUSTSEC-2023-0071 s důvodem a datem revize; v K0 ji cargo-deny hlásí jako nenalezenou, protože `jsonwebtoken` přijde až v K6);
   - kostra `FakeProvider` v `musubi-testkit` implementuje `Provider` a `PushSource` v paměti a projde typový test stránkování: rozhraní jde implementovat bez `unsafe` a bez `todo!()`. Skriptování dodělá K5.
 - **Závisí na:** nic.
 - **Souběžně:** nic; je to brána.
@@ -425,14 +447,18 @@ GitHub Actions, workflow `.github/workflows/ci.yml`, akce připnuté na SHA, cac
 | clippy | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PR, `main` |
 | test | `cargo test --workspace --locked` (včetně kontraktních testů, zálohy a obnovy, krátkých crash testů) | PR, `main` |
 | deny | `cargo deny check` (licence, advisories, bans, sources) přes `EmbarkStudios/cargo-deny-action` | PR, `main`, denně |
-| bench-smoke | `cargo run -p musubi-testkit --bin bench --release -- --smoke` | PR |
+| bench-smoke | `cargo run -p musubi-testkit --bin bench --release --locked -- --smoke` | PR |
 | nightly | dlouhé crash testy, plné benchmarky, fuzz rekurence | v noci |
+
+Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1, K2 a K7. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
 
 `deny.toml`:
 
-- **licence:** povolené MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib. Další jen výjimkou po jednotlivých crates s důvodem. Copyleft (GPL, LGPL, AGPL, EUPL) zakázaný. Přesný seznam doplní první běh v K0 **(neověřeno)**;
-- **advisories:** zakázané, výjimka jen pro RUSTSEC-2023-0071 (`rsa` 0.9 přes `jsonwebtoken`). Soukromý klíč RSA nepoužíváme, krátkodobé tokeny podepisujeme Ed25519. Výjimka má datum revize a padá, až knihovny přejdou na `rsa` 0.10;
-- **bans:** `multiple-versions` jako chyba s výjimkami pro `p256`/`p384` a `ed25519-dalek`, které podle fáze 0 tahá více verzí `jsonwebtoken` **(neověřeno pro finální strom)**; směr závislostí přes `wrappers` (kapitola 2);
+Ověřeno v K0 (cargo-deny 0.20) proti dnešnímu stromu a proti zkušebnímu crate se všemi plánovanými závislostmi z kapitoly 2 v aktuálních verzích (`reqwest` 0.13, `axum` 0.8, `rusqlite` 0.42, `oauth2` 5, `jsonwebtoken` 11.1 `rust_crypto`, `governor` 0.10 atd.):
+
+- **licence:** povolené MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib. Další jen výjimkou po jednotlivých crates s důvodem. Copyleft (GPL, LGPL, AGPL, EUPL, MPL) zakázaný. Plný strom potřebuje BSD-3-Clause (`curve25519-dalek`, `ed25519-dalek`, `subtle`, `matchit`), ISC (`rustls-webpki`, `untrusted`), Unicode-3.0 (ICU přes `url`) a Zlib (`foldhash`); BSD-2-Clause zatím nic nepotřebuje, zůstává jako běžná permisivní licence. Jediná licence mimo seznam je CDLA-Permissive-2.0 u `webpki-root-certs` (přes `reqwest` 0.13 s rustls): K4 přidá výjimku `[[licenses.exceptions]]` jen pro tento crate s důvodem (permisivní licence dat kořenových certifikátů);
+- **advisories:** zakázané, výjimka pro RUSTSEC-2023-0071 (`rsa` 0.9 přes `jsonwebtoken`). Soukromý klíč RSA nepoužíváme, krátkodobé tokeny podepisujeme Ed25519. Výjimka má datum revize (1. 2. 2027) a padá, až knihovny přejdou na `rsa` 0.10. Zkušební strom ukázal i RUSTSEC-2026-0387 (časová proměnlivost v `crypto-bigint` 0.5 přes `p256`/`p384` v `jsonwebtoken` `rust_crypto`, opraveno v 0.7.6). Rozhodne K6: buď druhá výjimka s důvodem (ECDSA by se použilo jen k ověření veřejným klíčem), nebo podepisovat Ed25519 přímo přes `ed25519-dalek` bez `jsonwebtoken`;
+- **bans:** `multiple-versions` jako chyba; každá výjimka (`skip`) s důvodem a crate, který ji tahá, přidá ten kontrolní bod, který závislost přináší. K0 žádnou nepotřebuje. Předpoklad fáze 0 o `p256`/`p384` a `ed25519-dalek` neplatí: dvě verze těchto crates tahá `openidconnect`, který fáze 1 nepoužívá. Plný strom místo toho potřebuje výjimky pro `base64` 0.22/0.23, `getrandom` 0.2/0.3/0.4, `hashbrown` 0.14/0.16/0.17, `rand` 0.8/0.9 (s `rand_chacha`, `rand_core`), `syn` 2/3, `thiserror` 1/2 (s `thiserror-impl`, přes `oauth2`) a `r-efi` 5/6. Dalším duplicitám se vyhneme volbou verzí: `sha2` 0.10 a `aes-gcm` 0.10 (stejná generace RustCrypto jako `jsonwebtoken`), `tower-http` 0.6 (stejně jako `reqwest`). `oauth2` s `default-features = false` (jinak tahá `reqwest` 0.12) a vlastním HTTP klientem. `reqwest` 0.13 s funkcí `rustls` tahá `aws-lc-rs` (C a CMake), který návrh odmítl; K4 použije `rustls-no-provider` s `ring`. Interní závislosti ve workspace mají `version` vedle `path`, jinak je `wildcards = "deny"` hlásí. Směr závislostí `cargo-deny` nehlídá (kapitola 2);
 - **sources:** jen crates.io; git závislosti zakázané (převzaté jádro `rrule` je vendored kód, ne git závislost).
 
 `LIBSQLITE3_FLAGS="-DSQLITE_DEFAULT_MEMSTATUS=0"` je v `.cargo/config.toml`, takže platí lokálně i v CI. Test v K1 ověří, že build volbu opravdu má (`PRAGMA compile_options`).

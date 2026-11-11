@@ -1,0 +1,49 @@
+# cargo-deny policy (docs/plan/phase1.md, chapter 7).
+# Run: cargo deny check
+
+[graph]
+all-features = true
+
+[advisories]
+# Any advisory (vulnerability, unmaintained, unsound, yanked) fails the check
+# unless listed here with a reason and a review date.
+ignore = [
+    # rsa 0.9 (Marvin timing side channel on RSA private-key operations), pulled
+    # by jsonwebtoken 11 with the rust_crypto backend. We never hold an RSA
+    # private key: RSA is only used to verify signatures, short-lived tokens are
+    # signed with Ed25519 (proposal, chapter 8). Not in the tree before K6 adds
+    # jsonwebtoken; until then cargo-deny reports it as not detected (warning).
+    # Review: 2027-02-01, or as soon as jsonwebtoken depends on rsa >= 0.10.
+    { id = "RUSTSEC-2023-0071", reason = "no RSA private-key operations; review 2027-02-01" },
+]
+
+[licenses]
+# Permissive only. Copyleft (GPL, LGPL, AGPL, EUPL, MPL) is not allowed.
+# Anything else needs a per-crate exception below with a reason.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# The list covers the planned phase 1 stack; entries unused by today's tree are fine.
+unused-allowed-license = "allow"
+
+[bans]
+# No duplicate crate versions without an explicit `skip` entry with a reason.
+# The phase 1 stack will need some (docs/plan/phase1.md, chapter 7); each
+# checkpoint adds those its dependencies bring.
+multiple-versions = "deny"
+# Dependency direction between workspace crates is not checked here: cargo-deny
+# cannot tell dev-dependencies apart. See crates/musubi-testkit/tests/dependency_direction.rs.
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

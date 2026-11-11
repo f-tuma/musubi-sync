@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# Phase 0 spikes are standalone experiments with their own lockfiles.
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+repository = "https://github.com/f-tuma/musubi-sync"
+
+[workspace.dependencies]
+# Internal crates. Which crate may depend on which is checked by
+# crates/musubi-testkit/tests/dependency_direction.rs (see CONTRIBUTING.md).
+musubi-model = { path = "crates/musubi-model", version = "0.0.0" }
+musubi-recurrence = { path = "crates/musubi-recurrence", version = "0.0.0" }
+musubi-store-sqlite = { path = "crates/musubi-store-sqlite", version = "0.0.0" }
+musubi-google = { path = "crates/musubi-google", version = "0.0.0" }
+musubi-engine = { path = "crates/musubi-engine", version = "0.0.0" }
+musubi-testkit = { path = "crates/musubi-testkit", version = "0.0.0" }
+
+async-trait = "0.1.92"
+futures-core = { version = "0.3.34", default-features = false, features = ["alloc"] }
+http = { version = "1.5.0", default-features = false, features = ["std"] }
+jiff = { version = "0.2.43", features = ["serde"] }
+secrecy = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["raw_value"] }
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"

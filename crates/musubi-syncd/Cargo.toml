@@ -1,0 +1,18 @@
+[package]
+name = "musubi-syncd"
+description = "musubi-sync server binary: HTTP API, webhooks, OAuth, backup and restore."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+musubi-model.workspace = true
+musubi-recurrence.workspace = true
+musubi-store-sqlite.workspace = true
+musubi-google.workspace = true
+musubi-engine.workspace = true
+
+[lints]
+workspace = true

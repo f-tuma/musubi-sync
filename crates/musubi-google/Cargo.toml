@@ -1,0 +1,14 @@
+[package]
+name = "musubi-google"
+description = "Google Calendar provider adapter for musubi-sync."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+musubi-model.workspace = true
+
+[lints]
+workspace = true
