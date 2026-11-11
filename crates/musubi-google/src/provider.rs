@@ -363,6 +363,7 @@ fn remote_object(raw: &RawValue, meta: &EventMeta) -> RemoteObject {
         key: RemoteKey(meta.id.clone()),
         validator: Validator(validator),
         raw,
+        master: meta.recurring_event_id.clone().map(RemoteKey),
     }
 }
 
@@ -732,6 +733,8 @@ mod tests {
         assert_eq!(keys, ["s_1", "a"]);
         assert_eq!(page.upserts[1].validator, Validator(r#""2""#.into()));
         assert!(page.upserts[0].validator.0.starts_with("sha256:"));
+        assert_eq!(page.upserts[0].master, Some(RemoteKey("s".into())));
+        assert_eq!(page.upserts[1].master, None);
         assert_eq!(page.removals, [RemoteKey("gone".into())]);
         assert!(page.last && next.is_none());
         assert_eq!(

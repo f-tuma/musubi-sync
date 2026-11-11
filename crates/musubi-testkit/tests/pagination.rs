@@ -27,6 +27,7 @@ fn obj(key: &str, span: Option<(i64, i64)>) -> FakeObject {
                 media_type: MediaType::Json,
                 body: format!("{{\"id\":\"{key}\"}}").into_bytes(),
             },
+            master: None,
         },
         span: span.map(|(a, b)| {
             (

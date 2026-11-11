@@ -347,10 +347,13 @@ pub struct ItemWrite {
     pub occurrences: Occurrences,
 }
 
-/// iCalendar UID + RECURRENCE-ID (proposal 2.4).
+/// Series key + RECURRENCE-ID (proposal 2.4, plan ch. 9 question 3).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Correlation {
-    /// UID.
+    /// Opaque, provider-defined series key, **not** an iCalendar UID: the
+    /// [`crate::remote::RemoteKey`] of the series master (its own key for a
+    /// master or single event, [`crate::remote::RemoteObject::master`] for an
+    /// exception). Google: the master event `id`.
     pub uid: String,
     /// Set for a single instance of a series: the replaced occurrence, in the
     /// convention of [`OccurrenceRow::recurrence_id`].

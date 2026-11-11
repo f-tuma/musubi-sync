@@ -1,15 +1,21 @@
 //! Test kit for musubi-sync. Dev-dependency only (`publish = false`).
 //!
-//! K0 contains the skeleton of [`FakeProvider`]: an in-memory [`Provider`] and
-//! [`PushSource`] with paging, resumable cursors and a delta log. Scripted
-//! failures, notifications and call counters follow in K5.
+//! [`FakeProvider`] is an in-memory [`Provider`] and [`PushSource`] with
+//! paging, resumable cursors and a delta log, scripted failures
+//! ([`FakeProvider::fail`]), a gate holding full reads
+//! ([`FakeProvider::hold_full_reads`]), notifications and call counters
+//! ([`FakeProvider::calls`]). Engine tests also drive it with
+//! [`FakeProvider::unlist_collection`], [`FakeProvider::hide_from_reads`] and
+//! [`FakeProvider::expire_cursors`], and use [`ManualClock`],
+//! [`MemoryVault`], [`CanonicalCodec`] and [`event_object`].
 //!
 //! [`google`] is the in-process fake Google Calendar HTTP server (K3) that
 //! the Google adapter's transport tests run against.
 
 pub mod google;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::future::Future;
 use std::num::NonZeroU32;
 use std::ops::Bound;
 use std::pin::Pin;
@@ -25,15 +31,19 @@ use musubi_model::capability::{
     ProviderId, PushSupport, RecurrenceSupport, ReminderCapabilities, SchedulingCapabilities,
     SchedulingMode, ZoneSupport,
 };
+use musubi_model::control::AccountTokens;
 use musubi_model::provider::ChannelId;
+use musubi_model::provider::Decoded;
 use musubi_model::provider::{
     AccessToken, BoxStream, Clock, Discovery, FetchHint, Limiter, Pass, PushHint, RemoteCollection,
     Start, Subscription,
 };
+use musubi_model::remote::MediaType;
 use musubi_model::remote::RemoteRef;
 use musubi_model::{
-    AccountCx, ChangePage, CollectionRef, Cursor, EntityKind, Provider, ProviderDescriptor,
-    PushRejected, PushSource, RemoteKey, RemoteObject, SyncError, TimeWindow,
+    AccountCx, AccountId, CalendarEvent, ChangePage, Codec, CollectionRef, Cursor, EntityKind,
+    Event, Provider, ProviderDescriptor, PushRejected, PushSource, Raw, RemoteKey, RemoteObject,
+    StoreError, SyncError, TimeWindow, TokenVault, Validator,
 };
 use secrecy::{ExposeSecret, SecretString};
 
@@ -59,10 +69,55 @@ struct FakeCollection {
     objects: BTreeMap<RemoteKey, FakeObject>,
     /// Version of the last change per key, deleted keys included.
     log: BTreeMap<RemoteKey, u64>,
+    /// Keys left out of every page but still returned by `fetch`.
+    hidden: BTreeSet<RemoteKey>,
+}
+
+/// A provider call that [`FakeProvider::fail`] can make fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Op {
+    /// [`Provider::discover`].
+    Discover,
+    /// One page request of [`Provider::changes`] (any pass, any stream).
+    Page,
+    /// [`Provider::fetch`].
+    Fetch,
+    /// [`Provider::refresh`].
+    Refresh,
+    /// [`PushSource::subscribe`].
+    Subscribe,
+}
+
+/// How many times each call reached the provider (failed ones included).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Calls {
+    /// `discover` calls.
+    pub discover: u32,
+    /// Streams started by `changes` from scratch for a full read.
+    pub full_reads: u32,
+    /// Streams started by `changes` from scratch for a window read.
+    pub window_reads: u32,
+    /// Streams started by `changes` with a cursor of a finished pass: delta requests.
+    pub deltas: u32,
+    /// Pages requested over all streams.
+    pub pages: u32,
+    /// `fetch` calls.
+    pub fetch: u32,
+    /// `refresh` calls.
+    pub refresh: u32,
+    /// `subscribe` calls.
+    pub subscribe: u32,
+    /// `unsubscribe` calls.
+    pub unsubscribe: u32,
 }
 
 #[derive(Debug, Default)]
 struct State {
+    /// Scripted failures, consumed one per call of the op.
+    failures: BTreeMap<Op, VecDeque<SyncError>>,
+    calls: Calls,
+    /// While set, full-read pages wait for a permit.
+    full_gate: Option<Arc<tokio::sync::Semaphore>>,
     version: u64,
     /// Delta cursors older than this are expired.
     oldest_cursor: u64,
@@ -142,6 +197,68 @@ impl FakeProvider {
         }
     }
 
+    /// The next call of `op` fails with `err` instead of running (queued in order).
+    pub fn fail(&self, op: Op, err: SyncError) {
+        self.lock().failures.entry(op).or_default().push_back(err);
+    }
+
+    /// Call counters so far.
+    pub fn calls(&self) -> Calls {
+        self.lock().calls
+    }
+
+    /// Full-read pages wait from now on until [`FakeProvider::release_full_reads`].
+    pub fn hold_full_reads(&self) {
+        self.lock().full_gate = Some(Arc::new(tokio::sync::Semaphore::new(0)));
+    }
+
+    /// Lets held full reads continue and stops holding new ones.
+    pub fn release_full_reads(&self) {
+        if let Some(g) = self.lock().full_gate.take() {
+            g.close();
+        }
+    }
+
+    /// Removes a collection from `discover` (its objects stay readable).
+    pub fn unlist_collection(&self, col: &CollectionRef) {
+        if let Some(c) = self.lock().collections.get_mut(col) {
+            c.meta = None;
+        }
+    }
+
+    /// Leaves `key` out of every page from now on (full, window and delta reads),
+    /// while `fetch` still returns it: a listing that misses an object that exists.
+    pub fn hide_from_reads(&self, col: &CollectionRef, key: &RemoteKey) {
+        let mut s = self.lock();
+        s.collections
+            .entry(col.clone())
+            .or_default()
+            .hidden
+            .insert(key.clone());
+    }
+
+    /// Open watch channels.
+    pub fn channels(&self) -> Vec<ChannelId> {
+        self.lock().channels.keys().cloned().collect()
+    }
+
+    /// Counts a call of `op`; returns its scripted failure, if any.
+    fn enter(&self, op: Op) -> Result<(), SyncError> {
+        let mut s = self.lock();
+        let c = &mut s.calls;
+        match op {
+            Op::Discover => c.discover += 1,
+            Op::Page => c.pages += 1,
+            Op::Fetch => c.fetch += 1,
+            Op::Refresh => c.refresh += 1,
+            Op::Subscribe => c.subscribe += 1,
+        }
+        match s.failures.get_mut(&op).and_then(VecDeque::pop_front) {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
     /// Makes every delta cursor issued so far expire ([`SyncError::CursorExpired`]).
     pub fn expire_cursors(&self) {
         let mut s = self.lock();
@@ -194,7 +311,11 @@ impl FakeProvider {
             Pos::Full { snapshot, after } => {
                 // Keyset paging: keys inserted behind `after` during the read are
                 // newer than `snapshot`, so the following delta delivers them.
-                let mut rest = c.objects.range(past(&after)).map(|(_, o)| &o.object);
+                let mut rest = c
+                    .objects
+                    .range(past(&after))
+                    .filter(|(k, _)| !c.hidden.contains(*k))
+                    .map(|(_, o)| &o.object);
                 let upserts: Vec<_> = rest.by_ref().take(size).cloned().collect();
                 let last = rest.next().is_none();
                 let pos = if last {
@@ -225,6 +346,7 @@ impl FakeProvider {
                 let mut rest = c
                     .objects
                     .range(past(&after))
+                    .filter(|(k, _)| !c.hidden.contains(*k))
                     .map(|(_, o)| o)
                     .filter(|o| o.span.is_some_and(|(a, b)| window.overlaps(a, b)))
                     .map(|o| &o.object);
@@ -255,7 +377,7 @@ impl FakeProvider {
                 let mut rest = c
                     .log
                     .range(past(&after))
-                    .filter(|(_, v)| **v > since && **v <= until)
+                    .filter(|(k, v)| **v > since && **v <= until && !c.hidden.contains(*k))
                     .map(|(k, _)| k);
                 let changed: Vec<_> = rest.by_ref().take(size).collect();
                 let last = rest.next().is_none();
@@ -387,15 +509,36 @@ struct Pages {
     size: usize,
     emitted: usize,
     done: bool,
+    /// Wait of a held full-read page (see [`FakeProvider::hold_full_reads`]).
+    held: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl Stream for Pages {
     type Item = Result<ChangePage, SyncError>;
 
-    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         if this.done {
             return Poll::Ready(None);
+        }
+        if matches!(this.pos, Ok(Pos::Full { .. }))
+            && this.held.is_none()
+            && let Some(g) = this.provider.lock().full_gate.clone()
+        {
+            // Closed by `release_full_reads`; no permit is ever added.
+            this.held = Some(Box::pin(async move {
+                let _ = g.acquire().await;
+            }));
+        }
+        if let Some(h) = &mut this.held
+            && h.as_mut().poll(cx).is_pending()
+        {
+            return Poll::Pending;
+        }
+        this.held = None;
+        if let Err(e) = this.provider.enter(Op::Page) {
+            this.done = true;
+            return Poll::Ready(Some(Err(e)));
         }
         let pos = match &mut this.pos {
             Ok(p) => p.clone(),
@@ -460,6 +603,7 @@ impl Provider for FakeProvider {
     }
 
     async fn discover(&self, _cx: &AccountCx) -> Result<Discovery, SyncError> {
+        self.enter(Op::Discover)?;
         let s = self.lock();
         Ok(Discovery {
             collections: s
@@ -477,7 +621,8 @@ impl Provider for FakeProvider {
         cursor: Option<Cursor>,
         hint: FetchHint,
     ) -> BoxStream<'a, Result<ChangePage, SyncError>> {
-        let snapshot = self.lock().version;
+        let mut s = self.lock();
+        let snapshot = s.version;
         let pos = match (&cursor, hint.start) {
             (Some(c), _) => Pos::decode(c).map_err(Some),
             (None, Start::Full) => Ok(Pos::Full {
@@ -489,6 +634,13 @@ impl Provider for FakeProvider {
                 after: None,
             }),
         };
+        match &pos {
+            Ok(Pos::Full { after: None, .. }) => s.calls.full_reads += 1,
+            Ok(Pos::Window { .. }) => s.calls.window_reads += 1,
+            Ok(Pos::Delta { after: None, .. }) | Err(_) => s.calls.deltas += 1,
+            Ok(_) => {}
+        }
+        drop(s);
         let size = hint.page_size.map_or(self.page_size, NonZeroU32::get) as usize;
         Box::pin(Pages {
             provider: self.clone(),
@@ -497,6 +649,7 @@ impl Provider for FakeProvider {
             size,
             emitted: 0,
             done: false,
+            held: None,
         })
     }
 
@@ -505,6 +658,7 @@ impl Provider for FakeProvider {
         _cx: &AccountCx,
         refs: &[RemoteRef],
     ) -> Result<Vec<RemoteObject>, SyncError> {
+        self.enter(Op::Fetch)?;
         let s = self.lock();
         Ok(refs
             .iter()
@@ -514,6 +668,7 @@ impl Provider for FakeProvider {
     }
 
     async fn refresh(&self, _refresh_token: &SecretString) -> Result<AccessToken, SyncError> {
+        self.enter(Op::Refresh)?;
         Ok(AccessToken {
             access: SecretString::from("fake-access-token"),
             expires_in: std::time::Duration::from_secs(3600),
@@ -534,6 +689,7 @@ impl PushSource for FakeProvider {
         col: &CollectionRef,
         _callback: &Uri,
     ) -> Result<Subscription, SyncError> {
+        self.enter(Op::Subscribe)?;
         let mut s = self.lock();
         s.next_channel += 1;
         let channel = ChannelId(format!("fake-channel-{}", s.next_channel));
@@ -548,7 +704,9 @@ impl PushSource for FakeProvider {
     }
 
     async fn unsubscribe(&self, _cx: &AccountCx, sub: &Subscription) -> Result<(), SyncError> {
-        self.lock().channels.remove(&sub.channel);
+        let mut s = self.lock();
+        s.calls.unsubscribe += 1;
+        s.channels.remove(&sub.channel);
         Ok(())
     }
 
@@ -598,8 +756,85 @@ impl Clock for FixedClock {
     }
 }
 
+/// A clock that moves only when told to. Cheap to clone; clones share the time.
+#[derive(Debug, Clone)]
+pub struct ManualClock(Arc<Mutex<Timestamp>>);
+
+impl ManualClock {
+    /// A clock standing at `t`.
+    pub fn new(t: Timestamp) -> Self {
+        Self(Arc::new(Mutex::new(t)))
+    }
+
+    /// Moves the clock forward by `d`.
+    pub fn advance(&self, d: SignedDuration) {
+        let mut t = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        *t += d;
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> Timestamp {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// A [`Codec<Event>`] whose raw body is the canonical [`CalendarEvent`] as JSON:
+/// lets engine tests script events without a provider's wire format.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CanonicalCodec;
+
+impl Codec<Event> for CanonicalCodec {
+    const MAPPING_VERSION: u32 = 1;
+
+    fn decode(raw: &Raw) -> Decoded<CalendarEvent> {
+        match serde_json::from_slice(&raw.body) {
+            Ok(ev) => Decoded::Canonical(ev),
+            Err(e) => Decoded::Unsupported {
+                reason: e.to_string(),
+            },
+        }
+    }
+}
+
+/// A remote object carrying `ev` for [`CanonicalCodec`]; `master` is the
+/// series master's key for a single instance of a series.
+pub fn event_object(
+    key: &str,
+    validator: &str,
+    ev: &CalendarEvent,
+    master: Option<&str>,
+) -> RemoteObject {
+    RemoteObject {
+        key: RemoteKey(key.to_owned()),
+        validator: Validator(validator.to_owned()),
+        raw: Raw {
+            media_type: MediaType::Json,
+            body: serde_json::to_vec(ev).unwrap_or_default(),
+        },
+        master: master.map(|m| RemoteKey(m.to_owned())),
+    }
+}
+
+/// Account tokens in memory.
+#[derive(Debug, Default)]
+pub struct MemoryVault(Mutex<HashMap<AccountId, AccountTokens>>);
+
+impl TokenVault for MemoryVault {
+    fn load(&self, account: AccountId) -> Result<Option<AccountTokens>, StoreError> {
+        let m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(m.get(&account).cloned())
+    }
+
+    fn store(&self, account: AccountId, t: &AccountTokens) -> Result<(), StoreError> {
+        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        m.insert(account, t.clone());
+        Ok(())
+    }
+}
+
 /// Account context for tests: no rate limit, clock fixed at `now`.
-pub fn account_cx(account: musubi_model::AccountId, now: Timestamp) -> AccountCx {
+pub fn account_cx(account: AccountId, now: Timestamp) -> AccountCx {
     AccountCx {
         account,
         token: SecretString::from("fake-access-token"),

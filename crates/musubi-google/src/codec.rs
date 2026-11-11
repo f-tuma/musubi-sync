@@ -211,9 +211,9 @@ fn decode(raw: &Raw) -> Res<CalendarEvent> {
 /// only `id`, `recurringEventId` and `originalStartTime`) the iCalUID Google
 /// gives events created through its API: `<master id>@google.com`.
 ///
-/// shortcut: wrong for imported series whose iCalUID is not `<id>@google.com`;
-/// the engine then cannot join such a cancelled shell to its master by `uid`.
-/// Upgrade by joining on the master's remote key once the model carries it.
+/// Wrong for imported series whose iCalUID is not `<id>@google.com`; the
+/// engine never joins exceptions by `uid`, it joins them by
+/// `RemoteObject::master` (`recurringEventId`), so this only labels the event.
 fn uid(ev: &GEvent) -> Res<String> {
     if let Some(uid) = ev.ical_uid.as_ref().filter(|u| !u.is_empty()) {
         return Ok(uid.clone());
