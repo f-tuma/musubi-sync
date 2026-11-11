@@ -1,0 +1,5 @@
+[env]
+# Phase 0 storage condition 1: SQLite without the global memory-statistics mutex
+# (proposal 4.3). Read by libsqlite3-sys when it builds the bundled SQLite;
+# K1 verifies it through `PRAGMA compile_options`.
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"

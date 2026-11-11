@@ -1,0 +1,16 @@
+[package]
+name = "musubi-engine"
+description = "Account actors, scheduler and ingest pipeline of musubi-sync."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+musubi-model.workspace = true
+musubi-recurrence.workspace = true
+
+[lints]
+workspace = true

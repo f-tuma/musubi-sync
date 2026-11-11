@@ -1,0 +1,23 @@
+[package]
+name = "musubi-model"
+description = "Types and interfaces of the musubi-sync core, without I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+futures-core.workspace = true
+http.workspace = true
+jiff.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

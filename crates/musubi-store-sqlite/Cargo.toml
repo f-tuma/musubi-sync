@@ -1,0 +1,15 @@
+[package]
+name = "musubi-store-sqlite"
+description = "SQLite implementation of the musubi-sync storage traits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+musubi-model.workspace = true
+
+[lints]
+workspace = true

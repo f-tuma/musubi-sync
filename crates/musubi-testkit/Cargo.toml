@@ -1,0 +1,23 @@
+[package]
+name = "musubi-testkit"
+description = "Test fixtures for musubi-sync: FakeProvider, fake Google server, crash harness, load generator."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+musubi-model.workspace = true
+async-trait.workspace = true
+futures-core.workspace = true
+http.workspace = true
+jiff.workspace = true
+secrecy.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
