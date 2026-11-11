@@ -1,0 +1,25 @@
+# Recurrence differential harness (Phase 0)
+
+Runs an RRULE/RDATE/EXDATE corpus through two oracles (python-dateutil, ical.js)
+and every Rust candidate, then scores each one against hand-decided expectations.
+The findings are in `docs/research/phase0/recurrence.md`.
+
+```sh
+./run.sh            # corpus -> oracles -> candidates -> results/report.md (~1 min after the first build)
+./run.sh --bench    # also 10k series x 5 years -> results/bench.json (~3 min, plus the calcard run)
+```
+
+Requirements: python3, node and npm, cargo. Everything runs locally with no network
+access after the first `npm ci` and `cargo build`.
+
+| Path | What |
+|---|---|
+| `corpus/build_corpus.py` | Generates `cases.json` (89 cases, tagged). Add new cases here. |
+| `corpus/expected.json` | Accepted results per case. `decided_by`: `oracles`, `rfc` or `policy`, each with a `why`. |
+| `oracles/` | The dateutil oracle, plus ical.js with VTIMEZONEs generated from the tzdb (`gen_vtimezones.py`). |
+| `candidates/` | One Rust binary: `run <candidate> cases.json`, `bench`, `tzcheck`. |
+| `compare.py` | Scores the candidates and writes `results/report.md`. `--seed` adds expectations where both oracles agree. |
+| `bench.py` | Records time and peak RSS (via `wait4`) over 3 runs per candidate. |
+
+`run.sh` runs with `TZ=Europe/Prague` on purpose: a non-UTC host zone exposes
+engines that leak the host zone into floating times.

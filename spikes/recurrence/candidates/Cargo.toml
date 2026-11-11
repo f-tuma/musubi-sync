@@ -1,0 +1,19 @@
+[package]
+name = "rrule-candidates"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1"
+rrule = { version = "=0.14.0", features = ["exrule"] }
+rrule2 = { version = "=0.15.0", features = ["exrule"] }
+rrule_jiff = { git = "https://github.com/ccope/rust-rrule", rev = "50db3e275634506198cc7ed769ac7889eda7f0e6", package = "rrule", features = ["exrule"] }
+calcard = "=0.3.14"
+calcard-next = "=3.0.1"
+chrono = "0.4"
+chrono-tz = "0.10"
+jiff = "0.2"
+
+[profile.release]
+debug = false
