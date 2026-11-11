@@ -72,6 +72,12 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
-      # STUB: long crash tests (K1/K7), full benchmarks (K7) and the recurrence
-      # fuzz harness (K2) are added by those checkpoints.
-      - run: echo "nightly is a stub until checkpoints K1, K2 and K7 add its jobs"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # K1: kill -9 in the middle of apply_page, 1000 rounds (the PR test runs 200).
+      - run: cargo test -p musubi-store-sqlite --release --locked --test crash
+        env:
+          MUSUBI_CRASH_ROUNDS: "1000"
+      # STUB: the whole-binary crash tests and full benchmarks (K7) and the
+      # recurrence fuzz harness (K2) are added by those checkpoints.

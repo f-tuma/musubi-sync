@@ -9,7 +9,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+jiff.workspace = true
 musubi-model.workspace = true
+rusqlite.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

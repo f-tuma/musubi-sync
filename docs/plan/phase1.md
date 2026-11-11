@@ -88,7 +88,7 @@ Podmínky z kapitoly 4.3 návrhu jsou požadavky. Fáze 1 plní všechny, které
 | build s `SQLITE_DEFAULT_MEMSTATUS=0` (`LIBSQLITE3_FLAGS` v `.cargo/config.toml`) | ano | — |
 | `busy_timeout` jako první pragma, zápisy `BEGIN IMMEDIATE`, čtecí a zapisovací spojení zvlášť | ano | — |
 | jeden zapisovatel na soubor | ano (zapisovatel tenanta pro `main.db`) | jediný zapisovatel outboxu pro `outbox.db`: přijetí, doručení z promítnutí, výsledky doručení |
-| vlastní checkpointer: `PASSIVE` na pozadí, `TRUNCATE` v zapisovači po stránce nad prahem 64 MB, čekání na čtenáře nejvýš 10 ms, back-off 1 s nebo +32 MB; `journal_size_limit`, vysoký `wal_autocheckpoint` | ano | přijetí reset nikdy nevolá |
+| vlastní checkpointer: `PASSIVE` na pozadí, `TRUNCATE` v zapisovači po stránce nad prahem 64 MB, čekání na čtenáře nejvýš 10 ms, back-off 1 s nebo +32 MB; `journal_size_limit`, vysoký `wal_autocheckpoint`. Doplněno v K1: čtení i `PASSIVE` na pozadí procházejí branou v procesu, kterou `TRUNCATE` na ty 10 ms uzavře a vyprázdní, a zapisovatel před `TRUNCATE` sám pustí `PASSIVE`. Bez toho se překrývající čtenáři střídají na starých značkách čtení, WAL se nikdy nevyprázdní a import rostl přes 256 MB; `TRUNCATE` navíc nemá na zámku checkpointu busy handler, takže souběžný `PASSIVE` ho shodí hned | ano | přijetí reset nikdy nevolá |
 | omezená délka čtecích transakcí; dlouhá čtení přes backup API nebo `VACUUM INTO` | ano: rozsah je stránkovaný, export a záloha jdou přes backup API | — |
 | id se nikdy znovu nepoužijí | `changes.seq` je `AUTOINCREMENT` | id mutací `AUTOINCREMENT` |
 | stránka příjmu jedna transakce `synchronous=NORMAL` | ano | — |
@@ -140,7 +140,7 @@ pub trait TenantStore: Send {
     fn set_collection_state(&mut self, col: CollectionId, s: &CollectionStatus)
         -> Result<(), StoreError>;                                                   // 20 stav, chyba, pokrytí
     fn extend_occurrences(&mut self, w: &OccurrenceWrite) -> Result<(), StoreError>; // 21
-    fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError>;     // 22 náhrobky, osiřelé raw
+    fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError>;     // 22 náhrobky; osiřelá raw bez ohledu na stáří
     fn checkpoint(&mut self, mode: CheckpointMode) -> Result<CheckpointInfo, StoreError>; // 23
 
     // Fáze 3 (soubor outboxu), zde jen pro tvar:
@@ -177,11 +177,11 @@ Obnova (`restore`) je offline příkaz `musubi-syncd restore`, ne operace traitu
 
 - tenanti: vložit, smazat;
 - klíče API: vložit hash, najít podle hashe, zneplatnit;
-- účty: vložit nebo nahradit, najít podle id, najít podle (tenant, poskytovatel, `subject`), vypsat účty tenanta, změnit stav, smazat. Trojice (tenant, poskytovatel, `subject`) je unikátní: stejná trojice pod jiným id je `AlreadyExists`, takže nové připojení téhož účtu Google zachová jeho id. Odpojení (`AccountState::Removing`): engine odhlásí kanály účtu, každou jeho kolekci odstraní přes `purge_collection` a nakonec zavolá `delete_account`, které smaže účet s tokeny, úlohami a kanály; po restartu kroky pokračují;
+- účty: vložit nebo nahradit, najít podle id, najít podle (tenant, poskytovatel, `subject`), vypsat účty tenanta, změnit stav, smazat. Trojice (tenant, poskytovatel, `subject`) je unikátní: stejná trojice pod jiným id je `AlreadyExists`, takže nové připojení téhož účtu Google zachová jeho id. Odpojení (`AccountState::Removing`): engine odhlásí kanály účtu, každou jeho kolekci odstraní přes `purge_collection` a nakonec zavolá `delete_account`, které smaže účet s tokeny, úlohami a kanály; po restartu kroky pokračují. Úloha nese účet v indexovaném sloupci `account` (může být prázdný), odvozeném z druhu úlohy; `ExtendIndex` a `Maintain` patří tenantovi a smaže je jen `delete_tenant`;
 - šifrované tokeny: zapsat, přečíst (zapečetěný blob);
 - rozběhnuté přihlášení OAuth: `put_oauth_state` uloží záznam pod SHA-256 parametru `state` (tenant, poskytovatel, případně účet k novému připojení, ověřovač PKCE, platnost) a smaže prošlé; `take_oauth_state` ho v jedné transakci vrátí a smaže, takže `state` platí jednou. Stav tedy není podepsaný a bezstavový: jednorázovost z K6 vyžaduje záznam;
-- fronta úloh: zařadit se sloučením duplicit podle klíče `dedup`, kdy platí dřívější `due`; pronajmout splatné na dobu `lease_for`; prodloužit pronájem (`extend_lease`, dlouhé úplné čtení); dokončit; přeplánovat s volbou `count_attempt` (chyba s odkladem počítá pokus, omezení rychlosti ani plánované pokračování ne). Prodloužení, dokončení i přeplánování jen s platným `LeaseId`, jinak `LeaseLost`. Úloha s pokračováním (další část úplného čtení) zařadí pokračování před `complete`: pád mezi tím nechá starou úlohu znovu běžet (stránky jsou idempotentní), nikdy nezůstane žádná;
-- watch kanály: zapsat, najít podle id kanálu, vypsat kanály tenanta nebo jednoho jeho účtu (před `delete_account` a `delete_tenant`), smazat, vypsat ty, kterým brzy vyprší platnost. `ChannelRecord` je `{ tenant, account, collection: CollectionId, sub: Subscription }`, klíčem je `sub.channel` (samostatné `id` by ho jen opakovalo). Token kanálu je v `Subscription` jako `SecretString`, ne prostý `String`. Webhook tak oznámení ověří přes `PushSource::verify` bez otevření úložiště tenanta.
+- fronta úloh: zařadit se sloučením duplicit podle klíče `dedup` v rámci tenanta a jen mezi nepronajatými úlohami (běžící úloha se nesloučí, aby nepřišla o nový podnět), kdy platí dřívější `due`; pronajmout splatné na dobu `lease_for`; prodloužit pronájem (`extend_lease`, dlouhé úplné čtení); dokončit; přeplánovat s volbou `count_attempt` (chyba s odkladem počítá pokus, omezení rychlosti ani plánované pokračování ne). Prodloužení, dokončení i přeplánování jen s platným `LeaseId`, jinak `LeaseLost`. Úloha s pokračováním (další část úplného čtení) zařadí pokračování před `complete`: pád mezi tím nechá starou úlohu znovu běžet (stránky jsou idempotentní), nikdy nezůstane žádná;
+- watch kanály: zapsat, najít podle id kanálu, vypsat kanály tenanta nebo jednoho jeho účtu (před `delete_account` a `delete_tenant`), smazat, vypsat ty, kterým brzy vyprší platnost. `ChannelRecord` je `{ tenant, account, collection: CollectionId, sub: Subscription }`, klíčem je `sub.channel` (samostatné `id` by ho jen opakovalo). Token kanálu je v `Subscription` jako `SecretString`, ne prostý `String`. Webhook tak oznámení ověří přes `PushSource::verify` bez otevření úložiště tenanta. V `control.db` je token kanálu uložený nešifrovaně: není to přihlašovací údaj, podvržené oznámení umí jen spustit synchronizaci kolekce kanálu, která čte poskytovatele tokeny účtu, a `verify` potřebuje prostou hodnotu u každého oznámení bez cesty přes trezor. Rozhodnutí znovu posoudí K6 (bezpečnostní revize).
 
 `TokenVault` je pohled enginu na tokeny účtu: `load(account) -> Option<AccountTokens>` a `store(account, &AccountTokens)`, prosté tokeny (`refresh`, `access` jako `SecretString`, `access_until`). Implementuje ho `musubi-syncd` nad `write_tokens`/`read_tokens` se šifrováním AES-GCM vázaným na tenanta a účet; model ani engine šifrování neznají. Když `Provider::refresh` vrátí nový (rotovaný) refresh token, engine ho nejdřív trvale uloží přes `store` a nový access token použije až po `Ok` (návrh 7): starý refresh token už neplatí, ztráta nového by vynutila nové přihlášení.
 
@@ -472,7 +472,7 @@ GitHub Actions, workflow `.github/workflows/ci.yml`, akce připnuté na SHA, cac
 | bench-smoke | `cargo run -p musubi-testkit --bin bench --release --locked -- --smoke` | PR |
 | nightly | dlouhé crash testy, plné benchmarky, fuzz rekurence | v noci |
 
-Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1, K2 a K7. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
+Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1, K2 a K7. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
 
 `deny.toml`:
 
