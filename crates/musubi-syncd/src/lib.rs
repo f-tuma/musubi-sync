@@ -26,8 +26,8 @@
 //! answer `404`.
 //!
 //! Stores are synchronous: handlers call them through [`App::run`]
-//! (`spawn_blocking`). Every route except `/v1/stream` and `/v1/admin/backup`
-//! runs under one shared concurrency limit and a request timeout, so a flood
+//! (`spawn_blocking`). Every route except `/v1/stream`, `/v1/admin/backup`
+//! and `DELETE /v1/admin/tenants/{id}` runs under one shared concurrency limit and a request timeout, so a flood
 //! of unknown credentials or webhook calls queues instead of filling the
 //! blocking pool; request bodies are capped. Errors, including rejected
 //! extractors and unknown routes, are `{"error", "message"}` JSON.
@@ -42,7 +42,7 @@ mod read;
 // Linked so that the dependency graph matches docs/plan/phase1.md chapter 2.
 use musubi_recurrence as _;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -100,6 +100,8 @@ pub struct App {
     sealer: Arc<Sealer>,
     admin_hash: [u8; 32],
     bus: Arc<CommitBus>,
+    /// Tenants being deleted: an OAuth callback does not add accounts to them.
+    deleting: Mutex<HashSet<TenantId>>,
     data_dir: PathBuf,
     _lock: File,
 }
@@ -137,7 +139,7 @@ impl App {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(err)?;
-        let public = url("public_url", &c.public_url)?;
+        let public = base_url(url("public_url", &c.public_url)?);
         let sealer = Arc::new(Sealer::new(&key32("token_key", &c.token_key)?));
         let bus = Arc::new(CommitBus::default());
         let sink = bus.clone();
@@ -177,6 +179,7 @@ impl App {
             sealer,
             admin_hash: sha256(c.admin_key.as_bytes()),
             bus,
+            deleting: Mutex::default(),
             data_dir: c.data_dir.clone(),
             _lock: lock,
         }))
@@ -196,7 +199,6 @@ impl App {
             .route("/v1/oauth/google/callback", get(oauth::callback))
             .route("/v1/webhooks/google", post(push::google))
             .route("/v1/admin/tenants", post(admin::create_tenant))
-            .route("/v1/admin/tenants/{id}", delete(admin::delete_tenant))
             .route("/v1/admin/tenants/{id}/keys", post(admin::create_key))
             .route("/v1/admin/tenants/{id}/stats", get(admin::stats))
             .route("/v1/admin/keys/{id}", delete(admin::revoke_key))
@@ -206,10 +208,11 @@ impl App {
                 REQUEST_TIMEOUT,
             ));
         // Long-lived: the stream has its own per-tenant cap (`read::stream`),
-        // a backup takes as long as the data needs.
+        // a backup and a tenant deletion take as long as the data needs.
         Router::new()
             .route("/v1/stream", get(read::stream))
             .route("/v1/admin/backup", post(admin::backup_route))
+            .route("/v1/admin/tenants/{id}", delete(admin::delete_tenant))
             .merge(bounded)
             .fallback(|| async { ApiError::not_found() })
             .layer(axum::middleware::map_response(json_errors))
@@ -255,6 +258,11 @@ impl App {
         self.signer.issue(c)
     }
 
+    /// Tenants being deleted; held while an OAuth callback adds an account.
+    pub(crate) fn deleting(&self) -> std::sync::MutexGuard<'_, HashSet<TenantId>> {
+        self.deleting.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Runs blocking store work off the async workers.
     pub(crate) async fn run<T: Send + 'static>(
         self: &Arc<Self>,
@@ -265,6 +273,15 @@ impl App {
             .await
             .map_err(|e| ApiError::internal(&e))?
     }
+}
+
+/// `public_url` as a base to join relative paths to: `Url::join` replaces
+/// the last path segment of a base without a trailing `/`.
+fn base_url(mut u: Url) -> Url {
+    if !u.path().ends_with('/') {
+        u.set_path(&format!("{}/", u.path()));
+    }
+    u
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -581,4 +598,22 @@ async fn tokens(
             "expires": Timestamp::from_second(claims.exp).map_err(|e| ApiError::internal(&e))?,
         })),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_url_keeps_its_path() {
+        let join = |public: &str| {
+            base_url(Url::parse(public).unwrap())
+                .join("v1/webhooks/google")
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(join("https://h/sync"), "https://h/sync/v1/webhooks/google");
+        assert_eq!(join("https://h/sync/"), "https://h/sync/v1/webhooks/google");
+        assert_eq!(join("https://h"), "https://h/v1/webhooks/google");
+    }
 }

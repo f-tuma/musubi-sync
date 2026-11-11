@@ -948,6 +948,54 @@ async fn removing_an_account_stops_its_channels_before_its_tokens_go() {
 }
 
 #[tokio::test]
+async fn removal_keeps_channels_and_tokens_when_a_refresh_fails_transiently() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    // An expired access token: the removal refreshes it first, and that fails.
+    let mut tokens = h.vault.load(ACCOUNT).unwrap().unwrap();
+    tokens.access_until = h.clock_now();
+    h.vault.store(ACCOUNT, &tokens).unwrap();
+    h.fake
+        .fail(Op::Refresh, SyncError::Transient("network".into()));
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap_err();
+    assert_eq!(h.fake.channels().len(), 1, "still live at the provider");
+    assert_eq!(h.control.channels(TENANT, Some(ACCOUNT)).unwrap().len(), 1);
+    assert_eq!(h.state(), Some(AccountState::Removing));
+
+    // The resumed removal stops the channel with the kept tokens.
+    h.advance(h.config.lease_for + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.state(), None);
+    assert!(h.fake.channels().is_empty());
+}
+
+#[tokio::test]
+async fn removal_without_a_grant_forgets_the_channels() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    let mut tokens = h.vault.load(ACCOUNT).unwrap().unwrap();
+    tokens.access_until = h.clock_now();
+    h.vault.store(ACCOUNT, &tokens).unwrap();
+    h.fake.fail(Op::Refresh, SyncError::ReauthRequired);
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap();
+    assert_eq!(h.state(), None);
+    assert!(
+        h.control
+            .channels(TENANT, Some(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+    // Nothing can stop it at the provider; it expires there.
+    assert_eq!(h.fake.calls().unsubscribe, 0);
+}
+
+#[tokio::test]
 async fn removal_cut_short_continues_after_a_restart() {
     let h = H::new();
     h.put_at("a", 1);

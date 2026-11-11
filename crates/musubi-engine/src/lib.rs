@@ -304,12 +304,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                         gone_ok(self.drop_channel(&cx, ch).await)?;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(%account, error = %e, "cannot stop push channels");
+                // Without a grant the channels cannot be stopped; they expire.
+                // Any other failure retries the removal, which keeps the tokens.
+                Err(EngineError::Sync(SyncError::ReauthRequired)) => {
+                    tracing::warn!(%account, "no grant to stop push channels with");
                     for ch in channels {
                         gone_ok(self.ctl(move |c| c.delete_channel(&ch.sub.channel)).await)?;
                     }
                 }
+                Err(e) => return Err(e),
             }
         }
         gone_ok(self.ctl(move |c| c.delete_account(account)).await)?;
