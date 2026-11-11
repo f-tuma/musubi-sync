@@ -1,0 +1,66 @@
+{
+ "calcard-next": {
+  "files": 16,
+  "code_lines": 2886,
+  "external_crates": [
+   "ahash",
+   "jiff",
+   "serde"
+  ],
+  "crate_paths_outside_core": [
+   "common::DateTimeResult",
+   "common::IanaString",
+   "common::timezone::Tz",
+   "icalendar::ICalendar",
+   "icalendar::ICalendarComponent",
+   "icalendar::ICalendarComponentType",
+   "icalendar::ICalendarFrequency",
+   "icalendar::ICalendarMonth",
+   "icalendar::ICalendarParameterName",
+   "icalendar::ICalendarPeriod",
+   "icalendar::ICalendarProperty",
+   "icalendar::ICalendarRecurrenceRule",
+   "icalendar::ICalendarValue",
+   "icalendar::timezone::TzResolver"
+  ]
+ },
+ "rrule-0.14": {
+  "files": 25,
+  "code_lines": 4926,
+  "external_crates": [
+   "chrono",
+   "chrono-tz",
+   "log",
+   "serde_with",
+   "thiserror"
+  ],
+  "crate_paths_outside_core": [
+   "parser",
+   "parser::ContentLine",
+   "parser::ContentLineCaptures",
+   "parser::Grammar",
+   "parser::ParseError",
+   "parser::str_to_weekday"
+  ],
+  "parser_code_lines": 801
+ },
+ "rrule-jiff-port": {
+  "files": 23,
+  "code_lines": 3003,
+  "external_crates": [
+   "jiff",
+   "log",
+   "serde_with",
+   "thiserror"
+  ],
+  "crate_paths_outside_core": [
+   "parser",
+   "parser::ContentLine",
+   "parser::ContentLineCaptures",
+   "parser::Grammar",
+   "parser::ParseError",
+   "parser::str_to_weekday"
+  ],
+  "parser_code_lines": 756
+ }
+}

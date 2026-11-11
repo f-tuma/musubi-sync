@@ -1,0 +1,1201 @@
+{
+ "allday-daily-exdate-date": {
+  "accept": [
+   [
+    "2026-03-27",
+    "2026-03-29",
+    "2026-03-31"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "allday-exdate-dtstart": {
+  "accept": [
+   [
+    "2026-03-28",
+    "2026-03-29"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "allday-rdate-date": {
+  "accept": [
+   [
+    "2026-03-01",
+    "2026-04-01",
+    "2026-04-15"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "allday-weekly-until-date": {
+  "accept": [
+   [
+    "2026-03-02",
+    "2026-03-09",
+    "2026-03-16",
+    "2026-03-23",
+    "2026-03-30"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "allday-yearly-feb29": {
+  "accept": [
+   [
+    "2024-02-29",
+    "2028-02-29"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 3.3.10: invalid dates MUST be ignored."
+ },
+ "bymonthday-1-and-neg1": {
+  "accept": [
+   [
+    "1997-09-30T13:00:00Z",
+    "1997-10-01T13:00:00Z",
+    "1997-10-31T14:00:00Z",
+    "1997-11-01T14:00:00Z",
+    "1997-11-30T14:00:00Z",
+    "1997-12-01T14:00:00Z",
+    "1997-12-31T14:00:00Z",
+    "1998-01-01T14:00:00Z",
+    "1998-01-31T14:00:00Z",
+    "1998-02-01T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "bymonthday-31-skips": {
+  "accept": [
+   [
+    "2026-01-31T08:00:00Z",
+    "2026-03-31T07:00:00Z",
+    "2026-05-31T07:00:00Z",
+    "2026-07-31T07:00:00Z",
+    "2026-08-31T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "bymonthday-neg1": {
+  "accept": [
+   [
+    "2026-01-31T08:00:00Z",
+    "2026-02-28T08:00:00Z",
+    "2026-03-31T07:00:00Z",
+    "2026-04-30T07:00:00Z",
+    "2026-05-31T07:00:00Z",
+    "2026-06-30T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "bymonthday-neg3": {
+  "accept": [
+   [
+    "1997-09-28T13:00:00Z",
+    "1997-10-29T14:00:00Z",
+    "1997-11-28T14:00:00Z",
+    "1997-12-29T14:00:00Z",
+    "1998-01-29T14:00:00Z",
+    "1998-02-26T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "bysetpos-first-and-last": {
+  "accept": [
+   [
+    "2026-01-01T14:00:00Z",
+    "2026-01-30T14:00:00Z",
+    "2026-02-02T14:00:00Z",
+    "2026-02-27T14:00:00Z",
+    "2026-03-02T14:00:00Z",
+    "2026-03-31T13:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "bysetpos-first-monday": {
+  "accept": [
+   [
+    "2026-01-05T08:00:00Z",
+    "2026-02-02T08:00:00Z",
+    "2026-03-02T08:00:00Z",
+    "2026-04-06T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "bysetpos-last-weekday": {
+  "accept": [
+   [
+    "2026-01-30T14:00:00Z",
+    "2026-02-27T14:00:00Z",
+    "2026-03-31T13:00:00Z",
+    "2026-04-30T13:00:00Z",
+    "2026-05-29T13:00:00Z",
+    "2026-06-30T13:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "bysetpos-yearly-weekly-mix": {
+  "accept": [
+   [
+    "2026-03-08T13:00:00Z",
+    "2026-09-27T13:00:00Z",
+    "2027-03-14T13:00:00Z",
+    "2027-09-26T13:00:00Z",
+    "2028-03-12T13:00:00Z",
+    "2028-09-24T13:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 3.3.10: BYSETPOS applies to the set of each FREQ interval (the year), not each month."
+ },
+ "byweekno-1-wkst-mo": {
+  "accept": [
+   [
+    "2026-01-04T14:00:00Z",
+    "2027-01-04T14:00:00Z",
+    "2027-01-10T14:00:00Z",
+    "2028-01-03T14:00:00Z",
+    "2028-01-09T14:00:00Z",
+    "2029-01-01T14:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "ISO week 1; 2025-12-29 precedes DTSTART, so 2026 contributes only Jan 4 (hand-checked)."
+ },
+ "byweekno-1-wkst-su": {
+  "accept": [
+   [
+    "2026-01-04T14:00:00Z",
+    "2026-01-05T14:00:00Z",
+    "2027-01-03T14:00:00Z",
+    "2027-01-04T14:00:00Z",
+    "2028-01-02T14:00:00Z",
+    "2028-01-03T14:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "Week 1 with WKST=SU is the first Sunday-started week with >=4 days in the year (hand-checked)."
+ },
+ "byweekno-20-monday": {
+  "accept": [
+   [
+    "1997-05-12T13:00:00Z",
+    "1998-05-11T13:00:00Z",
+    "1999-05-17T13:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "Verbatim RFC 5545 3.8.5.3 example: 1997-05-12, 1998-05-11, 1999-05-17."
+ },
+ "byweekno-53": {
+  "accept": [
+   [
+    "1998-12-28T14:00:00Z",
+    "2004-12-27T14:00:00Z",
+    "2009-12-28T14:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "Mondays of ISO week 53 from 1998 with COUNT=3: 1998, 2004, 2009 (week 53 exists only in years starting on Thursday, or leap years starting on Wednesday; the next are 2015, 2020, 2026, beyond COUNT)."
+ },
+ "byweekno-neg1-thursday": {
+  "accept": [
+   [
+    "2026-12-31T14:00:00Z",
+    "2027-12-30T14:00:00Z",
+    "2028-12-28T14:00:00Z",
+    "2029-12-27T14:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "Last ISO week's Thursday: 2026-12-31, 2027-12-30, 2028-12-28, 2029-12-27 (hand-checked)."
+ },
+ "byyearday-60-leap": {
+  "accept": [
+   [
+    "2025-03-01T14:00:00Z",
+    "2026-03-01T14:00:00Z",
+    "2027-03-01T14:00:00Z",
+    "2028-02-29T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "byyearday-every-3rd-year": {
+  "accept": [
+   [
+    "1997-01-01T14:00:00Z",
+    "1997-04-10T13:00:00Z",
+    "1997-07-19T13:00:00Z",
+    "2000-01-01T14:00:00Z",
+    "2000-04-09T13:00:00Z",
+    "2000-07-18T13:00:00Z",
+    "2003-01-01T14:00:00Z",
+    "2003-04-10T13:00:00Z",
+    "2003-07-19T13:00:00Z",
+    "2006-01-01T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "byyearday-neg366": {
+  "accept": [
+   [
+    "2028-01-01T14:00:00Z",
+    "2032-01-01T14:00:00Z",
+    "2036-01-01T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "count-1": {
+  "accept": [
+   [
+    "2026-04-01T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "count-exdate-no-replenish": {
+  "accept": [
+   [
+    "2026-04-01T07:00:00Z",
+    "2026-04-03T07:00:00Z",
+    "2026-04-04T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "count-reconstructed-in-window": {
+  "accept": [
+   [
+    "2028-09-20T07:00:00Z",
+    "2028-09-21T07:00:00Z",
+    "2028-09-22T07:00:00Z",
+    "2028-09-23T07:00:00Z",
+    "2028-09-24T07:00:00Z",
+    "2028-09-25T07:00:00Z",
+    "2028-09-26T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "daily-byhour-interval2": {
+  "accept": [
+   [
+    "2026-04-01T06:00:00Z",
+    "2026-04-01T07:00:00Z",
+    "2026-04-03T06:00:00Z",
+    "2026-04-03T07:00:00Z",
+    "2026-04-05T06:00:00Z",
+    "2026-04-05T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "dst-apia-skipped-day": {
+  "accept": [
+   [
+    "2011-12-28T20:00:00Z",
+    "2011-12-29T20:00:00Z",
+    "2011-12-30T20:00:00Z"
+   ],
+   [
+    "2011-12-28T20:00:00Z",
+    "2011-12-29T20:00:00Z",
+    "2011-12-30T20:00:00Z",
+    "2011-12-31T20:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "Generated nonexistent local time. RFC 3.3.10 (ignore, do not count) gives the second list; 3.8.5.3/3.3.5 (offset before the gap) collides with the next real instance and the duplicate is dropped, giving the first."
+ },
+ "dst-lordhowe-fold-30min": {
+  "accept": [
+   [
+    "2026-04-03T14:45:00Z",
+    "2026-04-04T14:45:00Z",
+    "2026-04-05T15:15:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 5545 3.3.5: an ambiguous local time is the first occurrence (offset before the change). ical.js takes the second."
+ },
+ "dst-lordhowe-gap-30min": {
+  "accept": [
+   [
+    "2026-10-02T15:45:00Z",
+    "2026-10-03T15:45:00Z",
+    "2026-10-04T15:15:00Z"
+   ],
+   [
+    "2026-10-02T15:45:00Z",
+    "2026-10-04T15:15:00Z",
+    "2026-10-05T15:15:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 5545 3.3.10: nonexistent generated local times MUST be ignored and not counted; 3.8.5.3 asks to interpret them per 3.3.5 (UTC offset before the gap). Both accepted. The after-gap offset (ical.js) matches neither."
+ },
+ "dst-ny-fold-daily": {
+  "accept": [
+   [
+    "2026-10-31T05:30:00Z",
+    "2026-11-01T05:30:00Z",
+    "2026-11-02T06:30:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 5545 3.3.5: an ambiguous local time is the first occurrence (offset before the change). ical.js takes the second."
+ },
+ "dst-ny-gap-daily": {
+  "accept": [
+   [
+    "2026-03-07T07:30:00Z",
+    "2026-03-08T07:30:00Z",
+    "2026-03-09T06:30:00Z"
+   ],
+   [
+    "2026-03-07T07:30:00Z",
+    "2026-03-09T06:30:00Z",
+    "2026-03-10T06:30:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 5545 3.3.10: nonexistent generated local times MUST be ignored and not counted; 3.8.5.3 asks to interpret them per 3.3.5 (UTC offset before the gap). Both accepted. The after-gap offset (ical.js) matches neither."
+ },
+ "dst-prague-explicit-gap-dtstart": {
+  "accept": [
+   [
+    "2026-03-29T01:30:00Z",
+    "2026-03-30T00:30:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 5545 3.3.5: an explicit nonexistent time uses the offset before the gap (03:30 CEST = 01:30Z). Musubi event-time-model agrees."
+ },
+ "dst-prague-fold-daily": {
+  "accept": [
+   [
+    "2026-10-24T00:30:00Z",
+    "2026-10-25T00:30:00Z",
+    "2026-10-26T01:30:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 5545 3.3.5: an ambiguous local time is the first occurrence (offset before the change). ical.js takes the second."
+ },
+ "dst-prague-gap-daily": {
+  "accept": [
+   [
+    "2026-03-28T01:30:00Z",
+    "2026-03-29T01:30:00Z",
+    "2026-03-30T00:30:00Z"
+   ],
+   [
+    "2026-03-28T01:30:00Z",
+    "2026-03-30T00:30:00Z",
+    "2026-03-31T00:30:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 5545 3.3.10: nonexistent generated local times MUST be ignored and not counted; 3.8.5.3 asks to interpret them per 3.3.5 (UTC offset before the gap). Both accepted. The after-gap offset (ical.js) matches neither."
+ },
+ "dst-prague-hourly-gap": {
+  "accept": [
+   [
+    "2026-03-28T23:00:00Z",
+    "2026-03-29T00:00:00Z",
+    "2026-03-29T01:00:00Z",
+    "2026-03-29T02:00:00Z"
+   ],
+   [
+    "2026-03-28T23:00:00Z",
+    "2026-03-29T00:00:00Z",
+    "2026-03-29T01:00:00Z",
+    "2026-03-29T02:00:00Z",
+    "2026-03-29T03:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "Generated nonexistent local time. RFC 3.3.10 (ignore, do not count) gives the second list; 3.8.5.3/3.3.5 (offset before the gap) collides with the next real instance and the duplicate is dropped, giving the first."
+ },
+ "dst-prague-weekly-wallclock": {
+  "accept": [
+   [
+    "2026-03-16T08:00:00Z",
+    "2026-03-23T08:00:00Z",
+    "2026-03-30T07:00:00Z",
+    "2026-04-06T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "dtstart-not-in-rule": {
+  "accept": [
+   [
+    "2026-03-10T08:00:00Z",
+    "2026-03-16T08:00:00Z",
+    "2026-03-23T08:00:00Z"
+   ]
+  ],
+  "decided_by": "policy",
+  "error_ok": false,
+  "why": "Musubi policy: RFC 5545 3.8.5.3 calls a set whose DTSTART is not synchronized with the RRULE undefined; we follow 3.3.10 (COUNT): 'The DTSTART property value always counts as the first occurrence', so DTSTART uses one of the three. Four instances (dateutil wrapper adding DTSTART on top of COUNT) and dropping DTSTART (ical.js) are both rejected."
+ },
+ "exdate-date-on-timed": {
+  "accept": [
+   [
+    "2026-04-01T07:00:00Z",
+    "2026-04-03T07:00:00Z"
+   ]
+  ],
+  "decided_by": "policy",
+  "error_ok": true,
+  "why": "Undefined by RFC. Accept a loud error or whole-day exclusion; silently ignoring the EXDATE fails (the Google EXDATE bug class)."
+ },
+ "exdate-multi-lines": {
+  "accept": [
+   [
+    "2026-04-02T07:00:00Z",
+    "2026-04-04T07:00:00Z",
+    "2026-04-06T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "exdate-nonmatching": {
+  "accept": [
+   [
+    "2026-03-02T15:00:00Z",
+    "2026-03-09T14:00:00Z",
+    "2026-03-16T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "exdate-other-zone": {
+  "accept": [
+   [
+    "2026-03-02T15:00:00Z",
+    "2026-03-09T14:00:00Z",
+    "2026-03-23T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "exdate-utc-for-zoned": {
+  "accept": [
+   [
+    "2026-03-02T15:00:00Z",
+    "2026-03-09T14:00:00Z",
+    "2026-03-23T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "exrule": {
+  "accept": [
+   [
+    "2026-04-01T07:00:00Z",
+    "2026-04-02T07:00:00Z",
+    "2026-04-03T07:00:00Z",
+    "2026-04-06T07:00:00Z",
+    "2026-04-07T07:00:00Z"
+   ]
+  ],
+  "decided_by": "policy",
+  "error_ok": true,
+  "why": "EXRULE is RFC 2445 only. Musubi rejects it: accept an error or correct application; silently ignoring fails."
+ },
+ "floating-daily-host-gap": {
+  "accept": [
+   [
+    "2026-03-28T02:30:00",
+    "2026-03-29T02:30:00",
+    "2026-03-30T02:30:00"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "floating-exdate": {
+  "accept": [
+   [
+    "2026-04-01T09:00:00",
+    "2026-04-03T09:00:00"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "friday-13th": {
+  "accept": [
+   [
+    "1998-02-13T14:00:00Z",
+    "1998-03-13T14:00:00Z",
+    "1998-11-13T14:00:00Z",
+    "1999-08-13T13:00:00Z",
+    "2000-10-13T13:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "google-exdate-tzid": {
+  "accept": [
+   [
+    "2026-03-02T15:00:00Z",
+    "2026-03-09T14:00:00Z",
+    "2026-03-23T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "impossible-feb30": {
+  "accept": [
+   [
+    "2026-01-01T08:00:00Z"
+   ],
+   []
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "No valid rule instance exists; DTSTART is not synchronised (undefined), so [DTSTART] or []. Must terminate."
+ },
+ "infinite-daily-since-1900": {
+  "accept": [
+   [
+    "2026-06-01T07:00:00Z",
+    "2026-06-02T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "infinite-daily-window": {
+  "accept": [
+   [
+    "2030-01-01T08:00:00Z",
+    "2030-01-02T08:00:00Z",
+    "2030-01-03T08:00:00Z",
+    "2030-01-04T08:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "infinite-leap-far-future": {
+  "accept": [
+   [
+    "2096-02-29T08:00:00Z",
+    "2104-02-29T08:00:00Z",
+    "2108-02-29T08:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "infinite-limit-monthly-31": {
+  "accept": [
+   [
+    "2026-01-31T08:00:00Z",
+    "2026-03-31T07:00:00Z",
+    "2026-05-31T07:00:00Z",
+    "2026-07-31T07:00:00Z",
+    "2026-08-31T07:00:00Z",
+    "2026-10-31T08:00:00Z",
+    "2026-12-31T08:00:00Z",
+    "2027-01-31T08:00:00Z",
+    "2027-03-31T07:00:00Z",
+    "2027-05-31T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "leap-bymonth2-bymonthday-neg1": {
+  "accept": [
+   [
+    "2025-02-28T08:00:00Z",
+    "2026-02-28T08:00:00Z",
+    "2027-02-28T08:00:00Z",
+    "2028-02-29T08:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "leap-yearly-feb29": {
+  "accept": [
+   [
+    "2024-02-29T08:00:00Z",
+    "2028-02-29T08:00:00Z",
+    "2032-02-29T08:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 3.3.10: invalid dates (Feb 29 in common years) MUST be ignored; no rollover to Mar 1."
+ },
+ "minutely-byhour": {
+  "accept": [
+   [
+    "1997-09-02T13:00:00Z",
+    "1997-09-02T13:20:00Z",
+    "1997-09-02T13:40:00Z",
+    "1997-09-02T14:00:00Z",
+    "1997-09-02T14:20:00Z",
+    "1997-09-02T14:40:00Z",
+    "1997-09-03T13:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "monthly-jan31-no-by": {
+  "accept": [
+   [
+    "2026-01-31T08:00:00Z",
+    "2026-03-31T07:00:00Z",
+    "2026-05-31T07:00:00Z",
+    "2026-07-31T07:00:00Z",
+    "2026-08-31T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "monthly-second-to-last-monday": {
+  "accept": [
+   [
+    "2026-01-19T08:00:00Z",
+    "2026-02-16T08:00:00Z",
+    "2026-03-23T08:00:00Z",
+    "2026-04-20T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "override-allday": {
+  "accept": [
+   [
+    "2026-04-06",
+    "2026-04-08",
+    "2026-04-10"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "override-moved": {
+  "accept": [
+   [
+    "2026-04-06T07:00:00Z",
+    "2026-04-14T09:00:00Z",
+    "2026-04-20T07:00:00Z",
+    "2026-04-27T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "override-moved-into-window": {
+  "accept": [
+   [
+    "2026-04-27T07:00:00Z",
+    "2026-05-01T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "override-of-rdate": {
+  "accept": [
+   [
+    "2026-04-06T07:00:00Z",
+    "2026-04-13T07:00:00Z",
+    "2026-04-21T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "override-rid-utc": {
+  "accept": [
+   [
+    "2026-04-06T07:00:00Z",
+    "2026-04-14T09:00:00Z",
+    "2026-04-20T07:00:00Z",
+    "2026-04-27T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "override-thisandfuture": {
+  "accept": [
+   [
+    "2026-04-06T07:00:00Z",
+    "2026-04-07T07:00:00Z",
+    "2026-04-08T08:00:00Z",
+    "2026-04-09T08:00:00Z",
+    "2026-04-10T08:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "rdate-before-dtstart": {
+  "accept": [
+   [
+    "2026-03-20T08:00:00Z",
+    "2026-04-01T07:00:00Z",
+    "2026-04-02T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "rdate-gap-and-fold": {
+  "accept": [
+   [
+    "2026-10-24T00:30:00Z",
+    "2026-10-25T00:30:00Z",
+    "2026-10-25T01:30:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RDATE local fold time is the first occurrence (3.3.5); the explicit UTC RDATE is a distinct instant, so three instances."
+ },
+ "rdate-only": {
+  "accept": [
+   [
+    "2026-04-01T07:00:00Z",
+    "2026-04-05T07:00:00Z",
+    "2026-04-07T07:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 3.8.5.3: DTSTART defines the first instance even without RRULE."
+ },
+ "rdate-period": {
+  "accept": [
+   [
+    "2026-04-01T07:00:00Z",
+    "2026-04-02T07:00:00Z",
+    "2026-04-10T08:00:00Z",
+    "2026-04-11T08:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RDATE;VALUE=PERIOD contributes the period start (3.8.5.2). ical.js crashes."
+ },
+ "rdate-tzid-and-duplicate": {
+  "accept": [
+   [
+    "2026-04-01T07:00:00Z",
+    "2026-04-02T07:00:00Z",
+    "2026-04-10T13:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "tz-casablanca-ramadan": {
+  "accept": [
+   [
+    "2026-02-04T11:00:00Z",
+    "2026-02-11T11:00:00Z",
+    "2026-02-18T12:00:00Z",
+    "2026-02-25T12:00:00Z",
+    "2026-03-04T12:00:00Z",
+    "2026-03-11T12:00:00Z",
+    "2026-03-18T12:00:00Z",
+    "2026-03-25T11:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "tz-kathmandu-0545": {
+  "accept": [
+   [
+    "2026-01-01T03:15:00Z",
+    "2026-02-01T03:15:00Z",
+    "2026-03-01T03:15:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "tz-moscow-2011-2014": {
+  "accept": [
+   [
+    "2010-01-15T09:00:00Z",
+    "2011-01-15T09:00:00Z",
+    "2012-01-15T08:00:00Z",
+    "2013-01-15T08:00:00Z",
+    "2014-01-15T08:00:00Z",
+    "2015-01-15T09:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "tz-saopaulo-dst-abolished": {
+  "accept": [
+   [
+    "2018-10-15T12:00:00Z",
+    "2018-11-15T11:00:00Z",
+    "2018-12-15T11:00:00Z",
+    "2019-01-15T11:00:00Z",
+    "2019-02-15T11:00:00Z",
+    "2019-03-15T12:00:00Z",
+    "2019-04-15T12:00:00Z",
+    "2019-05-15T12:00:00Z",
+    "2019-06-15T12:00:00Z",
+    "2019-07-15T12:00:00Z",
+    "2019-08-15T12:00:00Z",
+    "2019-09-15T12:00:00Z",
+    "2019-10-15T12:00:00Z",
+    "2019-11-15T12:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "tz-utc-z": {
+  "accept": [
+   [
+    "2026-03-02T09:00:00Z",
+    "2026-03-09T09:00:00Z",
+    "2026-03-16T09:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "until-before-dtstart": {
+  "accept": [
+   [
+    "2026-03-02T08:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 3.8.5.3: DTSTART defines the first instance; an UNTIL before it removes only rule instances."
+ },
+ "until-between-instances": {
+  "accept": [
+   [
+    "2026-03-02T08:00:00Z",
+    "2026-03-09T08:00:00Z",
+    "2026-03-16T08:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "until-date-with-date": {
+  "accept": [
+   [
+    "2026-03-25",
+    "2026-03-26",
+    "2026-03-27",
+    "2026-03-28",
+    "2026-03-29",
+    "2026-03-30",
+    "2026-03-31"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "until-date-with-datetime": {
+  "accept": [
+   [
+    "2026-03-30T07:00:00Z",
+    "2026-03-31T07:00:00Z",
+    "2026-04-01T07:00:00Z",
+    "2026-04-02T07:00:00Z"
+   ],
+   [
+    "2026-03-30T07:00:00Z",
+    "2026-03-31T07:00:00Z",
+    "2026-04-01T07:00:00Z",
+    "2026-04-02T07:00:00Z",
+    "2026-04-03T07:00:00Z"
+   ]
+  ],
+  "decided_by": "policy",
+  "error_ok": true,
+  "why": "Invalid per RFC (UNTIL type MUST match DTSTART). Accept an error, UNTIL as local midnight, or UNTIL as end of day."
+ },
+ "until-local-no-z": {
+  "accept": [
+   [
+    "2026-03-30T07:00:00Z",
+    "2026-03-31T07:00:00Z",
+    "2026-04-01T07:00:00Z",
+    "2026-04-02T07:00:00Z",
+    "2026-04-03T07:00:00Z"
+   ]
+  ],
+  "decided_by": "policy",
+  "error_ok": true,
+  "why": "Invalid per RFC (UNTIL MUST be UTC with TZID). Accept a loud error or the lenient read in the DTSTART zone."
+ },
+ "until-utc-inclusive": {
+  "accept": [
+   [
+    "2026-03-25T08:00:00Z",
+    "2026-03-26T08:00:00Z",
+    "2026-03-27T08:00:00Z",
+    "2026-03-28T08:00:00Z",
+    "2026-03-29T07:00:00Z",
+    "2026-03-30T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "us-election-day": {
+  "accept": [
+   [
+    "1996-11-05T14:00:00Z",
+    "2000-11-07T14:00:00Z",
+    "2004-11-02T14:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "vtimezone-custom-rules": {
+  "accept": [
+   [
+    "2026-03-06T07:30:00Z",
+    "2026-03-13T06:30:00Z",
+    "2026-03-20T06:30:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "vtimezone-mozilla-prefix": {
+  "accept": [
+   [
+    "2026-03-16T08:00:00Z",
+    "2026-03-23T08:00:00Z",
+    "2026-03-30T07:00:00Z"
+   ]
+  ],
+  "decided_by": "policy",
+  "error_ok": true,
+  "why": "Unknown TZID without VTIMEZONE: accept a loud error or the IANA suffix mapping (Europe/Prague). Silent UTC/floating fails."
+ },
+ "vtimezone-windows-name": {
+  "accept": [
+   [
+    "2026-03-16T08:00:00Z",
+    "2026-03-23T08:00:00Z",
+    "2026-03-30T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "wkst-mo": {
+  "accept": [
+   [
+    "1997-08-05T13:00:00Z",
+    "1997-08-10T13:00:00Z",
+    "1997-08-19T13:00:00Z",
+    "1997-08-24T13:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "wkst-su": {
+  "accept": [
+   [
+    "1997-08-05T13:00:00Z",
+    "1997-08-17T13:00:00Z",
+    "1997-08-19T13:00:00Z",
+    "1997-08-31T13:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "yearly-byday-20mo": {
+  "accept": [
+   [
+    "1997-05-19T13:00:00Z",
+    "1998-05-18T13:00:00Z",
+    "1999-05-17T13:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "Verbatim RFC 5545 3.8.5.3 example (Monday of week 20 ... 20th Monday): yearly, not weekly."
+ },
+ "yearly-byday-no-bymonth": {
+  "accept": [
+   [
+    "2026-01-12T08:00:00Z",
+    "2027-01-11T08:00:00Z",
+    "2028-01-10T08:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "yearly-bymonthday-no-bymonth": {
+  "accept": [
+   [
+    "2026-03-15T08:00:00Z",
+    "2026-04-15T07:00:00Z",
+    "2026-05-15T07:00:00Z",
+    "2026-06-15T07:00:00Z"
+   ]
+  ],
+  "decided_by": "rfc",
+  "error_ok": false,
+  "why": "RFC 3.3.10 table: BYMONTHDAY expands FREQ=YEARLY to every month. Google's yearly meaning is an adapter concern."
+ },
+ "yearly-last-sunday-march": {
+  "accept": [
+   [
+    "2026-03-29T07:00:00Z",
+    "2027-03-28T07:00:00Z",
+    "2028-03-26T07:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ },
+ "yearly-plain": {
+  "accept": [
+   [
+    "2026-03-10T08:00:00Z",
+    "2027-03-10T08:00:00Z",
+    "2028-03-10T08:00:00Z"
+   ]
+  ],
+  "decided_by": "oracles",
+  "error_ok": false,
+  "why": "dateutil and ical.js agree"
+ }
+}
