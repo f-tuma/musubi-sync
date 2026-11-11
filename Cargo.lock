@@ -171,7 +171,6 @@ version = "0.0.0"
 dependencies = [
  "musubi-model",
  "musubi-recurrence",
- "musubi-store-sqlite",
 ]
 
 [[package]]

@@ -10,7 +10,6 @@ repository.workspace = true
 [dependencies]
 musubi-model.workspace = true
 musubi-recurrence.workspace = true
-musubi-store-sqlite.workspace = true
 
 [lints]
 workspace = true
