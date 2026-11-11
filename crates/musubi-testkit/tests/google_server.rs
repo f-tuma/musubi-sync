@@ -1028,3 +1028,76 @@ async fn same_seed_gives_identical_state_and_responses() {
     let c = start(Seed { seed: 43, ..seed }).await;
     assert_ne!(a.snapshot("primary"), c.snapshot("primary"));
 }
+
+#[tokio::test]
+async fn authorization_code_grant_checks_pkce_and_is_single_use() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let g = start(Seed::default()).await;
+    let verifier = "a-verifier-of-at-least-forty-three-characters-xyz";
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(verifier.as_bytes()));
+    let cb = "http://127.0.0.1:1/cb";
+    let authorize = async || {
+        let r = get_anon(&format!(
+            "{}?response_type=code&client_id=c&redirect_uri={cb}&state=s%201\
+             &code_challenge={challenge}&code_challenge_method=S256&scope=x",
+            g.auth_url()
+        ))
+        .await;
+        assert_eq!(r.status, 302);
+        let to = r.headers["location"].to_str().expect("ascii").to_owned();
+        let (base, query) = to.split_once('?').expect("query");
+        assert_eq!(base, cb);
+        assert!(query.ends_with("&state=s%201"), "{query}");
+        query["code=".len()..query.find('&').expect("&")].to_owned()
+    };
+    let redeem = async |code: &str, verifier: &str| {
+        post_form(
+            &g.token_url(),
+            &format!(
+                "grant_type=authorization_code&code={code}&client_id=c&client_secret=s\
+                 &redirect_uri={cb}&code_verifier={verifier}"
+            ),
+        )
+        .await
+    };
+
+    let code = authorize().await;
+    let r = redeem(&code, "wrong-verifier").await;
+    assert_eq!(r.json["error"], "invalid_grant");
+    let r = redeem(&code, verifier).await;
+    assert_eq!(
+        r.json["error"], "invalid_grant",
+        "a failed redemption spends the code"
+    );
+
+    let code = authorize().await;
+    let r = redeem(&code, verifier).await;
+    assert_eq!(r.status, 200, "{}", r.json);
+    assert_eq!(r.json["refresh_token"], g.refresh_token());
+    let claims = r.json["id_token"]
+        .as_str()
+        .expect("id_token")
+        .split('.')
+        .nth(1)
+        .expect("payload");
+    let claims: Value = serde_json::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(claims)
+            .expect("b64"),
+    )
+    .expect("json");
+    assert_eq!(claims["sub"], Config::default().subject);
+    assert_eq!(claims["aud"], "c");
+    let access = r.json["access_token"].as_str().expect("token");
+    assert_eq!(
+        get(&events_url(&g, "primary", ""), access).await.status,
+        200
+    );
+    assert_eq!(
+        redeem(&code, verifier).await.json["error"],
+        "invalid_grant",
+        "single use"
+    );
+}

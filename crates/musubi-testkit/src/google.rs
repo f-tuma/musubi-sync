@@ -22,7 +22,8 @@
 //! | `GET /calendar/v3/calendars/{cal}/events/{id}` | `events.get` |
 //! | `POST /calendar/v3/calendars/{cal}/events/watch` | `events.watch` |
 //! | `POST /calendar/v3/channels/stop` | `channels.stop` |
-//! | `POST /token` | `https://oauth2.googleapis.com/token` (`refresh_token` grant) |
+//! | `GET /o/oauth2/v2/auth` | `https://accounts.google.com/o/oauth2/v2/auth` (consent granted at once) |
+//! | `POST /token` | `https://oauth2.googleapis.com/token` (`refresh_token` and `authorization_code` grants) |
 //!
 //! Every API route needs `Authorization: Bearer <token>` with a token issued by
 //! `/token` or [`FakeGoogle::access_token`]. Must run inside a tokio runtime.
@@ -43,12 +44,15 @@ use axum::extract::{Form, Path, Query, State as AxState};
 use axum::http::{HeaderMap, Request, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hyper_util::rt::TokioIo;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -82,6 +86,8 @@ pub struct Config {
     pub refresh_token: String,
     /// `/token` returns a new refresh token and revokes the old one.
     pub rotate_refresh_tokens: bool,
+    /// Google account id (`sub` of the `id_token`) the authorization-code grant reports.
+    pub subject: String,
     /// Channel lifetime when the watch request sets neither `expiration` nor `params.ttl`.
     pub default_watch_ttl: Duration,
     /// Longest channel lifetime the server grants (Google's maximum is undocumented, T8).
@@ -99,6 +105,7 @@ impl Default for Config {
             empty_page_every: 0,
             refresh_token: "1//fake-refresh-token".into(),
             rotate_refresh_tokens: false,
+            subject: "100000000000000000001".into(),
             default_watch_ttl: DEFAULT_WATCH_TTL,
             max_watch_ttl: DEFAULT_WATCH_TTL,
         }
@@ -272,11 +279,19 @@ struct State {
     channels: BTreeMap<String, Channel>,
     refresh_tokens: BTreeSet<String>,
     access_tokens: BTreeSet<String>,
+    /// Unredeemed authorization codes.
+    codes: BTreeMap<String, AuthCode>,
     issued: u64,
     faults: Vec<(Endpoint, Fault, u32)>,
     latency: Duration,
     requests: Vec<String>,
     deliveries: Vec<Delivery>,
+}
+
+struct AuthCode {
+    client_id: String,
+    redirect_uri: String,
+    challenge: String,
 }
 
 struct Calendar {
@@ -336,6 +351,7 @@ impl FakeGoogle {
             .route("/calendar/v3/calendars/{cal}/events/{id}", get(events_get))
             .route("/calendar/v3/calendars/{cal}/events/watch", post(watch))
             .route("/calendar/v3/channels/stop", post(stop))
+            .route("/o/oauth2/v2/auth", get(authorize))
             .route("/token", post(token))
             .fallback(fallback)
             .method_not_allowed_fallback(fallback)
@@ -365,6 +381,11 @@ impl FakeGoogle {
     /// Replacement for `https://oauth2.googleapis.com/token`.
     pub fn token_url(&self) -> String {
         format!("{}/token", self.base_url())
+    }
+
+    /// Replacement for `https://accounts.google.com/o/oauth2/v2/auth`.
+    pub fn auth_url(&self) -> String {
+        format!("{}/o/oauth2/v2/auth", self.base_url())
     }
 
     /// The currently valid refresh token (changes when rotation is on).
@@ -1507,6 +1528,57 @@ async fn stop(AxState(g): St, uri: Uri, h: HeaderMap, body: axum::body::Bytes) -
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// The user's browser at the consent screen: consent is granted at once and
+/// the browser is sent back to `redirect_uri` with a one-time code.
+async fn authorize(
+    AxState(g): St,
+    uri: Uri,
+    Query(q): Query<BTreeMap<String, String>>,
+) -> Response {
+    let mut s = g.lock();
+    s.requests.push(req_line("GET", &uri));
+    let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+    if get("response_type") != "code"
+        || get("client_id").is_empty()
+        || get("redirect_uri").is_empty()
+        || get("code_challenge_method") != "S256"
+        || get("code_challenge").is_empty()
+    {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Missing or invalid parameter",
+        );
+    }
+    s.issued += 1;
+    let code = format!("4/fake-code-{}", s.issued);
+    s.codes.insert(
+        code.clone(),
+        AuthCode {
+            client_id: get("client_id").into(),
+            redirect_uri: get("redirect_uri").into(),
+            challenge: get("code_challenge").into(),
+        },
+    );
+    let mut to = format!("{}?code={}", get("redirect_uri"), pct(&code));
+    if let Some(state) = q.get("state") {
+        to += &format!("&state={}", pct(state));
+    }
+    (StatusCode::FOUND, [(header::LOCATION, to)]).into_response()
+}
+
+/// Percent-encodes everything but RFC 3986 unreserved characters.
+fn pct(v: &str) -> String {
+    v.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 async fn token(
     AxState(g): St,
     uri: Uri,
@@ -1521,6 +1593,7 @@ async fn token(
     };
     match f.get("grant_type").map(String::as_str) {
         Some("refresh_token") => {}
+        Some("authorization_code") => return redeem(&g, &f),
         other => {
             return oauth_error(
                 "unsupported_grant_type",
@@ -1552,4 +1625,59 @@ async fn token(
         body["refresh_token"] = json!(next);
     }
     ok(body)
+}
+
+/// `grant_type=authorization_code` with PKCE (RFC 7636, `S256` only).
+fn redeem(g: &Inner, f: &BTreeMap<String, String>) -> Response {
+    let bad =
+        |error: &str, description: &str| oauth_error(StatusCode::BAD_REQUEST, error, description);
+    let get = |k: &str| f.get(k).map(String::as_str).unwrap_or("");
+    let mut s = g.lock();
+    // A code is spent by its first redemption, successful or not.
+    let Some(code) = s.codes.remove(get("code")) else {
+        return bad("invalid_grant", "Malformed auth code.");
+    };
+    if code.client_id != get("client_id") {
+        return bad("invalid_client", "The OAuth client was not found.");
+    }
+    if code.redirect_uri != get("redirect_uri") {
+        return bad("redirect_uri_mismatch", "Bad Request");
+    }
+    let verifier = get("code_verifier");
+    if verifier.is_empty() {
+        return bad("invalid_grant", "Missing code verifier.");
+    }
+    if b64(&Sha256::digest(verifier.as_bytes())) != code.challenge {
+        return bad("invalid_grant", "Invalid code verifier.");
+    }
+    let access = s.issue_access();
+    let refresh = s.refresh_tokens.iter().next().cloned().unwrap_or_default();
+    let now = Timestamp::now().as_second();
+    let claims = json!({
+        "iss": "https://accounts.google.com",
+        "aud": code.client_id,
+        "sub": g.config.subject,
+        "iat": now,
+        "exp": now + 3600,
+    });
+    // Unsigned stand-in: a client may skip the signature check on an id_token it
+    // got straight from the token endpoint over TLS (OpenID Connect Core 3.1.3.7).
+    let id_token = format!(
+        "{}.{}.{}",
+        b64(br#"{"alg":"RS256","kid":"fake","typ":"JWT"}"#),
+        b64(claims.to_string().as_bytes()),
+        b64(b"fake-signature"),
+    );
+    ok(json!({
+        "access_token": access,
+        "expires_in": 3599,
+        "refresh_token": refresh,
+        "scope": "https://www.googleapis.com/auth/calendar.readonly",
+        "token_type": "Bearer",
+        "id_token": id_token,
+    }))
+}
+
+fn b64(bytes: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(bytes)
 }

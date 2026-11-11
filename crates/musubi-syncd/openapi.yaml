@@ -1,0 +1,497 @@
+openapi: 3.1.0
+info:
+  title: musubi-sync
+  version: 0.1.0
+  description: |
+    Phase 1 API of musubi-syncd (docs/plan/phase1.md, K6). Read-only access to
+    a tenant's synchronised calendars, its change journal and a change stream.
+
+    Authentication: `Authorization: Bearer <credential>`.
+    - Tenant API key (`mk_…`), created by the instance admin; stored only as
+      SHA-256. Scope `read` or `admin` (admin includes read).
+    - Short-lived token (`mt1.<kid>.<payload>.<signature>`) from
+      `POST /v1/tokens`: `<kid>` two hex digits naming the signing key,
+      `<payload>` base64url JSON `{"tenant","scope","iat","exp"}`, signed with
+      Ed25519 over `mt1.<kid>.<payload>`. Verified without a database lookup,
+      so it stays valid until `exp` even if its key is revoked; lifetime at
+      most 15 minutes.
+    - Instance admin key from the node configuration: `/v1/admin/*` only.
+
+    `401` means a missing, unknown, revoked, expired or forged credential; `403`
+    a valid one outside its scope. Ids of another tenant's objects answer `404`.
+    Errors, including malformed requests and unknown routes, are
+    `{"error": <code>, "message": <text>}`. Request bodies are limited to
+    64 KiB. Requests other than `/v1/stream` and `/v1/admin/backup` share a
+    concurrency limit and time out after 30 s with `503`.
+servers:
+  - url: /
+security:
+  - bearer: []
+paths:
+  /v1/accounts:
+    post:
+      summary: Start connecting a provider account (admin scope)
+      description: |
+        Returns the provider's consent URL (authorization code flow with PKCE,
+        S256). Its `state` is single-use, bound to the tenant and valid for 10
+        minutes. With `account`, reconnects that account (after
+        `reauth_required`); the same provider user must sign in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider]
+              additionalProperties: false
+              properties:
+                provider: { type: string, enum: [google] }
+                account: { $ref: "#/components/schemas/Id" }
+      responses:
+        "201":
+          description: Consent URL to open in the user's browser.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorization_url: { type: string, format: uri }
+                  expires: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/accounts/{id}:
+    get:
+      summary: One account
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: The account.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Account" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/collections:
+    get:
+      summary: Collections (calendars) of the tenant's accounts
+      responses:
+        "200":
+          description: All collections.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collections:
+                    type: array
+                    items: { $ref: "#/components/schemas/Collection" }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/entities:
+    get:
+      summary: Occurrences in a time window, paged
+      description: |
+        One row per occurrence overlapping `[from, to)`, ordered by start. Pass
+        `next` back as `after` for the following page. Series whose stored
+        occurrence index ends inside the window are listed in `unindexed`
+        (their later occurrences are not in this page).
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: zone, in: query, description: "IANA zone for floating times; default UTC", schema: { type: string } }
+        - { name: collection, in: query, description: Comma-separated collection ids, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+        - { name: after, in: query, description: "`next` of the previous page", schema: { type: string } }
+        - { name: ids_only, in: query, description: Omit `canonical`, schema: { type: boolean, default: false } }
+        - { name: expand, in: query, schema: { type: string, enum: [occurrences] } }
+      responses:
+        "200":
+          description: One page.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  occurrences:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        entity: { $ref: "#/components/schemas/Id" }
+                        recurrence_id: { type: [string, "null"], format: date-time }
+                        start: { type: string, format: date-time }
+                        end: { type: string, format: date-time }
+                        floating: { type: boolean }
+                        canonical: { description: Canonical event JSON, or null with ids_only }
+                  next: { type: [string, "null"] }
+                  unindexed:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        entity: { $ref: "#/components/schemas/Id" }
+                        indexed_until: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/entities/{id}:
+    get:
+      summary: One entity
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - { name: include, in: query, schema: { type: string, enum: [placements] } }
+      responses:
+        "200":
+          description: The entity; `placements` only when included.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { $ref: "#/components/schemas/Id" }
+                  kind: { type: string }
+                  rev: { type: integer }
+                  seq: { type: integer }
+                  tombstone: { type: boolean }
+                  canonical: {}
+                  placements:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { $ref: "#/components/schemas/Id" }
+                        item: { $ref: "#/components/schemas/Id" }
+                        collection: { $ref: "#/components/schemas/Id" }
+                        role: { type: string }
+                        direction: { type: string }
+                        projection: { type: string }
+                        origin: { type: string }
+                        delivery: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/items/{id}:
+    get:
+      summary: One provider item
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - { name: include, in: query, schema: { type: string, enum: [raw] } }
+      responses:
+        "200":
+          description: The item; `raw` (provider content as received) only when included.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { $ref: "#/components/schemas/Id" }
+                  entity: { $ref: "#/components/schemas/Id" }
+                  collection: { $ref: "#/components/schemas/Id" }
+                  kind: { type: string }
+                  key: { type: string }
+                  validator: { type: string }
+                  raw_hash: { type: string, description: SHA-256 hex }
+                  schema_version: { type: integer }
+                  mapping_version: { type: integer }
+                  observed: {}
+                  tombstone: { type: boolean }
+                  raw:
+                    type: object
+                    properties:
+                      media_type: { type: string, enum: [json] }
+                      body: {}
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/changes:
+    get:
+      summary: Journal entries after a cursor
+      parameters:
+        - { name: since, in: query, required: true, schema: { type: integer, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1000 } }
+      responses:
+        "200":
+          description: Entries with `seq > since`; `next` is the cursor to continue from.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changes: { type: array, items: { type: object } }
+                  next: { type: integer }
+                  more: { type: boolean }
+        "401": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/CursorTooOld" }
+        "503": { $ref: "#/components/responses/Error" }
+  /v1/stream:
+    get:
+      summary: Server-sent events of committed journal heads
+      description: |
+        Each event is `id: <seq>` and `data: {"cursor": <seq>}`, sent after the
+        commit; read `/v1/changes?since=<previous>` to get what changed. Without
+        `since` (or `Last-Event-ID`) the current head is sent first. A token's
+        stream ends at the token's `exp`; an API key's stream ends within a
+        minute of the key's revocation. At most 16 open streams per tenant.
+      parameters:
+        - { name: since, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: Last-Event-ID, in: header, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200":
+          description: Event stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/CursorTooOld" }
+        "429": { $ref: "#/components/responses/Error" }
+  /v1/tokens:
+    post:
+      summary: Short-lived token for the presenting API key
+      description: Only an API key can issue a token (not a token). Scope at most the key's.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                scope: { $ref: "#/components/schemas/Scope" }
+                ttl: { type: integer, minimum: 1, maximum: 900, default: 900, description: Seconds }
+      responses:
+        "201":
+          description: The token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  scope: { $ref: "#/components/schemas/Scope" }
+                  expires: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/oauth/google/callback:
+    get:
+      summary: OAuth redirect target (the provider calls it through the user's browser)
+      security: []
+      parameters:
+        - { name: state, in: query, required: true, schema: { type: string } }
+        - { name: code, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: The account is connected; tokens are stored sealed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account: { $ref: "#/components/schemas/Id" }
+                  state: { $ref: "#/components/schemas/AccountState" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /v1/webhooks/google:
+    post:
+      summary: Google Calendar push notification
+      description: |
+        Authenticated by the channel id and channel token headers
+        (`X-Goog-Channel-ID`, `X-Goog-Channel-Token`, `X-Goog-Resource-ID`,
+        `X-Goog-Resource-State`). A change enqueues a sync of the channel's
+        collection and answers at once.
+      security: []
+      responses:
+        "200": { description: Accepted. }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+  /v1/admin/tenants:
+    post:
+      summary: Create a tenant (instance admin)
+      responses:
+        "201":
+          description: The tenant.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { $ref: "#/components/schemas/Id" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /v1/admin/tenants/{id}:
+    delete:
+      summary: Delete a tenant with its data, accounts, keys and jobs (instance admin)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/admin/tenants/{id}/keys:
+    post:
+      summary: Create an API key for a tenant (instance admin)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope]
+              additionalProperties: false
+              properties:
+                scope: { $ref: "#/components/schemas/Scope" }
+      responses:
+        "201":
+          description: The key, shown only here. `id` (SHA-256 hex) revokes it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key: { type: string }
+                  id: { type: string }
+                  scope: { $ref: "#/components/schemas/Scope" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/admin/tenants/{id}/stats:
+    get:
+      summary: Storage statistics of a tenant (instance admin)
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Statistics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  head: { type: integer }
+                  main_bytes: { type: integer }
+                  wal_bytes: { type: integer }
+                  wal_max_bytes: { type: integer }
+                  truncates: { type: integer }
+                  truncate_max_ms: { type: integer }
+                  reset_failures: { type: integer }
+                  items: { type: integer }
+                  entities: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/admin/keys/{id}:
+    delete:
+      summary: Revoke an API key (instance admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, description: SHA-256 hex } }
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/admin/backup:
+    post:
+      summary: Online backup into a new directory on the node (instance admin)
+      description: Used by `musubi-syncd backup`; restore with `musubi-syncd restore` on a stopped node.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              additionalProperties: false
+              properties:
+                to: { type: string, description: Absolute path that does not exist yet }
+      responses:
+        "201":
+          description: Done.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+  schemas:
+    Id:
+      type: string
+      description: 128-bit id, 26 characters of base32hex.
+      pattern: "^[0-9a-v]{26}$"
+    Scope:
+      type: string
+      enum: [read, admin]
+    AccountState:
+      type: string
+      enum: [connecting, active, reauth_required, paused, removing]
+    Account:
+      type: object
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        provider: { type: string }
+        subject: { type: string }
+        state: { $ref: "#/components/schemas/AccountState" }
+    Collection:
+      type: object
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        account: { $ref: "#/components/schemas/Id" }
+        remote:
+          type: object
+          description: The collection as the provider lists it.
+        gone: { type: boolean }
+        coverage:
+          type: object
+          properties:
+            type: { type: string, enum: [none, window, full] }
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time }
+        synced_at: { type: [string, "null"], format: date-time }
+        full_read_at: { type: [string, "null"], format: date-time }
+        error:
+          type: [object, "null"]
+          properties:
+            message: { type: string }
+            at: { type: string, format: date-time }
+            permanent: { type: boolean }
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }
+        oldest: { type: integer, description: "cursor_too_old: the oldest cursor the journal still reaches; cursor_ahead: the head" }
+  responses:
+    Error:
+      description: Error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    CursorTooOld:
+      description: |
+        `cursor_too_old`: the journal was pruned past the cursor;
+        `cursor_ahead`: the cursor is beyond the head (the node was restored
+        from an older backup). Either way a new initial sync is required (read
+        everything again, then continue from the head).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

@@ -21,6 +21,9 @@ hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 serde.workspace = true
 serde_json.workspace = true
+# PKCE S256 and id_token encoding of the authorization-code grant.
+base64.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
 
 [dev-dependencies]

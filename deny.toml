@@ -9,15 +9,9 @@ all-features = true
 # unless listed here with a reason and a review date. `yanked` is set
 # explicitly: the cargo-deny default is "warn".
 yanked = "deny"
-ignore = [
-    # rsa 0.9 (Marvin timing side channel on RSA private-key operations), pulled
-    # by jsonwebtoken 11 with the rust_crypto backend. We never hold an RSA
-    # private key: RSA is only used to verify signatures, short-lived tokens are
-    # signed with Ed25519 (proposal, chapter 8). Not in the tree before K6 adds
-    # jsonwebtoken; until then cargo-deny reports it as not detected (warning).
-    # Review: 2027-02-01, or as soon as jsonwebtoken depends on rsa >= 0.10.
-    { id = "RUSTSEC-2023-0071", reason = "no RSA private-key operations; review 2027-02-01" },
-]
+# No exceptions: K6 signs tokens with Ed25519 from `ring` directly, so neither
+# `rsa` (RUSTSEC-2023-0071) nor `crypto-bigint` 0.5 (RUSTSEC-2026-0387) is in the tree.
+ignore = []
 
 [licenses]
 # Permissive only. Copyleft (GPL, LGPL, AGPL, EUPL, MPL) is not allowed.
