@@ -39,7 +39,7 @@ Měří se:
 - **Přijetí zápisu na tenantovi, který právě přijímá velký import, cíl 10 ms spolehlivě nesplní ani jeden backend** (sekce 4.5.1, 3 běhy):
   - SQLite s jedním zapisovatelem na tenanta: p99 205–373 ms, protože mutace čeká na rozpracovanou stránku a reset WAL.
   - SQLite s outboxem v samostatném souboru (varianta A): p99 7,7–16,1 ms bez čtenáře, 54–83 ms s dlouhým čtenářem.
-  - PG: p99 22–37 ms bez čtenáře.
+  - PG: p99 ~11–37 ms bez čtenáře (11,4 ms v běhu recenzenta, 22–37 ms v našich třech bězích).
   - Kratší transakce importu (varianta B) nepomáhají (76–173 ms).
   - Varianta A je proto podmínkou pro SQLite. Zdrojem pravdy je soubor outboxu a promítnutí do položek ho následuje.
 - **Velký tenant (100 000 položek) s hustým rozsahem cíl nesplní ani jedna varianta.**
@@ -402,7 +402,7 @@ Max WAL u A se týká hlavního souboru.
 
 **Co z toho plyne:**
 
-- **Cíl 10 ms nesplní žádná varianta spolehlivě.** Bez A je to u SQLite o řád mimo, A je těsně kolem hranice, PG je 2–4× nad.
+- **Cíl 10 ms nesplní žádná varianta spolehlivě.** Bez A je to u SQLite o řád mimo, A je těsně kolem hranice, PG je 1–4× nad.
 - **A (samostatný soubor outboxu) problém z velké části řeší.**
   - Bez čtenáře je p99 7,7–16,1 ms, tedy 20× méně než `same`; cíl splnil 1 ze 3 běhů.
   - Zbytek chvostu je pravděpodobně fsync souboru outboxu v souběhu s `TRUNCATE` a zápisem hlavního souboru na stejném disku (btrfs, sdílený stroj). **(neověřeno)**
@@ -412,7 +412,7 @@ Max WAL u A se týká hlavního souboru.
   - Mutace sice nečeká na celou stránku, ale chvost netvoří délka transakce. Tvoří ho `TRUNCATE` a fsync po commitu. Těch je s menšími transakcemi víc (118–123 resetů proti 81–83).
   - Import je o ~15 % pomalejší.
 - **PG cíl v tomto scénáři také nesplní.**
-  - Bez čtenáře je p99 22–37 ms. Pravděpodobné příčiny **(neověřeno)**:
+  - Bez čtenáře je p99 ~11–37 ms (22–37 ms v našich třech bězích, 11,4 ms v běhu recenzenta). Pravděpodobné příčiny **(neověřeno)**:
     - commit přijetí musí fsyncnout sdílený WAL včetně předchozích záznamů importu;
     - přijetí čeká na zámky řádků, které drží rozpracovaná stránka.
   - S dlouhým čtenářem vyšlo p99 10,8 ms v bězích 2 a 3, ale import v nich zpomalil 6× (4,6 tis. položek/s, stránka p99 ~200 ms). Přijetí tedy soupeřilo s výrazně menší zátěží. V běhu 1 import nezpomalil a přijetí mělo p99 22,6 ms.
@@ -427,9 +427,10 @@ Max WAL u A se týká hlavního souboru.
   - mutace je přijatá, jakmile je commitnutá tam;
   - projekce do hlavního souboru se dělá až potom, idempotentně a s vodoznakem (`meta.projected`) commitnutým ve stejné transakci jako projekce;
   - po pádu se promítnou mutace s id nad vodoznakem.
+  - Vodoznak předpokládá, že id mutací jen rostou. `INTEGER PRIMARY KEY` bez `AUTOINCREMENT` může po smazání doručených řádků znovu použít nejvyšší id a replay by pak mutaci s takovým id přeskočil. Proto buď `AUTOINCREMENT`, nebo nikdy nemazat řádky nad vodoznakem (benchmark má `INTEGER PRIMARY KEY` a nemaže).
 - Důsledky:
   - Čtení položek může krátce zaostávat za přijatou mutací. Klient, který potřebuje „read-your-writes“, musí číst i nepromítnuté mutace z outboxu nebo počkat na vodoznak.
-  - Kontrola základní revize (`base rev`) při přijetí se dělá proti hlavnímu souboru. Musí zahrnout i nepromítnuté mutace téže entity, jinak dvě rychle po sobě jdoucí mutace projdou se stejnou bází. Benchmark tuto kontrolu zjednodušuje (zkratka v kódu).
+  - Kontrola základní revize (`base rev`) při přijetí se dělá proti hlavnímu souboru. Musí zahrnout i nepromítnuté mutace téže entity, jinak dvě rychle po sobě jdoucí mutace projdou se stejnou bází. Benchmark tuto kontrolu zjednodušuje (zkratka v kódu). Navíc čte `base rev` a umístění (`placements`) ve dvou samostatných dotazech, tedy ve dvou snapshotech hlavního souboru; mezi nimi může commitnout import. Skutečná implementace je má číst v jedné čtecí transakci.
   - Záloha musí vzít nejdřív hlavní soubor a potom outbox. Outbox nesmí být starší než vodoznak v hlavním souboru; rozdíl pak dorovná replay.
 
 ### 4.6 Velikost na disku
@@ -512,7 +513,7 @@ SQLite se zálohoval v klidu, po checkpointu, bez souběžného zápisu. Za prov
 | Čtení p99 < 10 ms pod zátěží zápisu | ✅ 3,7 ms | ⚠️ 11,2 ms (předchozí běh 8,1 ms) |
 | Přijetí zápisu p99 < 10 ms, 1 zapisovatel | ✅ 1,7 ms | ✅ 8,1 ms (předchozí běh 3,3 ms) |
 | Přijetí zápisu p99 < 10 ms, 16 tenantů současně | ⚠️ 2,9 ms (mezi běhy 2,9–12,2 ms) | ✅ 3,0 ms (mezi běhy 3,0–7,8 ms) |
-| Přijetí zápisu p99 < 10 ms během importu stejného tenanta | ❌ jeden zapisovatel 205–373 ms; ⚠️ s outboxem v samostatném souboru (A) 7,7–16,1 ms bez čtenáře, ❌ 54–83 ms s dlouhým čtenářem; ❌ kratší transakce (B) 76–173 ms (sekce 4.5.1) | ❌ 22–37 ms bez čtenáře; 11–23 ms s dlouhým čtenářem |
+| Přijetí zápisu p99 < 10 ms během importu stejného tenanta | ❌ jeden zapisovatel 205–373 ms; ⚠️ s outboxem v samostatném souboru (A) 7,7–16,1 ms bez čtenáře, ❌ 54–83 ms s dlouhým čtenářem; ❌ kratší transakce (B) 76–173 ms (sekce 4.5.1) | ❌ ~11–37 ms bez čtenáře; 11–23 ms s dlouhým čtenářem |
 | Režie inkrementálního syncu < 20 ms | ✅ p99 4,0 ms | ✅ p99 2,7 ms (+ síť) |
 | Velikost WAL omezená | ⚠️ max 184 MB s vlastním checkpointerem (bez něj 1,8–3,1 GB); s nepřetržitým cyklem dlouhých čtenářů 3–7 GB | – (sdílený WAL, `max_wal_size`) |
 
@@ -536,7 +537,7 @@ PG je výkonově lepší ve třech bodech:
 **Přijetí zápisu během importu stejného tenanta PG nezvýhodňuje** (sekce 4.5.1). Cíl p99 < 10 ms tu na tomto HW spolehlivě nesplní žádná varianta:
 
 - SQLite s jedním zapisovatelem na tenanta je o řád mimo (205–373 ms).
-- SQLite s outboxem v samostatném souboru (A) je bez dlouhého čtenáře nejblíž cíli (7,7–16,1 ms, PG 22–37 ms).
+- SQLite s outboxem v samostatném souboru (A) je bez dlouhého čtenáře nejblíž cíli (7,7–16,1 ms, PG ~11–37 ms). Náskok proti PG je tu ale menší, než ukazují naše tři běhy: recenzent naměřil u PG 11,4 ms.
 - S dlouhým čtenářem je A horší než PG (54–83 ms proti 11–23 ms).
 - Kratší transakce importu (B) nepomáhají.
 
