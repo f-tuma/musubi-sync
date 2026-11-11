@@ -3,16 +3,21 @@
 //! Everything uses `ring`, which is in the tree anyway as the rustls provider.
 //!
 //! **Short-lived token** (`POST /v1/tokens`):
-//! `mt1.<payload>.<signature>`, both parts base64url without padding. The
-//! payload is JSON `{"tenant","scope","iat","exp"}` (Unix seconds); the
-//! signature is Ed25519 over the ASCII bytes `mt1.<payload>`. Verification
-//! needs only the public key and the clock, no database. A new version gets a
-//! new prefix. Rotating the signing key invalidates every outstanding token.
+//! `mt1.<kid>.<payload>.<signature>`. `kid` is two hex digits naming the
+//! signing key (first byte of SHA-256 of its public key); payload and
+//! signature are base64url without padding. The payload is JSON
+//! `{"tenant","scope","iat","exp"}` (Unix seconds); the signature is Ed25519
+//! over the ASCII bytes `mt1.<kid>.<payload>`. Verification needs only the
+//! public key and the clock, no database. A new version gets a new prefix.
+//! Rotating the signing key invalidates every outstanding token (at most
+//! 15 minutes old); the `kid` lets a later version accept the previous key too.
 //!
-//! **Sealed account tokens** ([`SealedTokens`]): `0x01 | nonce (12) |
+//! **Sealed account tokens** ([`SealedTokens`]): `0x01 | kid (1) | nonce (12) |
 //! AES-256-GCM ciphertext and tag` over the JSON `{"refresh","access","until"}`.
-//! The associated data is `musubi-tokens-v1 | tenant (16) | account (16)`, so a
-//! blob copied to another account or tenant row fails to open.
+//! `kid` names the token key (first byte of SHA-256 of a domain tag and the
+//! key) for rotation (proposal ch. 7). The associated data is
+//! `musubi-tokens-v1 | 0x01 | kid | tenant (16) | account (16)`, so a blob
+//! copied to another account or tenant row fails to open.
 
 use std::sync::Arc;
 
@@ -32,6 +37,8 @@ use zeroize::Zeroizing;
 const TOKEN_PREFIX: &str = "mt1.";
 const SEAL_VERSION: u8 = 1;
 const SEAL_AAD: &[u8] = b"musubi-tokens-v1";
+/// Version, key id and nonce.
+const HEAD: usize = 2 + NONCE_LEN;
 
 /// `n` random bytes from the OS.
 pub(crate) fn random<const N: usize>() -> [u8; N] {
@@ -53,6 +60,11 @@ pub(crate) fn sha256(b: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(d.as_ref());
     out
+}
+
+/// Equality in time independent of where the inputs differ.
+pub(crate) fn same(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    std::hint::black_box(a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y))) == 0
 }
 
 pub(crate) fn b64(b: &[u8]) -> String {
@@ -79,18 +91,24 @@ pub struct Claims {
 /// Issues and verifies short-lived tokens with one Ed25519 key.
 pub(crate) struct Signer {
     pair: Ed25519KeyPair,
+    /// `mt1.<kid>.`
+    head: String,
 }
 
 impl Signer {
     pub(crate) fn new(seed: &[u8; 32]) -> Result<Self, String> {
         let pair = Ed25519KeyPair::from_seed_unchecked(seed).map_err(|e| e.to_string())?;
-        Ok(Self { pair })
+        let kid = sha256(pair.public_key().as_ref())[0];
+        Ok(Self {
+            pair,
+            head: format!("{TOKEN_PREFIX}{kid:02x}."),
+        })
     }
 
     pub(crate) fn issue(&self, c: &Claims) -> String {
         // Serialising plain ids, an enum and integers cannot fail.
         let payload = b64(&serde_json::to_vec(c).expect("claims serialise"));
-        let signed = format!("{TOKEN_PREFIX}{payload}");
+        let signed = format!("{}{payload}", self.head);
         let sig = self.pair.sign(signed.as_bytes());
         format!("{signed}.{}", b64(sig.as_ref()))
     }
@@ -98,7 +116,7 @@ impl Signer {
     /// The claims of a token signed by this key and not expired at `now`.
     pub(crate) fn verify(&self, token: &str, now: Timestamp) -> Option<Claims> {
         let (signed, sig) = token.rsplit_once('.')?;
-        let payload = signed.strip_prefix(TOKEN_PREFIX)?;
+        let payload = signed.strip_prefix(&self.head)?;
         UnparsedPublicKey::new(&ED25519, self.pair.public_key().as_ref())
             .verify(signed.as_bytes(), &unb64(sig)?)
             .ok()?;
@@ -110,6 +128,7 @@ impl Signer {
 /// Seals and opens account tokens (AES-256-GCM bound to tenant and account).
 pub(crate) struct Sealer {
     key: LessSafeKey,
+    kid: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -119,15 +138,23 @@ struct Plain<S> {
     until: Timestamp,
 }
 
-fn aad(tenant: TenantId, account: AccountId) -> Vec<u8> {
-    [SEAL_AAD, &tenant.to_bytes(), &account.to_bytes()].concat()
+fn aad(kid: u8, tenant: TenantId, account: AccountId) -> Vec<u8> {
+    [
+        SEAL_AAD,
+        &[SEAL_VERSION, kid],
+        &tenant.to_bytes(),
+        &account.to_bytes(),
+    ]
+    .concat()
 }
 
 impl Sealer {
     pub(crate) fn new(key: &[u8; 32]) -> Self {
+        let kid = sha256(&[b"musubi-token-key".as_slice(), key].concat())[0];
         let key = UnboundKey::new(&AES_256_GCM, key).expect("32-byte AES-256 key");
         Self {
             key: LessSafeKey::new(key),
+            kid,
         }
     }
 
@@ -144,14 +171,14 @@ impl Sealer {
         };
         let mut buf = Zeroizing::new(serde_json::to_vec(&plain).expect("tokens serialise"));
         let nonce = random::<NONCE_LEN>();
-        let mut out = Vec::with_capacity(1 + NONCE_LEN + buf.len() + AES_256_GCM.tag_len());
-        out.push(SEAL_VERSION);
+        let mut out = Vec::with_capacity(HEAD + buf.len() + AES_256_GCM.tag_len());
+        out.extend_from_slice(&[SEAL_VERSION, self.kid]);
         out.extend_from_slice(&nonce);
         let tag = self
             .key
             .seal_in_place_separate_tag(
                 Nonce::assume_unique_for_key(nonce),
-                Aad::from(aad(tenant, account)),
+                Aad::from(aad(self.kid, tenant, account)),
                 &mut buf[..],
             )
             .expect("AES-GCM input below its size limit");
@@ -168,14 +195,23 @@ impl Sealer {
     ) -> Result<AccountTokens, StoreError> {
         let bad = || StoreError::Corrupt("sealed tokens do not open for this account".into());
         let b = &sealed.0;
-        if b.len() < 1 + NONCE_LEN || b[0] != SEAL_VERSION {
+        if b.len() < HEAD || b[0] != SEAL_VERSION {
             return Err(bad());
         }
-        let nonce = Nonce::try_assume_unique_for_key(&b[1..1 + NONCE_LEN]).map_err(|_| bad())?;
-        let mut buf = Zeroizing::new(b[1 + NONCE_LEN..].to_vec());
+        if b[1] != self.kid {
+            return Err(StoreError::Corrupt(
+                "sealed tokens use another token key".into(),
+            ));
+        }
+        let nonce = Nonce::try_assume_unique_for_key(&b[2..HEAD]).map_err(|_| bad())?;
+        let mut buf = Zeroizing::new(b[HEAD..].to_vec());
         let plain = self
             .key
-            .open_in_place(nonce, Aad::from(aad(tenant, account)), &mut buf[..])
+            .open_in_place(
+                nonce,
+                Aad::from(aad(self.kid, tenant, account)),
+                &mut buf[..],
+            )
             .map_err(|_| bad())?;
         let p: Plain<String> = serde_json::from_slice(plain).map_err(|_| bad())?;
         Ok(AccountTokens {
@@ -251,7 +287,7 @@ mod tests {
             exp: 200,
         };
         let tok = s.issue(&c);
-        assert!(tok.starts_with("mt1."));
+        assert!(tok.starts_with("mt1.") && tok.split('.').count() == 4);
         let at = |s: i64| Timestamp::from_second(s).unwrap();
         assert_eq!(s.verify(&tok, at(199)), Some(c));
         assert_eq!(s.verify(&tok, at(200)), None, "expired");
@@ -261,10 +297,12 @@ mod tests {
             tenant: TenantId::from_u128(6),
             ..c
         });
+        let part = |t: &str, i| t.split('.').nth(i).unwrap().to_owned();
         let forged = format!(
-            "mt1.{}.{}",
-            other.split('.').nth(1).unwrap(),
-            tok.split('.').nth(2).unwrap()
+            "mt1.{}.{}.{}",
+            part(&tok, 1),
+            part(&other, 2),
+            part(&tok, 3)
         );
         assert_eq!(s.verify(&forged, at(150)), None);
     }

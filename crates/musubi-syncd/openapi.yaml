@@ -9,15 +9,20 @@ info:
     Authentication: `Authorization: Bearer <credential>`.
     - Tenant API key (`mk_…`), created by the instance admin; stored only as
       SHA-256. Scope `read` or `admin` (admin includes read).
-    - Short-lived token (`mt1.<payload>.<signature>`) from `POST /v1/tokens`:
-      base64url JSON `{"tenant","scope","iat","exp"}` signed with Ed25519 over
-      `mt1.<payload>`. Verified without a database lookup, so it stays valid
-      until `exp` even if its key is revoked; lifetime at most one hour.
+    - Short-lived token (`mt1.<kid>.<payload>.<signature>`) from
+      `POST /v1/tokens`: `<kid>` two hex digits naming the signing key,
+      `<payload>` base64url JSON `{"tenant","scope","iat","exp"}`, signed with
+      Ed25519 over `mt1.<kid>.<payload>`. Verified without a database lookup,
+      so it stays valid until `exp` even if its key is revoked; lifetime at
+      most 15 minutes.
     - Instance admin key from the node configuration: `/v1/admin/*` only.
 
     `401` means a missing, unknown, revoked, expired or forged credential; `403`
     a valid one outside its scope. Ids of another tenant's objects answer `404`.
-    Errors are `{"error": <code>, "message": <text>}`.
+    Errors, including malformed requests and unknown routes, are
+    `{"error": <code>, "message": <text>}`. Request bodies are limited to
+    64 KiB. Requests other than `/v1/stream` and `/v1/admin/backup` share a
+    concurrency limit and time out after 30 s with `503`.
 servers:
   - url: /
 security:
@@ -216,13 +221,16 @@ paths:
                   more: { type: boolean }
         "401": { $ref: "#/components/responses/Error" }
         "410": { $ref: "#/components/responses/CursorTooOld" }
+        "503": { $ref: "#/components/responses/Error" }
   /v1/stream:
     get:
       summary: Server-sent events of committed journal heads
       description: |
         Each event is `id: <seq>` and `data: {"cursor": <seq>}`, sent after the
         commit; read `/v1/changes?since=<previous>` to get what changed. Without
-        `since` (or `Last-Event-ID`) the current head is sent first.
+        `since` (or `Last-Event-ID`) the current head is sent first. A token's
+        stream ends at the token's `exp`; an API key's stream ends within a
+        minute of the key's revocation. At most 16 open streams per tenant.
       parameters:
         - { name: since, in: query, schema: { type: integer, minimum: 0 } }
         - { name: Last-Event-ID, in: header, schema: { type: integer, minimum: 0 } }
@@ -234,6 +242,7 @@ paths:
               schema: { type: string }
         "401": { $ref: "#/components/responses/Error" }
         "410": { $ref: "#/components/responses/CursorTooOld" }
+        "429": { $ref: "#/components/responses/Error" }
   /v1/tokens:
     post:
       summary: Short-lived token for the presenting API key
@@ -247,7 +256,7 @@ paths:
               additionalProperties: false
               properties:
                 scope: { $ref: "#/components/schemas/Scope" }
-                ttl: { type: integer, minimum: 1, maximum: 3600, default: 900, description: Seconds }
+                ttl: { type: integer, minimum: 1, maximum: 900, default: 900, description: Seconds }
       responses:
         "201":
           description: The token.
@@ -470,7 +479,7 @@ components:
       properties:
         error: { type: string }
         message: { type: string }
-        oldest: { type: integer, description: Oldest cursor the journal still reaches (cursor_too_old only) }
+        oldest: { type: integer, description: "cursor_too_old: the oldest cursor the journal still reaches; cursor_ahead: the head" }
   responses:
     Error:
       description: Error.
@@ -479,8 +488,10 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     CursorTooOld:
       description: |
-        `cursor_too_old`: the journal was pruned past the cursor; a new initial
-        sync is required (read everything again, then continue from the head).
+        `cursor_too_old`: the journal was pruned past the cursor;
+        `cursor_ahead`: the cursor is beyond the head (the node was restored
+        from an older backup). Either way a new initial sync is required (read
+        everything again, then continue from the head).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

@@ -12,9 +12,11 @@
 //! }
 //! ```
 //!
-//! `head -c 32 /dev/urandom | base64` makes a key. The file holds secrets:
-//! readable by the service user only.
+//! `head -c 32 /dev/urandom | base64` makes a key (also a good `admin_key`,
+//! which needs at least 32 characters). The file holds secrets: readable by the
+//! service user only; `load` warns otherwise. `Debug` omits the secrets.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +25,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 
 /// The whole file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Address the HTTP server binds.
@@ -44,7 +46,7 @@ pub struct Config {
 }
 
 /// Google OAuth client. Endpoints default to Google's production ones.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleSettings {
     /// OAuth client id.
@@ -72,11 +74,62 @@ fn default_api_base() -> String {
     "https://www.googleapis.com/calendar/v3".into()
 }
 
+const REDACTED: &str = "[redacted]";
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("listen", &self.listen)
+            .field("data_dir", &self.data_dir)
+            .field("public_url", &self.public_url)
+            .field("admin_key", &REDACTED)
+            .field("signing_key", &REDACTED)
+            .field("token_key", &REDACTED)
+            .field("google", &self.google)
+            .finish()
+    }
+}
+
+impl fmt::Debug for GoogleSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GoogleSettings")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &REDACTED)
+            .field("auth_url", &self.auth_url)
+            .field("token_url", &self.token_url)
+            .field("api_base", &self.api_base)
+            .finish()
+    }
+}
+
 impl Config {
     /// Reads and parses `path`.
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        #[cfg(unix)]
+        if let Ok(m) = std::fs::metadata(path) {
+            use std::os::unix::fs::PermissionsExt as _;
+            if m.permissions().mode() & 0o077 != 0 {
+                tracing::warn!(
+                    path = %path.display(),
+                    "the configuration holds secrets but is readable by group or others; chmod 600 it"
+                );
+            }
+        }
         serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Rejects values that would weaken the node.
+    pub(crate) fn check(&self) -> Result<(), String> {
+        let k = &self.admin_key;
+        if k.chars().count() < 32 {
+            return Err("admin_key must have at least 32 characters".into());
+        }
+        // Such a key would be taken for a tenant key or a token.
+        if k.starts_with("mk_") || k.starts_with("mt1.") {
+            return Err("admin_key must not start with mk_ or mt1.".into());
+        }
+        Ok(())
     }
 }
 
@@ -87,4 +140,42 @@ pub(crate) fn key32(name: &str, v: &str) -> Result<[u8; 32], String> {
         .ok()
         .and_then(|b| <[u8; 32]>::try_from(b).ok())
         .ok_or_else(|| format!("{name} must be standard base64 of exactly 32 bytes"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weak_admin_keys_and_secrets_in_debug_are_refused() {
+        let c = |admin: &str| Config {
+            listen: "127.0.0.1:1".parse().unwrap(),
+            data_dir: "/d".into(),
+            public_url: "http://x/".into(),
+            admin_key: admin.into(),
+            signing_key: "signing-secret".into(),
+            token_key: "token-secret".into(),
+            google: GoogleSettings {
+                client_id: "id".into(),
+                client_secret: "client-secret".into(),
+                auth_url: default_auth_url(),
+                token_url: default_token_url(),
+                api_base: default_api_base(),
+            },
+        };
+        let long = "a".repeat(32);
+        assert!(c(&long).check().is_ok());
+        assert!(c(&long[1..]).check().is_err(), "31 characters");
+        assert!(c(&format!("mk_{long}")).check().is_err());
+        assert!(c(&format!("mt1.{long}")).check().is_err());
+        let debug = format!("{:?}", c(&long));
+        for secret in [
+            long.as_str(),
+            "signing-secret",
+            "token-secret",
+            "client-secret",
+        ] {
+            assert!(!debug.contains(secret), "{debug}");
+        }
+    }
 }

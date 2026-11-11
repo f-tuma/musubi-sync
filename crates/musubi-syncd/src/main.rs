@@ -17,6 +17,9 @@ const USAGE: &str = "usage: musubi-syncd serve --config <file>
        musubi-syncd restore --config <file> --from <dir>";
 
 fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

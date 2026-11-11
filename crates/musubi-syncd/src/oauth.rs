@@ -18,7 +18,7 @@ use musubi_model::capability::ProviderId;
 use musubi_model::control::{
     AccountRecord, AccountState, AccountTokens, OAuthPending, OAuthStateHash, Scope,
 };
-use musubi_model::{AccountId, ControlStore, StoreError};
+use musubi_model::{AccountId, ControlStore, Storage, StoreError};
 use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -70,6 +70,8 @@ pub(crate) async fn start(
         expires,
     };
     app.run(move |a| {
+        // A token can outlive its tenant by its lifetime: check the tenant.
+        a.storage.open(tenant)?;
         if let Some(id) = pending.account
             && a.control.account(id)?.is_none_or(|x| x.tenant != tenant)
         {
@@ -135,8 +137,11 @@ pub(crate) async fn callback(
         .run(move |a| Ok(a.control.take_oauth_state(&hash, Timestamp::now())?))
         .await?
         .ok_or_else(|| ApiError::bad_request("unknown, used or expired state"))?;
-    if let Some(e) = p.error {
-        return Err(ApiError::bad_request(format!("authorization failed: {e}")));
+    // The provider's `error` is not echoed: it is attacker-controlled text.
+    if p.error.is_some() {
+        return Err(ApiError::bad_request(
+            "authorization was declined or failed at the provider",
+        ));
     }
     let code = p
         .code
@@ -185,11 +190,12 @@ pub(crate) async fn callback(
     let tokens = AccountTokens {
         refresh: SecretString::from(refresh),
         access: SecretString::from(g.access_token),
-        access_until: Timestamp::now() + SignedDuration::from_secs(g.expires_in),
+        access_until: Timestamp::now() + SignedDuration::from_secs(g.expires_in.clamp(0, 86_400)),
     };
 
     let rec = app
         .run(move |a| {
+            a.storage.open(pending.tenant)?;
             let found = match pending.account {
                 Some(id) => {
                     let acc = a

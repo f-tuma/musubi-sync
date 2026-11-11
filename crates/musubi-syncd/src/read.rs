@@ -10,17 +10,18 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use musubi_model::control::ApiKeyHash;
 use musubi_model::control::Scope;
 use musubi_model::store::{
     CollectionState, Coverage, EntityView, Include, ItemView, RangeCursor, RangeQuery,
 };
 use musubi_model::{
-    AccountId, CollectionId, ControlStore, EntityId, ItemId, Seq, Storage, TenantId, TenantStore,
-    TimeWindow,
+    AccountId, CollectionId, ControlStore, EntityId, ItemId, Seq, Storage, TenantStore, TimeWindow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::watch;
+use tokio::time::{Duration, Instant, Interval};
 
 use crate::crypto::{b64, unb64};
 use crate::{ApiError, App, Caller};
@@ -29,6 +30,10 @@ const RANGE_LIMIT: u32 = 100;
 const RANGE_LIMIT_MAX: u32 = 1000;
 const CHANGES_LIMIT: u32 = 1000;
 const CHANGES_LIMIT_MAX: u32 = 10_000;
+/// Open streams per tenant; one more gets `429`.
+pub(crate) const STREAMS_PER_TENANT: usize = 16;
+/// How often a stream opened with an API key checks that the key still works.
+const KEY_RECHECK: Duration = Duration::from_secs(60);
 
 type Out = Result<Json<Value>, ApiError>;
 
@@ -307,7 +312,11 @@ pub(crate) async fn changes(
         )));
     }
     let page = app
-        .run(move |a| Ok(a.storage.open(tenant)?.changes(p.since, limit)?))
+        .run(move |a| {
+            let t = a.storage.open(tenant)?;
+            ahead(p.since, t.head()?)?;
+            Ok(t.changes(p.since, limit)?)
+        })
         .await?;
     Ok(Json(
         serde_json::to_value(page).map_err(|e| ApiError::internal(&e))?,
@@ -319,10 +328,29 @@ pub(crate) struct StreamParams {
     since: Option<Seq>,
 }
 
+/// A cursor past the head comes from another journal (a node restored from
+/// an older backup): like a pruned one, it needs a new initial sync.
+fn ahead(since: Seq, head: Seq) -> Result<(), ApiError> {
+    if since > head {
+        return Err(ApiError {
+            oldest: Some(head),
+            ..ApiError::new(
+                axum::http::StatusCode::GONE,
+                "cursor_ahead",
+                "new initial sync required: the cursor is ahead of this journal",
+            )
+        });
+    }
+    Ok(())
+}
+
 /// `GET /v1/stream[?since]`: SSE of journal heads. Each event is
 /// `id: <seq>`, `data: {"cursor": <seq>}`, sent after the commit. With `since`
-/// (or `Last-Event-ID`) a pruned cursor gets `410` before the stream starts;
-/// otherwise the current head is sent first.
+/// (or `Last-Event-ID`) a pruned cursor or one past the head gets `410` before
+/// the stream starts; otherwise the current head is sent first. A tenant has
+/// at most [`STREAMS_PER_TENANT`] streams (`429` beyond). A stream ends when
+/// the token it was opened with expires, or within [`KEY_RECHECK`] after its
+/// API key is revoked; the client reconnects with a fresh credential.
 pub(crate) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -330,6 +358,17 @@ pub(crate) async fn stream(
     Query(p): Query<StreamParams>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let tenant = caller.tenant(Scope::Read)?;
+    let (until, key) = match caller {
+        Caller::Token { exp, .. } => {
+            let left = exp.saturating_sub(Timestamp::now().as_second()).max(0);
+            (Instant::now() + Duration::from_secs(left as u64), None)
+        }
+        Caller::Key { hash, .. } => (
+            Instant::now() + Duration::from_secs(10 * 365 * 86_400),
+            Some(hash),
+        ),
+        Caller::Admin => unreachable!("rejected by tenant()"),
+    };
     let since = match p.since {
         Some(s) => Some(s),
         None => headers
@@ -343,21 +382,29 @@ pub(crate) async fn stream(
             })
             .transpose()?,
     };
-    // Subscribe before reading the head, so no commit falls in between.
-    let rx = app.bus.subscribe();
+    // Subscribe before reading the head, so no commit falls in between. The
+    // receiver is the stream's place under the cap until the stream drops.
+    let rx = app
+        .bus
+        .subscribe(tenant, STREAMS_PER_TENANT)
+        .ok_or_else(|| ApiError::too_many("too many open streams for this tenant"))?;
     let head = app
         .run(move |a| {
             let t = a.storage.open(tenant)?;
+            let head = t.head()?;
             if let Some(s) = since {
+                ahead(s, head)?;
                 t.changes(s, 1)?;
             }
-            Ok(t.head()?)
+            Ok(head)
         })
         .await?;
     let st = Feed {
         rx,
         app,
-        tenant,
+        until,
+        key,
+        recheck: tokio::time::interval_at(Instant::now() + KEY_RECHECK, KEY_RECHECK),
         sent: since,
         pending: since.is_none_or(|s| head > s).then_some(head),
     };
@@ -372,9 +419,14 @@ pub(crate) async fn stream(
 }
 
 struct Feed {
-    rx: tokio::sync::broadcast::Receiver<(TenantId, Seq)>,
+    /// The tenant's heads; also its slot under the stream cap.
+    rx: watch::Receiver<Seq>,
     app: Arc<App>,
-    tenant: TenantId,
+    /// The credential's expiry.
+    until: Instant,
+    /// The API key the stream was opened with, checked every [`KEY_RECHECK`].
+    key: Option<ApiKeyHash>,
+    recheck: Interval,
     sent: Option<Seq>,
     pending: Option<Seq>,
 }
@@ -387,20 +439,23 @@ impl Feed {
                 self.sent = Some(h);
                 return Some(h);
             }
-            let head = match self.rx.recv().await {
-                Ok((t, s)) if t == self.tenant => s,
-                Ok(_) => continue,
-                Err(RecvError::Lagged(_)) => {
-                    let tenant = self.tenant;
-                    self.app
-                        .run(move |a| Ok(a.storage.open(tenant)?.head()?))
-                        .await
-                        .ok()?
+            tokio::select! {
+                changed = self.rx.changed() => {
+                    changed.ok()?;
+                    let head = *self.rx.borrow_and_update();
+                    if self.sent.is_none_or(|s| head > s) {
+                        self.pending = Some(head);
+                    }
                 }
-                Err(RecvError::Closed) => return None,
-            };
-            if self.sent.is_none_or(|s| head > s) {
-                self.pending = Some(head);
+                () = tokio::time::sleep_until(self.until) => return None,
+                _ = self.recheck.tick(), if self.key.is_some() => {
+                    let hash = self.key?;
+                    let found = self.app.run(move |a| Ok(a.control.find_api_key(&hash)?)).await;
+                    // Revoked, deleted with its tenant, or unknown: stop.
+                    if !matches!(found, Ok(Some(_))) {
+                        return None;
+                    }
+                }
             }
         }
     }

@@ -20,7 +20,11 @@
 //! answer `404`.
 //!
 //! Stores are synchronous: handlers call them through [`App::run`]
-//! (`spawn_blocking`).
+//! (`spawn_blocking`). Every route except `/v1/stream` and `/v1/admin/backup`
+//! runs under one shared concurrency limit and a request timeout, so a flood
+//! of unknown credentials or webhook calls queues instead of filling the
+//! blocking pool; request bodies are capped. Errors, including rejected
+//! extractors and unknown routes, are `{"error", "message"}` JSON.
 
 mod admin;
 pub mod config;
@@ -34,13 +38,15 @@ mod read;
 use musubi_engine as _;
 use musubi_recurrence as _;
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{FromRequestParts, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -55,7 +61,9 @@ use reqwest::Url;
 use secrecy::SecretString;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::broadcast;
+use tokio::sync::watch;
+use tower::limit::GlobalConcurrencyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 
 pub use admin::{backup, restore};
 use config::{Config, key32};
@@ -65,7 +73,12 @@ use crypto::{Claims, Sealer, Signer, Vault, sha256};
 const OPEN_TENANTS: usize = 64;
 /// Default and longest lifetime of a short-lived token.
 const TOKEN_TTL: u64 = 900;
-const TOKEN_TTL_MAX: u64 = 3600;
+const TOKEN_TTL_MAX: u64 = 900;
+/// Requests in flight at once (excluding SSE and backup), and their timeout.
+const CONCURRENCY: usize = 256;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Largest request body; the API takes only small JSON objects.
+const BODY_LIMIT: usize = 64 * 1024;
 
 /// The running node: stores, adapter, keys and the commit bus.
 pub struct App {
@@ -86,7 +99,8 @@ impl App {
     /// Opens the data directory (taking its lock: one node per directory) and
     /// builds everything the routes need.
     pub fn open(c: &Config) -> Result<Arc<Self>, String> {
-        std::fs::create_dir_all(&c.data_dir)
+        c.check()?;
+        admin::private_dir_all(&c.data_dir)
             .map_err(|e| format!("{}: {e}", c.data_dir.display()))?;
         let lock = lock_data_dir(&c.data_dir)?;
         let control = SqliteControl::open(&c.data_dir.join("control.db")).map_err(err)?;
@@ -127,7 +141,7 @@ impl App {
             signer: Signer::new(&key32("signing_key", &c.signing_key)?)?,
             sealer: Arc::new(Sealer::new(&key32("token_key", &c.token_key)?)),
             admin_hash: sha256(c.admin_key.as_bytes()),
-            bus: CommitBus(broadcast::channel(1024).0),
+            bus: CommitBus::default(),
             data_dir: c.data_dir.clone(),
             _lock: lock,
         }))
@@ -135,7 +149,7 @@ impl App {
 
     /// The HTTP API.
     pub fn router(self: Arc<Self>) -> Router {
-        Router::new()
+        let bounded = Router::new()
             .route("/v1/accounts", post(oauth::start))
             .route("/v1/accounts/{id}", get(read::account))
             .route("/v1/collections", get(read::collections))
@@ -143,7 +157,6 @@ impl App {
             .route("/v1/entities/{id}", get(read::entity))
             .route("/v1/items/{id}", get(read::item))
             .route("/v1/changes", get(read::changes))
-            .route("/v1/stream", get(read::stream))
             .route("/v1/tokens", post(tokens))
             .route("/v1/oauth/google/callback", get(oauth::callback))
             .route("/v1/webhooks/google", post(push::google))
@@ -152,7 +165,20 @@ impl App {
             .route("/v1/admin/tenants/{id}/keys", post(admin::create_key))
             .route("/v1/admin/tenants/{id}/stats", get(admin::stats))
             .route("/v1/admin/keys/{id}", delete(admin::revoke_key))
+            .layer(GlobalConcurrencyLimitLayer::new(CONCURRENCY))
+            .layer(TimeoutLayer::with_status_code(
+                StatusCode::SERVICE_UNAVAILABLE,
+                REQUEST_TIMEOUT,
+            ));
+        // Long-lived: the stream has its own per-tenant cap (`read::stream`),
+        // a backup takes as long as the data needs.
+        Router::new()
+            .route("/v1/stream", get(read::stream))
             .route("/v1/admin/backup", post(admin::backup_route))
+            .merge(bounded)
+            .fallback(|| async { ApiError::not_found() })
+            .layer(axum::middleware::map_response(json_errors))
+            .layer(DefaultBodyLimit::max(BODY_LIMIT))
             .with_state(self)
     }
 
@@ -233,22 +259,59 @@ impl Clock for SystemClock {
 }
 
 /// In-memory notification of committed journal positions: the seam between
-/// the tenant writer (engine) and SSE. Lossy by design: a slow subscriber
-/// that lags re-reads the head, so it never misses that something changed.
-#[derive(Clone)]
-pub struct CommitBus(broadcast::Sender<(TenantId, Seq)>);
+/// the tenant writer (engine) and SSE. One `watch` per tenant holds the latest
+/// head: a slow subscriber skips to it, and a commit wakes only that tenant's
+/// streams. Its receivers are the open streams, so their count is the cap.
+#[derive(Default)]
+pub struct CommitBus(Mutex<HashMap<TenantId, watch::Sender<Seq>>>);
 
 impl CommitBus {
     /// Announces that `tenant`'s journal head is now `head`. Call after the
     /// commit returned.
     pub fn notify(&self, tenant: TenantId, head: Seq) {
-        // Err only means nobody listens.
-        let _ = self.0.send((tenant, head));
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = map.entry(tenant).or_insert_with(|| watch::channel(head).0);
+        tx.send_if_modified(|h| (head > *h).then(|| *h = head).is_some());
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<(TenantId, Seq)> {
-        self.0.subscribe()
+    /// A receiver of `tenant`'s heads, unless it already has `max` of them.
+    pub(crate) fn subscribe(&self, tenant: TenantId, max: usize) -> Option<watch::Receiver<Seq>> {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = map
+            .entry(tenant)
+            .or_insert_with(|| watch::channel(Seq(0)).0);
+        (tx.receiver_count() < max).then(|| tx.subscribe())
     }
+}
+
+/// Gives every error response without a JSON body (rejected extractors,
+/// unknown routes, body limit, timeout) the `{"error", "message"}` shape.
+async fn json_errors(r: Response) -> Response {
+    let s = r.status();
+    let is_json = r
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|c| c.as_bytes().starts_with(b"application/json"));
+    if !(s.is_client_error() || s.is_server_error()) || is_json {
+        return r;
+    }
+    let (parts, body) = r.into_parts();
+    let text = axum::body::to_bytes(body, BODY_LIMIT)
+        .await
+        .unwrap_or_default();
+    let reason = s.canonical_reason().unwrap_or("error");
+    let message = match String::from_utf8_lossy(&text).trim() {
+        "" => reason.to_lowercase(),
+        m => m.to_owned(),
+    };
+    let code = reason.to_lowercase().replace([' ', '-'], "_");
+    let mut out = (s, Json(json!({ "error": code, "message": message }))).into_response();
+    for (k, v) in &parts.headers {
+        if k != header::CONTENT_TYPE && k != header::CONTENT_LENGTH {
+            out.headers_mut().insert(k, v.clone());
+        }
+    }
+    out
 }
 
 /// An API error: status and `{"error": code, "message": …}`.
@@ -284,6 +347,10 @@ impl ApiError {
 
     fn not_found() -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", "not found")
+    }
+
+    fn too_many(why: &str) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", why)
     }
 
     fn bad_request(why: impl Into<String>) -> Self {
@@ -339,14 +406,22 @@ impl IntoResponse for ApiError {
 }
 
 /// The authenticated caller.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(crate) enum Caller {
     /// The instance admin key.
     Admin,
     /// A tenant API key.
-    Key { tenant: TenantId, scope: Scope },
-    /// A short-lived token.
-    Token { tenant: TenantId, scope: Scope },
+    Key {
+        tenant: TenantId,
+        scope: Scope,
+        hash: ApiKeyHash,
+    },
+    /// A short-lived token, valid until `exp` (Unix seconds).
+    Token {
+        tenant: TenantId,
+        scope: Scope,
+        exp: i64,
+    },
 }
 
 impl Caller {
@@ -354,7 +429,7 @@ impl Caller {
     fn tenant(self, need: Scope) -> Result<TenantId, ApiError> {
         match self {
             Caller::Admin => Err(ApiError::forbidden("the admin key has no tenant")),
-            Caller::Key { tenant, scope } | Caller::Token { tenant, scope } => {
+            Caller::Key { tenant, scope, .. } | Caller::Token { tenant, scope, .. } => {
                 if scope == Scope::Admin || need == Scope::Read {
                     Ok(tenant)
                 } else {
@@ -380,7 +455,9 @@ impl FromRequestParts<Arc<App>> for Caller {
             .headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
+            .and_then(|v| v.split_once(' '))
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+            .map(|(_, cred)| cred.trim())
             .ok_or_else(ApiError::unauthorized)?;
         if cred.starts_with("mt1.") {
             let c = app
@@ -390,10 +467,11 @@ impl FromRequestParts<Arc<App>> for Caller {
             return Ok(Caller::Token {
                 tenant: c.tenant,
                 scope: c.scope,
+                exp: c.exp,
             });
         }
         let hash = sha256(cred.as_bytes());
-        if hash == app.admin_hash {
+        if crypto::same(&hash, &app.admin_hash) {
             return Ok(Caller::Admin);
         }
         match app
@@ -403,6 +481,7 @@ impl FromRequestParts<Arc<App>> for Caller {
             Some(k) if k.revoked.is_none() => Ok(Caller::Key {
                 tenant: k.tenant,
                 scope: k.scope,
+                hash: k.hash,
             }),
             _ => Err(ApiError::unauthorized()),
         }
@@ -422,7 +501,7 @@ async fn tokens(
     caller: Caller,
     Json(req): Json<TokenRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let Caller::Key { tenant, scope } = caller else {
+    let Caller::Key { tenant, scope, .. } = caller else {
         return Err(ApiError::forbidden(
             "tokens are issued for tenant API keys only",
         ));

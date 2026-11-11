@@ -65,7 +65,10 @@ serde_json = { version = "1.0.154", features = ["raw_value"] }
 sha2 = "0.10.9"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false }
+tower = { version = "0.5.3", default-features = false }
+tower-http = { version = "0.6.11", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false }
 zeroize = "1.9.1"
 
 # Test-only.

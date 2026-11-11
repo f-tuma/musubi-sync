@@ -366,6 +366,8 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
   - webhook s neznámým kanálem nebo špatným tokenem kanálu je odmítnut a nic nezařadí; platný odpoví do 50 ms;
   - SSE doručí kurzor po commitu; klient se starým kurzorem dostane „nutný nový úvodní sync";
   - `musubi-syncd backup` a `restore` fungují nad běžícím, respektive zastaveným uzlem.
+- **Zpevnění po bezpečnostní revizi (krok 1):** krátkodobý token platí nejvýš 15 minut a nese id podpisového klíče (`mt1.<kid>.<payload>.<podpis>`), zapečetěný token účtu nese id klíče v hlavičce i v AAD; správcovský klíč musí mít aspoň 32 znaků, nesmí vypadat jako klíč API ani token a porovnává se v konstantním čase. Cesty mimo `/v1/stream` a zálohu mají společný limit souběhu a časový limit 30 s (`503`), těla požadavků nejvýš 64 KiB. Oznámení o commitu jdou přes `watch` kanál pro každého tenanta (ne společný `broadcast`); tenant má nejvýš 16 otevřených streamů (další dostane `429`), stream tokenu končí s jeho `exp` a stream klíče do minuty po jeho odvolání. Kurzor za hlavou žurnálu dostane `410 cursor_ahead` (uzel obnovený ze starší zálohy). Zálohy, obnovená data a datový adresář mají práva `0700`/`0600`; `restore` kopíruje přes dočasný soubor, `fsync` a přejmenování, po chybě je adresář nutné ručně vyprázdnit.
+- **Podmínka kroku 2:** smazání tenanta nebo účtu zastaví jeho watch kanály dřív, než se smažou tokeny účtu.
 - **Závisí na:** K1 (čtecí API může začít hned); K4 a K5 pro spojení.
 - **Souběžně:** K5.
 

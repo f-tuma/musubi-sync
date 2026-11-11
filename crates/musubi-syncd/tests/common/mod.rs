@@ -20,7 +20,7 @@ use musubi_testkit::google::FakeGoogle;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
-pub const ADMIN_KEY: &str = "instance-admin-key-for-tests";
+pub const ADMIN_KEY: &str = "instance-admin-key-for-tests-0123456789";
 
 pub struct Node {
     pub app: Arc<App>,

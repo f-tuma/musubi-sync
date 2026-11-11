@@ -680,3 +680,134 @@ async fn connecting_an_account_runs_pkce_once_and_seals_its_tokens() {
         .await;
     assert_eq!(s, 404, "{v}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rejections_and_unknown_routes_answer_the_error_json() {
+    let n = Node::start().await;
+    let a = n.tenant().await;
+    let (key, _) = n.key(a, "admin").await;
+    let bad_json = n
+        .http
+        .post(n.url("/v1/tokens"))
+        .bearer_auth(&key)
+        .header("content-type", "application/json")
+        .body("{not json")
+        .send()
+        .await
+        .expect("send");
+    let s = bad_json.status().as_u16();
+    let v: Value = bad_json.json().await.expect("json body");
+    assert_eq!(s, 400, "{v}");
+    assert!(no_data(&v) && v["message"].is_string(), "{v}");
+    for (method, path, want) in [
+        ("GET", "/v1/changes?since=abc", 400),
+        ("GET", "/v1/items/not-an-id", 400),
+        ("GET", "/v1/nothing-here", 404),
+        ("PUT", "/v1/tokens", 405),
+    ] {
+        let (s, v) = n.call(method, path, Some(&key), None).await;
+        assert_eq!(s, want, "{method} {path}: {v}");
+        assert!(
+            no_data(&v) && v["error"].is_string() && v["message"].is_string(),
+            "{method} {path}: {v}"
+        );
+    }
+    // The scheme is case-insensitive (RFC 9110).
+    let r = n
+        .http
+        .get(n.url("/v1/collections"))
+        .header("authorization", format!("bearer {key}"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(r.status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cursor_ahead_of_the_journal_is_refused() {
+    let n = Node::start().await;
+    let a = n.tenant().await;
+    let (key, _) = n.key(a, "read").await;
+    let acc = account(&n, a, 5);
+    let (_, head) = n.write(a, acc, "cal", vec![event("e1", "1", 1)]);
+    for path in ["/v1/changes", "/v1/stream"] {
+        let (s, v) = n.get(&format!("{path}?since={}", head.0 + 1), &key).await;
+        assert_eq!(s, 410, "{path}: {v}");
+        assert_eq!(v["error"], "cursor_ahead", "{v}");
+        assert_eq!(v["oldest"], head.0, "{v}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn streams_are_capped_per_tenant_and_end_with_their_token() {
+    let n = Node::start().await;
+    let (a, b) = (n.tenant().await, n.tenant().await);
+    let (ka, _) = n.key(a, "read").await;
+    let (kb, _) = n.key(b, "read").await;
+    let open = async |auth: &str| {
+        n.http
+            .get(n.url("/v1/stream"))
+            .bearer_auth(auth)
+            .send()
+            .await
+            .expect("stream")
+    };
+    let mut held = Vec::new();
+    for _ in 0..16 {
+        let r = open(&ka).await;
+        assert_eq!(r.status(), 200);
+        held.push(r);
+    }
+    let r = open(&ka).await;
+    assert_eq!(r.status(), 429);
+    let v: Value = r.json().await.expect("json");
+    assert_eq!(v["error"], "too_many_requests", "{v}");
+    assert_eq!(open(&kb).await.status(), 200, "the cap is per tenant");
+    drop(held.pop());
+    // The slot frees once the server sees the disconnect.
+    let mut ok = false;
+    for _ in 0..100 {
+        if open(&ka).await.status() == 200 {
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(ok, "a closed stream frees its slot");
+
+    let tok = token(&n, b, Scope::Read, 0, 2);
+    let mut r = open(&tok).await;
+    assert_eq!(r.status(), 200);
+    let started = Instant::now();
+    let ended = tokio::time::timeout(Duration::from_secs(10), async {
+        while r.chunk().await.expect("chunk").is_some() {}
+    })
+    .await;
+    assert!(ended.is_ok(), "the stream ends when its token expires");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_token_that_outlives_its_tenant_cannot_start_a_connection() {
+    let n = Node::start().await;
+    let a = n.tenant().await;
+    let tok = token(&n, a, Scope::Admin, 0, 600);
+    let (s, _) = n
+        .call(
+            "DELETE",
+            &format!("/v1/admin/tenants/{a}"),
+            Some(ADMIN_KEY),
+            None,
+        )
+        .await;
+    assert_eq!(s, 204);
+    let (s, v) = n
+        .call(
+            "POST",
+            "/v1/accounts",
+            Some(&tok),
+            Some(json!({ "provider": "google" })),
+        )
+        .await;
+    assert_eq!(s, 404, "{v}");
+}

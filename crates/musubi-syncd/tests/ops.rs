@@ -127,6 +127,14 @@ async fn backup_of_a_running_node_restores_into_a_stopped_one() {
         "backup: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |p: &Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode(&backup), 0o700, "a backup holds secrets");
+        assert_eq!(mode(&backup.join("control.db")), 0o600);
+        assert_eq!(mode(&data), 0o700);
+    }
     let out = run(&[
         "backup",
         "--config",
@@ -178,6 +186,15 @@ async fn backup_of_a_running_node_restores_into_a_stopped_one() {
         "restore refuses a non-empty data directory"
     );
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(data.join("control.db"))
+            .expect("stat")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "restored files stay private");
+    }
     let _node = serve(&config, &addr).await;
     let (s, v) = call(&http, "GET", format!("{base}/v1/collections"), &key, None).await;
     assert_eq!(s, 200, "the key survived: {v}");

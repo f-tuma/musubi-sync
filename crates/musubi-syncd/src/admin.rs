@@ -5,8 +5,12 @@
 //! copy) and `tenants/<id>/main.db` (each through [`Storage::backup`]).
 //! `control.db` is copied first, so a tenant created during the backup is at
 //! worst an orphan directory without keys, never a key without data.
+//!
+//! Backups, restored data and the data directory hold secrets: directories
+//! are created `0700`, copied database files set to `0600`.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -45,7 +49,8 @@ pub(crate) async fn create_tenant(State(app): State<Arc<App>>, caller: Caller) -
 /// `DELETE /v1/admin/tenants/{id}`: data, accounts, keys and jobs.
 // Watch channels stay open at Google until they expire: stopping them needs the
 // account's tokens and the adapter (K6 step 2). Their notifications then find
-// no channel and answer 404.
+// no channel and answer 404. Step 2 condition: deleting a tenant or an account
+// stops its watch channels before the account's tokens are deleted.
 pub(crate) async fn delete_tenant(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -175,8 +180,8 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(io)?;
     }
-    fs::create_dir(to).map_err(io)?;
-    fs::create_dir(to.join("tenants")).map_err(io)?;
+    private_dir(to).map_err(io)?;
+    private_dir(&to.join("tenants")).map_err(io)?;
 
     let conn = rusqlite::Connection::open(app.data_dir.join("control.db"))
         .map_err(|e| ApiError::internal(&e))?;
@@ -188,13 +193,19 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
         .ok_or_else(|| ApiError::bad_request("to must be valid UTF-8"))?;
     conn.execute("VACUUM INTO ?1", [dest])
         .map_err(|e| ApiError::internal(&e))?;
+    private_file(Path::new(dest)).map_err(io)?;
 
     let mut n = 0;
     for t in tenant_dirs(&app.data_dir.join("tenants")).map_err(|e| ApiError::internal(&e))? {
         let out = to.join("tenants").join(t.to_string());
-        fs::create_dir(&out).map_err(io)?;
+        private_dir(&out).map_err(io)?;
         match app.storage.backup(t, &out) {
-            Ok(_) => n += 1,
+            Ok(_) => {
+                for f in fs::read_dir(&out).map_err(io)? {
+                    private_file(&f.map_err(io)?.path()).map_err(io)?;
+                }
+                n += 1;
+            }
             // Deleted meanwhile.
             Err(StoreError::NotFound) => fs::remove_dir(&out).map_err(io)?,
             Err(e) => return Err(e.into()),
@@ -247,14 +258,16 @@ pub async fn backup(c: &Config, to: &Path) -> Result<(), String> {
 }
 
 /// `musubi-syncd restore`: fills an empty data directory from a backup. Takes
-/// the data directory lock, so it fails while a node runs there.
+/// the data directory lock, so it fails while a node runs there. Each tenant
+/// and `control.db` (last) are copied aside, synced and renamed into place;
+/// after a failure the directory holds a partial restore, which has to be
+/// emptied by hand before running `restore` again.
 pub fn restore(c: &Config, from: &Path) -> Result<(), String> {
     let data = &c.data_dir;
-    fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
+    private_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
     let _lock = lock_data_dir(data)?;
-    let io = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
-    for e in fs::read_dir(data).map_err(|e| io(data, e))? {
-        let e = e.map_err(|e| io(data, e))?;
+    for e in fs::read_dir(data).map_err(|e| at(data, e))? {
+        let e = e.map_err(|e| at(data, e))?;
         if e.file_name() != "musubi.lock" {
             return Err(format!(
                 "{} is not empty; restore only into an empty data directory",
@@ -262,29 +275,92 @@ pub fn restore(c: &Config, from: &Path) -> Result<(), String> {
             ));
         }
     }
-    let src = from.join("control.db");
-    fs::copy(&src, data.join("control.db")).map_err(|e| io(&src, e))?;
-    let tenants = data.join("tenants");
-    fs::create_dir(&tenants).map_err(|e| io(&tenants, e))?;
-    let from_tenants = from.join("tenants");
-    let ids = tenant_dirs(&from_tenants).map_err(|e| io(&from_tenants, e))?;
-    for t in &ids {
-        // Copied aside and renamed, like `create_tenant`; storage start-up
-        // removes a `.new` left by a crash.
-        let tmp = tenants.join(format!(".{t}.restore.new"));
-        fs::create_dir(&tmp).map_err(|e| io(&tmp, e))?;
-        let src = from_tenants.join(t.to_string());
-        for f in fs::read_dir(&src).map_err(|e| io(&src, e))? {
-            let f = f.map_err(|e| io(&src, e))?;
-            fs::copy(f.path(), tmp.join(f.file_name())).map_err(|e| io(&f.path(), e))?;
-        }
-        let dst = tenants.join(t.to_string());
-        fs::rename(&tmp, &dst).map_err(|e| io(&dst, e))?;
-    }
+    let n = fill(data, from).map_err(|e| {
+        format!(
+            "{e}; {} now holds a partial restore: empty it (keep nothing) before retrying",
+            data.display()
+        )
+    })?;
     println!(
-        "restored control.db and {} tenants into {}",
-        ids.len(),
+        "restored control.db and {n} tenants into {}",
         data.display()
     );
+    Ok(())
+}
+
+fn at(p: &Path, e: io::Error) -> String {
+    format!("{}: {e}", p.display())
+}
+
+fn fill(data: &Path, from: &Path) -> Result<usize, String> {
+    let tenants = data.join("tenants");
+    private_dir(&tenants).map_err(|e| at(&tenants, e))?;
+    let from_tenants = from.join("tenants");
+    let ids = tenant_dirs(&from_tenants).map_err(|e| at(&from_tenants, e))?;
+    for t in &ids {
+        // Storage start-up removes a `.new` left by a crash.
+        let tmp = tenants.join(format!(".{t}.restore.new"));
+        private_dir(&tmp).map_err(|e| at(&tmp, e))?;
+        let src = from_tenants.join(t.to_string());
+        for f in fs::read_dir(&src).map_err(|e| at(&src, e))? {
+            let f = f.map_err(|e| at(&src, e))?;
+            copy_synced(&f.path(), &tmp.join(f.file_name()))?;
+        }
+        sync_dir(&tmp)?;
+        let dst = tenants.join(t.to_string());
+        fs::rename(&tmp, &dst).map_err(|e| at(&dst, e))?;
+    }
+    sync_dir(&tenants)?;
+    // Last, so a node never starts on keys whose tenant data is missing.
+    let tmp = data.join(".control.db.restore.new");
+    copy_synced(&from.join("control.db"), &tmp)?;
+    let dst = data.join("control.db");
+    fs::rename(&tmp, &dst).map_err(|e| at(&dst, e))?;
+    sync_dir(data)?;
+    Ok(ids.len())
+}
+
+/// Copies `src` to the new file `dst` (mode `0600`) and flushes it to disk.
+fn copy_synced(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::copy(src, dst).map_err(|e| at(src, e))?;
+    private_file(dst).map_err(|e| at(dst, e))?;
+    fs::File::open(dst)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| at(dst, e))
+}
+
+fn sync_dir(dir: &Path) -> Result<(), String> {
+    fs::File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| at(dir, e))
+}
+
+fn dir_builder() -> fs::DirBuilder {
+    #[allow(unused_mut)]
+    let mut b = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b
+}
+
+/// Creates the new directory `dir`, accessible by its owner only.
+pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
+    dir_builder().create(dir)
+}
+
+/// Like [`private_dir`], with missing parents; an existing `dir` is kept as is.
+pub(crate) fn private_dir_all(dir: &Path) -> io::Result<()> {
+    dir_builder().recursive(true).create(dir)
+}
+
+/// Makes `path` readable and writable by its owner only.
+fn private_file(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
