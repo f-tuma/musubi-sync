@@ -624,12 +624,227 @@ async fn scripted_faults_return_google_errors_with_retry_after() {
         200,
         "faults are used up"
     );
+    // The token endpoint answers faults in the OAuth error shape, not Calendar's.
     g.fail(Endpoint::Token, Fault::backend_error(), 1);
+    g.fail(Endpoint::Token, Fault::rate_limited(Some(3)), 1);
+    let r = post_form(&g.token_url(), "grant_type=refresh_token").await;
+    assert_eq!(r.status, 503);
+    assert_eq!(keys(&r.json), set(&["error", "error_description"]));
+    let r = post_form(&g.token_url(), "grant_type=refresh_token").await;
+    assert_eq!(r.status, 429);
+    assert_eq!(r.headers["retry-after"], "3");
+    assert_eq!(r.json["error"], "rateLimitExceeded");
+}
+
+/// Waits until the fake has attempted `n` webhook deliveries.
+async fn deliveries(g: &FakeGoogle, n: usize) -> Vec<musubi_testkit::google::Delivery> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let d = g.deliveries();
+            if d.len() >= n {
+                return d;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("deliveries in time")
+}
+
+#[tokio::test]
+async fn webhooks_are_delivered_only_to_loopback() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let watch = format!("{}/calendars/primary/events/watch", g.calendar_api());
+    for (id, address) in [
+        ("dns", "http://example.com/hook"),
+        ("ip", "http://192.0.2.1/hook"),
+    ] {
+        let r = post_json(
+            &watch,
+            &t,
+            &json!({ "id": id, "type": "web_hook", "address": address }),
+        )
+        .await;
+        assert_eq!(r.status, 200);
+    }
+    for d in deliveries(&g, 2).await {
+        let err = d
+            .result
+            .expect_err("non-loopback callback must not be reached");
+        assert!(err.contains("loopback"), "{err}");
+    }
+}
+
+#[tokio::test]
+async fn local_date_time_is_resolved_in_the_event_time_zone() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    // 10:00-11:00 in Prague (UTC+1 in November) is 09:00-10:00Z.
+    let id = g.put_event(
+        "primary",
+        json!({ "summary": "local", "start": { "dateTime": "2026-11-12T10:00:00", "timeZone": "Europe/Prague" }, "end": { "dateTime": "2026-11-12T11:00:00", "timeZone": "Europe/Prague" } }),
+    );
+    let (inside, _) = read_all(
+        &g,
+        &t,
+        "primary",
+        "timeMin=2026-11-12T09:30:00Z&timeMax=2026-11-12T09:45:00Z",
+    )
+    .await;
+    assert_eq!(ids(&inside), [id]);
+    let (after, _) = read_all(
+        &g,
+        &t,
+        "primary",
+        "timeMin=2026-11-12T10:00:00Z&timeMax=2026-11-13T00:00:00Z",
+    )
+    .await;
+    assert!(after.is_empty(), "the event ends at 10:00Z");
+}
+
+#[tokio::test]
+#[should_panic(expected = "start needs a date")]
+async fn an_event_with_an_unreadable_start_is_rejected() {
+    let g = start(Seed::default()).await;
+    g.put_event(
+        "primary",
+        json!({ "summary": "floating", "start": { "dateTime": "2026-11-12T10:00:00" }, "end": { "dateTime": "2026-11-12T11:00:00" } }),
+    );
+}
+
+#[tokio::test]
+async fn seeded_events_use_several_offsets_and_all_resolve() {
+    let seed = Seed {
+        seed: 9,
+        calendars: 0,
+        events: 30,
+    };
+    let g = start(seed).await;
+    let t = g.access_token();
+    let starts: Vec<String> = g
+        .snapshot("primary")
+        .values()
+        .filter_map(|e| e["start"]["dateTime"].as_str().map(str::to_owned))
+        .collect();
+    for suffix in ["Z", "+01:00", "-05:00"] {
+        assert!(
+            starts.iter().any(|s| s.ends_with(suffix)),
+            "no start with {suffix}"
+        );
+    }
+    assert!(
+        starts.iter().any(|s| s.len() == 19),
+        "some local times carry no offset"
+    );
+    // Seeded events lie within 30 days of the epoch; a window around it shows them all.
+    let (all, _) = read_all(&g, &t, "primary", "").await;
+    let (window, _) = read_all(
+        &g,
+        &t,
+        "primary",
+        "timeMin=2026-09-01T00:00:00Z&timeMax=2027-02-01T00:00:00Z",
+    )
+    .await;
+    assert_eq!(ids(&window), ids(&all));
+}
+
+#[tokio::test]
+async fn empty_pages_can_appear_in_the_middle_of_a_read() {
+    let seed = Seed {
+        seed: 10,
+        calendars: 0,
+        events: 12,
+    };
+    let g = FakeGoogle::start(Config {
+        seed,
+        max_page_size: 3,
+        empty_page_every: 2,
+        ..Config::default()
+    })
+    .await
+    .expect("start");
+    let t = g.access_token();
+    let mut sizes = Vec::new();
+    let mut q = String::new();
+    loop {
+        let r = get(&events_url(&g, "primary", &q), &t).await;
+        sizes.push(r.json["items"].as_array().expect("items").len());
+        match r.json["nextPageToken"].as_str() {
+            Some(p) => q = format!("pageToken={p}"),
+            None => break,
+        }
+    }
+    assert_eq!(&sizes[..4], [3, 3, 0, 3], "{sizes:?}");
+    let (items, _) = read_all(&g, &t, "primary", "").await;
+    let reference = start(seed).await;
+    let rt = reference.access_token();
+    let (expected, _) = read_all(&reference, &rt, "primary", "").await;
+    assert_eq!(ids(&items), ids(&expected), "empty pages lose nothing");
+}
+
+#[tokio::test]
+async fn continuing_a_paged_delta_after_expiry_is_410() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let (_, sync) = read_all(&g, &t, "primary", "").await;
+    for i in 0..5 {
+        g.put_event(
+            "primary",
+            timed(
+                &format!("e{i}"),
+                "2026-11-12T10:00:00Z",
+                "2026-11-12T11:00:00Z",
+            ),
+        );
+    }
+    let r = get(
+        &events_url(&g, "primary", &format!("syncToken={sync}&maxResults=2")),
+        &t,
+    )
+    .await;
+    let page = r.json["nextPageToken"].as_str().expect("more pages");
+    g.apply(&musubi_testkit::google::Change::ExpireSyncTokens {
+        calendar: "primary".into(),
+    });
+    let r = get(&events_url(&g, "primary", &format!("pageToken={page}")), &t).await;
+    assert_eq!(r.status, 410);
+    assert_eq!(r.json["error"]["errors"][0]["reason"], "fullSyncRequired");
+}
+
+#[tokio::test]
+async fn expired_channels_are_forgotten() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let watch = format!("{}/calendars/primary/events/watch", g.calendar_api());
+    let soon = (Timestamp::now().as_millisecond() + 200).to_string();
+    let body = json!({ "id": "short", "type": "web_hook", "address": "http://127.0.0.1:1/", "expiration": soon });
+    assert_eq!(post_json(&watch, &t, &body).await.status, 200);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(g.channels().is_empty());
+    let again = json!({ "id": "short", "type": "web_hook", "address": "http://127.0.0.1:1/" });
     assert_eq!(
-        post_form(&g.token_url(), "grant_type=refresh_token")
-            .await
-            .status,
-        503
+        post_json(&watch, &t, &again).await.status,
+        200,
+        "an expired id is free again"
+    );
+}
+
+#[tokio::test]
+async fn unknown_routes_answer_json_404_and_are_logged() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let r = get(&format!("{}/calendars/primary/acl", g.calendar_api()), &t).await;
+    assert_eq!(r.status, 404);
+    assert_eq!(r.json["error"]["errors"][0]["reason"], "notFound");
+    let r = post_json(&events_url(&g, "primary", ""), &t, &json!({})).await;
+    assert_eq!(
+        r.json["error"]["errors"][0]["reason"], "notFound",
+        "wrong method"
+    );
+    assert!(
+        g.requests()
+            .contains(&"GET /calendar/v3/calendars/primary/acl".to_owned())
     );
 }
 

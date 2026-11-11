@@ -3,8 +3,9 @@
 K8 fills this directory with real Google Calendar responses, captured once
 against a test account and scrubbed of personal data. The test
 `tests/google_fixtures.rs` sends the matching request to the fake server and
-fails if a recorded body has a top-level key (or an `items[0]` key) that the
-fake's response lacks.
+fails if a recorded body has a key, at any depth, that the fake's response
+lacks (arrays compare their first elements). Paths the fake knowingly lacks
+are in the test's `DOCUMENTED` allow-list, each with a `FIDELITY.md` line.
 
 One file per response, named by endpoint:
 

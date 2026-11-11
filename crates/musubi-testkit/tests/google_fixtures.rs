@@ -9,14 +9,61 @@ mod common;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use common::{get, keys, post_form};
+use common::{get, post_form};
 use musubi_testkit::google::{Config, FakeGoogle, Seed};
-use serde_json::Value;
+use serde_json::{Value, json};
 
-/// Keys a real response has that the fake must have too. A key only the fake
+/// Paths (array elements written `[]`) that real responses have and the fake
+/// knowingly lacks. Every entry has a line in FIDELITY.md.
+const DOCUMENTED: &[&str] = &[
+    "error.status",
+    "error.errors[].location",
+    "error.errors[].locationType",
+];
+
+/// Paths present in `real` and absent from `fake`, at any depth, minus
+/// [`DOCUMENTED`]. Arrays compare their first elements. A key only the fake
 /// has is a deviation for FIDELITY.md, not a failure.
 fn missing(real: &Value, fake: &Value) -> BTreeSet<String> {
-    keys(real).difference(&keys(fake)).cloned().collect()
+    fn walk(real: &Value, fake: &Value, path: &str, out: &mut BTreeSet<String>) {
+        match (real, fake) {
+            (Value::Object(r), Value::Object(f)) => {
+                for (k, rv) in r {
+                    let p = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    match f.get(k) {
+                        Some(fv) => walk(rv, fv, &p, out),
+                        None => {
+                            out.insert(p);
+                        }
+                    }
+                }
+            }
+            (Value::Array(r), Value::Array(f)) => {
+                if let (Some(rv), Some(fv)) = (r.first(), f.first()) {
+                    walk(rv, fv, &format!("{path}[]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(real, fake, "", &mut out);
+    out.retain(|p| !DOCUMENTED.contains(&p.as_str()));
+    out
+}
+
+#[test]
+fn comparison_finds_nested_keys_and_skips_documented_ones() {
+    let real = json!({ "error": { "code": 410, "status": "GONE", "errors": [{ "reason": "x", "location": "a", "extra": 1 }] }, "top": 1 });
+    let fake = json!({ "error": { "code": 410, "errors": [{ "reason": "x" }] } });
+    assert_eq!(
+        missing(&real, &fake),
+        BTreeSet::from(["error.errors[].extra".to_owned(), "top".to_owned()])
+    );
 }
 
 #[tokio::test]
@@ -72,9 +119,6 @@ async fn recorded_responses_have_no_keys_the_fake_lacks() {
             other => panic!("no fake request mapped for recorded fixture {other}.json"),
         };
         assert_eq!(missing(&real, &fake), BTreeSet::new(), "{name}.json");
-        if let (Some(r), Some(f)) = (real["items"].get(0), fake["items"].get(0)) {
-            assert_eq!(missing(r, f), BTreeSet::new(), "{name}.json items[0]");
-        }
         checked += 1;
     }
     eprintln!("compared {checked} recorded fixtures");

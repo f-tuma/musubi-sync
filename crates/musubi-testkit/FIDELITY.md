@@ -20,6 +20,9 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   `calendars.*`, `acl.*`, `colors`, `settings` or `freebusy`. Data changes go
   through the Rust API (`put_event`, `delete_event`, `apply`, `run_script`).
 - **Plain HTTP/1.1 on 127.0.0.1**, no TLS, no gzip, no HTTP/2.
+- **Dropping `FakeGoogle` does not close open keep-alive connections.** It
+  stops accepting new ones and stops sending notifications; a connection a
+  client already holds keeps being answered until the client closes it.
 - **No permissions model.** A `reader` calendar answers like an `owner` one;
   `accessRole` is only reported.
 
@@ -63,8 +66,16 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   once in the next delta. This is consistent with Google's documented
   at-least-once delta behaviour.
 - `Config::empty_first_page` makes the first response of every pass (full,
-  window or delta) an empty page with `nextPageToken`. Google returns empty
-  pages at arbitrary points, not just the first.
+  window or delta) an empty page with `nextPageToken`, and
+  `Config::empty_page_every = n` adds one after every `n` pages with items,
+  so empty pages also appear in the middle of a read. Google returns empty
+  pages at arbitrary points; the fake's are at fixed ones.
+- **A window read (`timeMin`/`timeMax`) ends with a `nextSyncToken`**, like
+  a full read. Whether Google returns one there, and what a delta from it
+  covers, is *undocumented*.
+- **`calendarList.list` never returns `nextSyncToken`**, on its last page
+  either; Google does. The fake also rejects `syncToken` there (above), so
+  calendar-list deltas are not modelled. K8 records Google's last page.
 
 ## Time windows
 
@@ -76,6 +87,10 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   instance falls in the window, which needs RRULE expansion.
 - **All-day dates are read as UTC midnight** for windowing. Google uses the
   calendar's time zone.
+- A `dateTime` without an offset is resolved in the event's `timeZone`
+  (IANA name, bundled tz database), as Google documents. A non-cancelled
+  event whose start is not a `date`, a `dateTime` with an offset, or a
+  local `dateTime` with a known `timeZone` is a test bug: `put_event` panics.
 - A cancelled instance spans one second at its `originalStartTime`.
 
 ## Events and deletions
@@ -98,13 +113,24 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 - `events.get` returns `200` with `status:"cancelled"` for a deleted event
   and `404 notFound` for an unknown one. Google may also answer `410` for an
   event deleted long ago.
+- **Deleting a recurring master leaves its exceptions (moved or changed
+  instances) `confirmed`.** Only the master becomes a tombstone. Whether
+  Google also cancels the exceptions in a delta is *undocumented*.
 - The events list `description` is always `""` and `updated` is the time of
   the calendar's last change.
+- Seeded timed events alternate between `UTC`, `Europe/Prague` and
+  `America/New_York`: their `dateTime` carries that zone's offset (`Z`,
+  `+01:00`/`+02:00`, `-05:00`/`-04:00`), and every tenth event is a local time
+  without an offset, resolved through `timeZone`.
 
 ## Push channels
 
 - **`http://` callback addresses are accepted and delivered to.** Google
   requires HTTPS with a valid certificate. Other schemes fail delivery.
+- **Deliveries go only to loopback hosts** (`localhost`, `127.0.0.0/8`,
+  `[::1]`), so a test can never reach the network. A watch with any other
+  address is accepted, but each of its deliveries is recorded as failed
+  without connecting. Google delivers to any public HTTPS host.
 - Expiration is `min(requested expiration, now + params.ttl or
   default_watch_ttl, now + max_watch_ttl)`. Both default to 604 800 s
   (7 days). Google's actual maximum is *undocumented* (T8 measures it).
@@ -117,8 +143,9 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   single sender.
 - **One delivery attempt, no retry.** Google retries some failures with
   exponential backoff. Every attempt is recorded in `FakeGoogle::deliveries`.
-- **Expired channels stay listed** in `FakeGoogle::channels` but stop
-  delivering. Google forgets them.
+- Expired channels are forgotten, as by Google: they leave
+  `FakeGoogle::channels`, their id can be reused, and stopping one answers
+  `404 notFound`.
 - `channels.stop` with a wrong `id`/`resourceId` pair answers `404
   notFound`. Stopping does not need the token.
 - Headers sent: `X-Goog-Channel-ID`, `X-Goog-Channel-Token` (when set),
@@ -135,6 +162,10 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 - **Access tokens never expire by time.** `expires_in` is always `3599`;
   `FakeGoogle::expire_access_tokens` invalidates all of them at once.
 - `scope` in the response is always `calendar.readonly`.
+- Errors, scripted faults included, use OAuth's shape
+  `{"error","error_description"}`. A scripted fault's `reason` (for example
+  `rateLimitExceeded`) becomes `error` and its message `error_description`;
+  Google's OAuth server uses its own codes for overload, *undocumented*.
 - Rotation (`Config::rotate_refresh_tokens`) returns a new `refresh_token`
   and revokes the old one at once. Google rarely rotates and keeps the old
   token valid for a while.
@@ -144,7 +175,15 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 - Error bodies use the classic shape `{"error":{"errors":[{"domain",
   "reason","message"}],"code","message"}}`. Google also sends
   `error.status` (for example `UNAUTHENTICATED`) and, for some errors,
-  `location`/`locationType` in `errors[0]`. The fake omits them.
+  `location`/`locationType` in `errors[0]`. The fake omits them; they are
+  the `DOCUMENTED` allow-list in `tests/google_fixtures.rs`.
+- Unknown paths and wrong methods answer Google's JSON `404 notFound`. They
+  are logged in `FakeGoogle::requests` but skip latency and faults.
+- **Requests the HTTP layer cannot parse get axum's plain-text answers**,
+  not Google's JSON: a query string that does not decode answers `400`, and
+  a token request without `application/x-www-form-urlencoded` answers `415`.
+  These are not logged and skip latency and faults. They mean a broken
+  client, which Google would also reject.
 - Rate limits, backend errors and their `Retry-After` happen **only when
   scripted** with `FakeGoogle::fail`. Organic quotas are not modelled.
 - `Config::latency` is added before the fault check, so a scripted error

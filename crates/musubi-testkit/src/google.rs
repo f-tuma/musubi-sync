@@ -74,6 +74,10 @@ pub struct Config {
     /// The first response of every `events.list` pass is an empty page with
     /// `nextPageToken` (Google does this; a client must not stop there).
     pub empty_first_page: bool,
+    /// After every this many pages with items, one empty page with
+    /// `nextPageToken` (0 = never). With a small `max_page_size` this puts
+    /// empty pages in the middle of a read, as Google does.
+    pub empty_page_every: u32,
     /// The account's valid refresh token.
     pub refresh_token: String,
     /// `/token` returns a new refresh token and revokes the old one.
@@ -92,6 +96,7 @@ impl Default for Config {
             latency: Duration::ZERO,
             max_page_size: MAX_EVENTS_PAGE,
             empty_first_page: false,
+            empty_page_every: 0,
             refresh_token: "1//fake-refresh-token".into(),
             rotate_refresh_tokens: false,
             default_watch_ttl: DEFAULT_WATCH_TTL,
@@ -236,7 +241,9 @@ pub struct Delivery {
     pub result: Result<u16, String>,
 }
 
-/// The running fake server. Dropping it stops the server.
+/// The running fake server. Dropping it stops accepting connections and
+/// sending notifications; connections a client already holds open
+/// (keep-alive) are still answered until the client closes them.
 pub struct FakeGoogle {
     inner: Arc<Inner>,
     addr: SocketAddr,
@@ -330,6 +337,8 @@ impl FakeGoogle {
             .route("/calendar/v3/calendars/{cal}/events/watch", post(watch))
             .route("/calendar/v3/channels/stop", post(stop))
             .route("/token", post(token))
+            .fallback(fallback)
+            .method_not_allowed_fallback(fallback)
             .with_state(inner.clone());
         let server = tokio::spawn(async move {
             // shortcut: serve errors end the task silently; tests then see connection errors.
@@ -468,9 +477,11 @@ impl FakeGoogle {
         self.inner.lock().deliveries.clone()
     }
 
-    /// Ids of the live (not stopped) channels.
+    /// Ids of the live (neither stopped nor expired) channels.
     pub fn channels(&self) -> Vec<String> {
-        self.inner.lock().channels.keys().cloned().collect()
+        let mut s = self.inner.lock();
+        s.prune_channels();
+        s.channels.keys().cloned().collect()
     }
 }
 
@@ -544,11 +555,9 @@ impl Inner {
     }
 
     /// Queues an `exists` notification for every live channel on `cal`.
-    /// Expired channels stay listed but no longer deliver, as with Google.
     fn notify(&self, s: &mut State, cal: &str) {
-        let now = Timestamp::now();
-        let live = |c: &Channel| c.calendar == cal && c.expiration > now;
-        for (id, ch) in s.channels.iter_mut().filter(|(_, c)| live(c)) {
+        s.prune_channels();
+        for (id, ch) in s.channels.iter_mut().filter(|(_, c)| c.calendar == cal) {
             ch.number += 1;
             let _ = self.notices.send(notice(id, ch, "exists"));
         }
@@ -578,12 +587,13 @@ impl Inner {
             f.2 -= 1;
             let fault = f.1.clone();
             s.faults.retain(|(_, _, n)| *n > 0);
-            let mut resp = error(
-                StatusCode::from_u16(fault.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                fault.domain,
-                fault.reason,
-                fault.message,
-            );
+            let status =
+                StatusCode::from_u16(fault.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let mut resp = if endpoint == Endpoint::Token {
+                oauth_error(status, fault.reason, fault.message)
+            } else {
+                error(status, fault.domain, fault.reason, fault.message)
+            };
             if let Some(secs) = fault.retry_after {
                 resp.headers_mut().insert(
                     header::RETRY_AFTER,
@@ -619,6 +629,12 @@ impl State {
         } else {
             cal.to_owned()
         }
+    }
+
+    /// Google forgets expired channels: their ids are free again.
+    fn prune_channels(&mut self) {
+        let now = Timestamp::now();
+        self.channels.retain(|_, c| c.expiration > now);
     }
 
     fn calendar(&self, cal: &str) -> Option<&Calendar> {
@@ -689,6 +705,12 @@ impl State {
             }
             event = t;
         } else {
+            assert!(
+                when(&event["start"]).is_some(),
+                "event {id}: start needs a date, a dateTime with an offset, or a dateTime \
+                 with a known timeZone; got {}",
+                event["start"]
+            );
             let uid = event["recurringEventId"].as_str().unwrap_or(&id).to_owned();
             event["kind"] = json!("calendar#event");
             event["etag"] = json!(etag(v));
@@ -755,16 +777,25 @@ fn b32hex(mut n: u64) -> String {
     String::from_utf8(s).expect("ascii")
 }
 
+/// The instant of an event time (`start`, `end`, `originalStartTime`). A
+/// `dateTime` without an offset is local time in its `timeZone`; a `date` is
+/// read as UTC midnight (a documented deviation).
+fn when(v: &Value) -> Option<Timestamp> {
+    if let Some(s) = v["dateTime"].as_str() {
+        if let Ok(t) = s.parse() {
+            return Some(t);
+        }
+        let local: jiff::civil::DateTime = s.parse().ok()?;
+        let tz = TimeZone::get(v["timeZone"].as_str()?).ok()?;
+        return local.to_zoned(tz).ok().map(|z| z.timestamp());
+    }
+    let d: Date = v["date"].as_str()?.parse().ok()?;
+    d.to_zoned(TimeZone::UTC).ok().map(|z| z.timestamp())
+}
+
 /// `start`/`end` of an event as an interval; a series is unbounded. A
 /// cancelled instance spans one second at its `originalStartTime`.
 fn event_span(body: &Value) -> Option<(Timestamp, Option<Timestamp>)> {
-    fn when(v: &Value) -> Option<Timestamp> {
-        if let Some(s) = v["dateTime"].as_str() {
-            return s.parse().ok();
-        }
-        let d: Date = v["date"].as_str()?.parse().ok()?;
-        d.to_zoned(TimeZone::UTC).ok().map(|z| z.timestamp())
-    }
     if let Some(start) = when(&body["start"]) {
         let end = if body.get("recurrence").is_some() {
             None
@@ -833,11 +864,22 @@ fn seed(s: &mut State, config: &Config) {
                         json!({ "summary": summary, "start": { "date": day.to_string() }, "end": { "date": next.to_string() }, "transparency": "transparent" }),
                     );
                 }
-                _ => {
+                n => {
+                    // UTC, Prague and New York offsets; every tenth is local time without one.
+                    let zone = ["UTC", "Europe/Prague", "America/New_York"][i as usize % 3];
+                    let tz = TimeZone::get(zone).expect("bundled tzdb");
+                    let at = |t: Timestamp| {
+                        let dt = if n == 6 {
+                            t.to_zoned(tz.clone()).datetime().to_string()
+                        } else {
+                            t.display_with_offset(tz.to_offset(t)).to_string()
+                        };
+                        json!({ "dateTime": dt, "timeZone": zone })
+                    };
                     s.put(
                         epoch,
                         &cal,
-                        json!({ "summary": summary, "start": { "dateTime": start.to_string(), "timeZone": "UTC" }, "end": { "dateTime": (start + len).to_string(), "timeZone": "UTC" } }),
+                        json!({ "summary": summary, "start": at(start), "end": at(start + len) }),
                     );
                 }
             }
@@ -935,8 +977,22 @@ async fn post_empty(n: &Notice) -> Result<u16, String> {
         .authority()
         .ok_or("callback without host")?
         .clone();
+    // Hermetic: never reach a host outside this machine, whatever a test registers.
+    let host = authority
+        .host()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if !loopback {
+        return Err(format!(
+            "the fake delivers only to loopback callbacks, not {host}"
+        ));
+    }
     let port = authority.port_u16().unwrap_or(80);
-    let stream = tokio::net::TcpStream::connect((authority.host(), port))
+    let stream = tokio::net::TcpStream::connect((host, port))
         .await
         .map_err(|e| e.to_string())?;
     let (mut send, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
@@ -963,6 +1019,18 @@ fn error(status: StatusCode, domain: &str, reason: &str, message: &str) -> Respo
         "message": message,
     }});
     (status, axum::Json(body)).into_response()
+}
+
+/// The OAuth 2.0 error shape (RFC 6749 section 5.2) of the token endpoint.
+fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
+    let body = json!({ "error": error, "error_description": description });
+    (status, axum::Json(body)).into_response()
+}
+
+/// Unknown paths and wrong methods: logged, then Google's JSON `404 notFound`.
+async fn fallback(AxState(g): St, method: axum::http::Method, uri: Uri) -> Response {
+    g.lock().requests.push(req_line(method.as_str(), &uri));
+    not_found()
 }
 
 fn bad_request(message: &str) -> Response {
@@ -1057,6 +1125,10 @@ struct PageToken {
     time_min: Option<Timestamp>,
     time_max: Option<Timestamp>,
     show_deleted: bool,
+    /// Pages with items served so far in this pass.
+    served: u32,
+    /// The previous response of this pass was an empty page.
+    empty: bool,
 }
 
 fn req_line(method: &str, uri: &Uri) -> String {
@@ -1169,7 +1241,7 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
             "Sync token is no longer valid, a full sync is required.",
         )
     };
-    let (pos, first) = match (p.get("pageToken"), p.get("syncToken")) {
+    let pos = match (p.get("pageToken"), p.get("syncToken")) {
         // Continuation: the token carries the query; other parameters are ignored.
         (Some(t), _) => {
             let pos: PageToken = decode(t)
@@ -1178,7 +1250,7 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
             if pos.delta.is_some_and(|(since, _)| since < c.min_sync) {
                 return Err(gone());
             }
-            (pos, false)
+            pos
         }
         (None, Some(t)) => {
             if ["timeMin", "timeMax"].iter().any(|k| p.contains_key(*k)) {
@@ -1189,7 +1261,7 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
             let tok: SyncToken = decode(t)
                 .filter(|t: &SyncToken| t.cal == cal_id && t.v >= c.min_sync)
                 .ok_or_else(gone)?;
-            let pos = PageToken {
+            PageToken {
                 cal: cal_id.clone(),
                 delta: Some((tok.v, s.version)),
                 snapshot: s.version,
@@ -1197,8 +1269,9 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
                 time_min: None,
                 time_max: None,
                 show_deleted: true,
-            };
-            (pos, true)
+                served: 0,
+                empty: false,
+            }
         }
         (None, None) => {
             let (time_min, time_max) = (time("timeMin")?, time("timeMax")?);
@@ -1212,7 +1285,7 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
                     "The specified time range is empty.",
                 ));
             }
-            let pos = PageToken {
+            PageToken {
                 cal: cal_id.clone(),
                 delta: None,
                 snapshot: s.version,
@@ -1220,8 +1293,9 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
                 time_min,
                 time_max,
                 show_deleted: flag(&p, "showDeleted")?,
-            };
-            (pos, true)
+                served: 0,
+                empty: false,
+            }
         }
     };
     let mut body = json!({
@@ -1235,8 +1309,15 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
         "defaultReminders": c.entry["defaultReminders"],
         "items": [],
     });
-    if first && g.config.empty_first_page {
-        body["nextPageToken"] = json!(encode(&pos));
+    let every = g.config.empty_page_every;
+    let empty_now = !pos.empty
+        && if pos.served == 0 {
+            g.config.empty_first_page
+        } else {
+            every > 0 && pos.served.is_multiple_of(every)
+        };
+    if empty_now {
+        body["nextPageToken"] = json!(encode(&PageToken { empty: true, ..pos }));
         return Ok(ok(body));
     }
     let after = pos
@@ -1263,6 +1344,8 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
     if more {
         let next = PageToken {
             after: page.last().map(|(id, _)| (*id).clone()),
+            served: pos.served + 1,
+            empty: false,
             ..pos
         };
         body["nextPageToken"] = json!(encode(&next));
@@ -1361,6 +1444,7 @@ async fn watch(
         expiration = expiration.min(t);
     }
     let mut s = g.lock();
+    s.prune_channels();
     let cal_id = s.resolve(&cal);
     let Some(c) = s.calendars.get(&cal_id) else {
         return not_found();
@@ -1410,6 +1494,7 @@ async fn stop(AxState(g): St, uri: Uri, h: HeaderMap, body: axum::body::Bytes) -
         return error(StatusCode::BAD_REQUEST, "global", "required", "Required");
     };
     let mut s = g.lock();
+    s.prune_channels();
     if s.channels.get(id).is_none_or(|c| c.resource_id != res) {
         return error(
             StatusCode::NOT_FOUND,
@@ -1432,11 +1517,7 @@ async fn token(
         return r;
     }
     let oauth_error = |error: &str, description: &str| {
-        (
-            StatusCode::BAD_REQUEST,
-            axum::Json(json!({ "error": error, "error_description": description })),
-        )
-            .into_response()
+        self::oauth_error(StatusCode::BAD_REQUEST, error, description)
     };
     match f.get("grant_type").map(String::as_str) {
         Some("refresh_token") => {}
