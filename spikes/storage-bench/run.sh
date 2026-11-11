@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Full storage benchmark: SQLite-per-tenant vs shared PostgreSQL 17. See README.md.
 # KEEP=1 keeps the container and data afterwards (also on failure).
+# SKIP_PG=1 skips the PostgreSQL phases and the backup table (SQLite-only rerun; results/pg.md and backup.md stay).
 set -euo pipefail
 cd "$(dirname "$0")"
 # One run at a time: two runs share the container and data, and one's cleanup would wipe the other.
@@ -58,6 +59,7 @@ B=./target/release/storage-bench
 if [ "${SKIP_SQLITE:-0}" != 1 ]; then
   { $B sqlite load size; $B sqlite read mixed outbox coldopen; } | tee results/sqlite.md
 fi
+if [ "${SKIP_PG:-0}" != 1 ]; then
 $B pg load size read mixed outbox connect | tee results/pg.md
 
 # Backup / restore of the full data set (rough, single run).
@@ -80,6 +82,7 @@ $B pg load size read mixed outbox connect | tee results/pg.md
   echo "| pg | pg_restore -j 8 (incl. index build) | $(( (e - s) / 1000000 )) | |"
   rm -f "$BENCH_DATA/pg/dump.pgc"
 } | tee results/backup.md
+fi
 
 # Raw layer compressed with zstd (measured on one regular and one large tenant). Runs after mixed/outbox,
 # which only touch tenants 0..15, so a regular tenant >= 16 still has the state of the size row.
@@ -90,3 +93,5 @@ for m in 0 1; do SQLITE_MEMSTATUS=$m $B sqlite read; done | tee results/ab-memst
 { for c in bg inline passive; do SQLITE_CKPT=$c $B sqlite ingest-large; done
   SQLITE_WAL_HARD_MB=256 $B sqlite ingest-large; } | tee results/ab-ckpt-ingest.md
 for c in bg passive; do SQLITE_CKPT=$c MIXED_SECS=20 $B sqlite mixed; done | tee results/ab-ckpt-mixed.md
+# Outbox accept on a tenant under ingest, with and without a long reader (re-review finding 1). Last: it adds a tenant file.
+$B sqlite acceptmix | tee results/acceptmix.md

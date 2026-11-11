@@ -64,7 +64,7 @@ fn main() {
     let (backend, phases) = match args.split_first() {
         Some((b, p)) if !p.is_empty() => (b.as_str(), p),
         _ => {
-            eprintln!("usage: storage-bench sqlite|pg <load|read|mixed|outbox|size|coldopen|connect>...");
+            eprintln!("usage: storage-bench sqlite|pg <load|read|mixed|outbox|size|coldopen|connect> (sqlite also: ingest-large|acceptmix)...");
             std::process::exit(2);
         }
     };
@@ -342,6 +342,7 @@ fn sqlite_phase(cfg: &Cfg, ph: &str) {
             );
         }
         "coldopen" => sqlite_coldopen(cfg),
+        "acceptmix" => sqlite_acceptmix(cfg, &dir),
         _ => panic!("unknown sqlite phase {ph}"),
     }
 }
@@ -453,6 +454,79 @@ fn sqlite_mixed(cfg: &Cfg, dir: &Path) {
             let notes = format!("{:.0} items/s while reading", wp as f64 / cfg.mixed_secs as f64);
             row("sqlite", "mixed write page=250 updates", &mut wlat.into_inner().unwrap(), &notes);
         }
+    }
+}
+
+/// Outbox accept on the tenant that is being ingested, through the tenant's single writer (actor): accepts are
+/// queued and run before the next ingest page. Large tenant, page 250, background checkpointer, ~50 accepts/s.
+/// Pass 2 adds a reader that holds a snapshot for 1.5 s, 0.2 s apart. Accept latency = enqueue -> commit.
+fn sqlite_acceptmix(cfg: &Cfg, dir: &Path) {
+    const T: u64 = 300_000;
+    // Initial load, then two full update rounds: ~3x the large-tenant ingest, long enough for several reader cycles.
+    let pages: Vec<Page> = (0..3).flat_map(|v| gen_many(&[T], cfg.large, 250, v).pop().unwrap()).collect();
+    let pre = pages.len() / 30; // untimed: entities that the accepts mutate
+    for long_reader in [false, true] {
+        let p = sqlite::path(dir, T);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", p.display()));
+        }
+        let mut w = sqlite::Writer::new(sqlite::create(&p).unwrap()).unwrap();
+        let mut ne = 0;
+        for pg in &pages[..pre] {
+            ne += w.apply_page(pg).unwrap();
+        }
+        let ck = sqlite::Checkpointer::start(vec![p.clone()], 1);
+        let done = AtomicBool::new(false);
+        let (tx, rx) = std::sync::mpsc::channel::<Instant>();
+        let (mut alat, mut ilat) = (vec![], vec![]);
+        let t0 = Instant::now();
+        std::thread::scope(|s| {
+            let done = &done;
+            s.spawn(move || {
+                // owns tx: the writer's final drain ends when this thread exits
+                while !done.load(Ordering::Relaxed) {
+                    tx.send(Instant::now()).unwrap();
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            if long_reader {
+                let p = &p;
+                s.spawn(move || {
+                    let c = sqlite::open(&p).unwrap();
+                    while !done.load(Ordering::Relaxed) {
+                        c.execute_batch("BEGIN").unwrap();
+                        let _: i64 = c.query_row("SELECT count(*) FROM changes", [], |r| r.get(0)).unwrap(); // takes the snapshot
+                        std::thread::sleep(Duration::from_millis(1500));
+                        c.execute_batch("COMMIT").unwrap();
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                });
+            }
+            let mut k = 0i64;
+            let mut accept = |w: &mut sqlite::Writer, enq: Instant, alat: &mut Vec<f64>| {
+                w.accept_mutation(1 + k * 7 % ne as i64, &format!("idem-mix-{}-{long_reader}-{k}", std::process::id()), r#"{"title":"renamed"}"#)
+                    .unwrap();
+                alat.push(ms(enq));
+                k += 1;
+            };
+            for pg in &pages[pre..] {
+                while let Ok(enq) = rx.try_recv() {
+                    accept(&mut w, enq, &mut alat);
+                }
+                let st = Instant::now();
+                w.apply_page(pg).unwrap();
+                ilat.push(ms(st));
+            }
+            done.store(true, Ordering::Relaxed);
+            while let Ok(enq) = rx.recv() {
+                accept(&mut w, enq, &mut alat);
+            }
+        });
+        let wall = t0.elapsed().as_secs_f64();
+        let tag = if long_reader { "long reader (1.5 s snapshot)" } else { "no reader" };
+        let n: usize = pages[pre..].iter().map(|p| p.items.len()).sum();
+        row("sqlite", &format!("acceptmix accept during ingest, {tag}"), &mut alat, &format!("enqueue->commit, synchronous=FULL, same writer as ingest; {}", ck.summary()));
+        row("sqlite", &format!("acceptmix ingest page=250, {tag}"), &mut ilat, &format!("{:.0} items/s incl. accepts", n as f64 / wall));
     }
 }
 

@@ -78,8 +78,14 @@ fn wal_hard() -> u64 {
 }
 /// After a WAL reset the file is cut back to this size (journal_size_limit).
 const WAL_LIMIT: u64 = 4 << 20;
-/// Upper bound on how long TRUNCATE waits for readers and the writer (the writer is blocked meanwhile).
-const CKPT_WAIT: Duration = Duration::from_millis(100);
+/// Upper bound on how long the writer's TRUNCATE waits for readers (this tenant's writes are blocked meanwhile).
+/// Short queries finish within it; a long reader makes it fail fast and the writer backs off (`RESET_BACKOFF`).
+const CKPT_WAIT: Duration = Duration::from_millis(10);
+/// After a TRUNCATE that came back busy, the writer does not retry for this long or until the WAL grows by
+/// `RESET_BACKOFF_GROWTH`, whichever comes first: a reader holding an old snapshot would otherwise cost every
+/// commit the full `CKPT_WAIT`, and a busy caused by a concurrent PASSIVE should not let the WAL run away.
+const RESET_BACKOFF: Duration = Duration::from_secs(1);
+const RESET_BACKOFF_GROWTH: u64 = 32 << 20;
 /// Fuse: inline auto-checkpoint after 65536 pages (256 MB) in case the background checkpointer falls behind.
 const FUSE_PAGES: u32 = 65536;
 
@@ -112,6 +118,7 @@ static STATS: Stats = Stats {
     passive: AtomicU64::new(0),
     truncate: AtomicU64::new(0),
     truncate_busy: AtomicU64::new(0),
+    max_truncate_us: AtomicU64::new(0),
 };
 
 struct Stats {
@@ -119,6 +126,7 @@ struct Stats {
     passive: AtomicU64,
     truncate: AtomicU64,
     truncate_busy: AtomicU64,
+    max_truncate_us: AtomicU64,
 }
 
 /// Background checkpoints for a set of tenant files, off the writers' commit path.
@@ -136,10 +144,9 @@ pub struct Checkpointer {
 impl Checkpointer {
     pub fn start(paths: Vec<PathBuf>, threads: usize) -> Self {
         let mode = ckpt_mode();
-        let threads = if mode == Ckpt::Inline { 0 } else { threads };
         let stop = Arc::new(AtomicBool::new(false));
         let paths = Arc::new(Mutex::new(paths));
-        for a in [&STATS.max_wal, &STATS.passive, &STATS.truncate, &STATS.truncate_busy] {
+        for a in [&STATS.max_wal, &STATS.passive, &STATS.truncate, &STATS.truncate_busy, &STATS.max_truncate_us] {
             a.store(0, Ordering::Relaxed);
         }
         let stats = &STATS;
@@ -160,6 +167,9 @@ impl Checkpointer {
                             });
                             let size = std::fs::metadata(&*wal).map(|m| m.len()).unwrap_or(0);
                             stats.max_wal.fetch_max(size, Ordering::Relaxed);
+                            if mode == Ckpt::Inline {
+                                continue; // sample only: SQLite checkpoints inline
+                            }
                             if mode == Ckpt::Passive {
                                 stats.passive.fetch_add(1, Ordering::Relaxed);
                                 c.execute_batch("PRAGMA wal_checkpoint(PASSIVE)").unwrap();
@@ -193,15 +203,18 @@ impl Checkpointer {
     pub fn summary(&self) -> String {
         let s = &STATS;
         match ckpt_mode() {
-            Ckpt::Inline => "ckpt=inline (wal_autocheckpoint=1000)".to_string(),
+            Ckpt::Inline => format!("ckpt=inline (wal_autocheckpoint=1000): max WAL {:.1} MB", s.max_wal.load(Ordering::Relaxed) as f64 / 1e6),
             m => format!(
-                "ckpt={}: max WAL {:.1} MB, {} passive, {} truncate ({} busy: readers past {} ms or another checkpoint running)",
+                "ckpt={}: max WAL {:.1} MB, {} passive, {} truncate (max {:.0} ms; {} busy: readers past {} ms or another checkpoint running; then back-off {} s or +{} MB WAL)",
                 if m == Ckpt::Bg { "bg" } else { "passive-50ms" },
                 s.max_wal.load(Ordering::Relaxed) as f64 / 1e6,
                 s.passive.load(Ordering::Relaxed),
                 s.truncate.load(Ordering::Relaxed),
+                s.max_truncate_us.load(Ordering::Relaxed) as f64 / 1e3,
                 s.truncate_busy.load(Ordering::Relaxed),
-                CKPT_WAIT.as_millis()
+                CKPT_WAIT.as_millis(),
+                RESET_BACKOFF.as_secs(),
+                RESET_BACKOFF_GROWTH >> 20
             ),
         }
     }
@@ -232,27 +245,36 @@ pub struct Writer {
     pub c: Connection,
     seq: i64,
     wal: Option<(PathBuf, u64)>,
+    /// Back-off after a busy TRUNCATE: no retry before this instant unless the WAL reaches this size.
+    next_reset: (Instant, u64),
 }
 
 impl Writer {
     pub fn new(c: Connection) -> rusqlite::Result<Self> {
         let seq = c.query_row("SELECT v FROM meta WHERE k='seq'", [], |r| r.get(0))?;
         let wal = (ckpt_mode() == Ckpt::Bg).then(|| (PathBuf::from(format!("{}-wal", c.path().unwrap())), wal_hard()));
-        Ok(Writer { c, seq, wal })
+        Ok(Writer { c, seq, wal, next_reset: (Instant::now(), 0) })
     }
 
-    /// After a commit: if the WAL reached the hard limit (`wal_hard`), TRUNCATE it. Waits at most CKPT_WAIT for readers that
-    /// still use old frames (this tenant's writes wait meanwhile); on timeout the next commit tries again.
+    /// After an ingest commit: if the WAL reached the hard limit (`wal_hard`), TRUNCATE it. Waits at most CKPT_WAIT for
+    /// readers that still use old frames (this tenant's writes wait meanwhile); if one is still there, no retry for
+    /// RESET_BACKOFF. Not called on the outbox accept path, which must not wait on a checkpoint.
     fn reset_wal(&mut self) -> rusqlite::Result<()> {
         let Some((wal, hard)) = &self.wal else { return Ok(()) };
-        if std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0) < *hard {
+        let size = std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0);
+        if size < *hard || (Instant::now() < self.next_reset.0 && size < self.next_reset.1) {
             return Ok(());
         }
         self.c.busy_timeout(CKPT_WAIT)?;
+        let t = Instant::now();
         let busy: i64 = self.c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
         self.c.busy_timeout(Duration::from_secs(5))?;
+        STATS.max_truncate_us.fetch_max(t.elapsed().as_micros() as u64, Ordering::Relaxed);
         STATS.truncate.fetch_add(1, Ordering::Relaxed);
         STATS.truncate_busy.fetch_add(busy as u64, Ordering::Relaxed);
+        if busy != 0 {
+            self.next_reset = (Instant::now() + RESET_BACKOFF, size + RESET_BACKOFF_GROWTH);
+        }
         Ok(())
     }
 
@@ -360,8 +382,7 @@ impl Writer {
             tx.commit()
         })();
         self.c.execute_batch("PRAGMA synchronous=NORMAL")?;
-        res?;
-        self.reset_wal()
+        res
     }
 }
 
