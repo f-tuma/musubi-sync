@@ -76,7 +76,7 @@ Hlavní externí závislosti podle kapitoly 8 návrhu: `tokio`, `reqwest` (rustl
 
 - `tenant_id` je náhodný 128bitový identifikátor; textově 26 znaků malé base32hex (RFC 4648, bez paddingu), stejně jako všechny naše identifikátory (`musubi-model::id`). Base32hex proto, že je to zároveň platné klientské ID události u Googlu a řazení textu odpovídá řazení čísel. Do cesty nikdy nejde vstup od volajícího.
 - `control.db`: tenanti, klíče API (jen hash), účty a šifrované tokeny, trvalá fronta úloh, watch kanály (id kanálu → tenant, účet, kolekce, tajný token kanálu). Zápisy `synchronous=FULL`.
-- `main.db`: tabulky podle spiku ([storage.md](../research/phase0/storage.md), 3.1): `raw`, `items`, `entities`, `placements`, `occurrences`, `changes`, k tomu `collections` (kurzor, pokrytí, stav) a `meta` (verze schématu; vodoznak `projected` je rezervovaný pro fázi 3). Pět indexů podle kapitoly 5.6 návrhu. Žádné `WITHOUT ROWID` u tabulek s těly.
+- `main.db`: tabulky podle spiku ([storage.md](../research/phase0/storage.md), 3.1): `raw`, `items`, `entities`, `placements`, `occurrences`, `changes`, k tomu `collections` (kurzor, pokrytí, stav) a `meta` (verze schématu; vodoznak `projected` je rezervovaný pro fázi 3). Pět indexů podle kapitoly 5.6 návrhu. Žádné `WITHOUT ROWID` u tabulek s těly. Doplněno v K1: výskyty delší než 7 dní mají vlastní částečný index `occurrences_long` podle konce, takže jedna dlouhá událost nerozšíří časový sken každého dotazu `range`.
 - `outbox.db`: mutace, doručení, odchozí zprávy. Ve fázi 1 nevzniká, protože fáze 1 nemá mutace. Jméno, umístění v adresáři tenanta a pořadí v záloze jsou ale dané už teď a test zálohy s ním počítá.
 
 ### 3.2 Podmínky z fáze 0 a kdy se plní
@@ -88,7 +88,7 @@ Podmínky z kapitoly 4.3 návrhu jsou požadavky. Fáze 1 plní všechny, které
 | build s `SQLITE_DEFAULT_MEMSTATUS=0` (`LIBSQLITE3_FLAGS` v `.cargo/config.toml`) | ano | — |
 | `busy_timeout` jako první pragma, zápisy `BEGIN IMMEDIATE`, čtecí a zapisovací spojení zvlášť | ano | — |
 | jeden zapisovatel na soubor | ano (zapisovatel tenanta pro `main.db`) | jediný zapisovatel outboxu pro `outbox.db`: přijetí, doručení z promítnutí, výsledky doručení |
-| vlastní checkpointer: `PASSIVE` na pozadí, `TRUNCATE` v zapisovači po stránce nad prahem 64 MB, čekání na čtenáře nejvýš 10 ms, back-off 1 s nebo +32 MB; `journal_size_limit`, vysoký `wal_autocheckpoint` | ano | přijetí reset nikdy nevolá |
+| vlastní checkpointer: `PASSIVE` na pozadí, `TRUNCATE` v zapisovači po stránce nad prahem 64 MB, čekání na čtenáře nejvýš 10 ms, back-off 1 s nebo +32 MB; `journal_size_limit`, vysoký `wal_autocheckpoint` (jen soubory tenantů; `control.db` nemá checkpointer a drží výchozí hodnotu). Doplněno v K1: čtení i `PASSIVE` na pozadí procházejí branou v procesu, kterou `TRUNCATE` na ty 10 ms uzavře a vyprázdní (po vyprázdnění pustí čtení dál, jen `PASSIVE` čeká do konce resetu), a zapisovatel před `TRUNCATE` sám pustí `PASSIVE`. Bez toho se překrývající čtenáři střídají na starých značkách čtení, WAL se nikdy nevyprázdní a import rostl přes 256 MB; `TRUNCATE` navíc nemá na zámku checkpointu busy handler, takže souběžný `PASSIVE` ho shodí hned | ano | přijetí reset nikdy nevolá |
 | omezená délka čtecích transakcí; dlouhá čtení přes backup API nebo `VACUUM INTO` | ano: rozsah je stránkovaný, export a záloha jdou přes backup API | — |
 | id se nikdy znovu nepoužijí | `changes.seq` je `AUTOINCREMENT` | id mutací `AUTOINCREMENT` |
 | stránka příjmu jedna transakce `synchronous=NORMAL` | ano | — |
@@ -140,7 +140,7 @@ pub trait TenantStore: Send {
     fn set_collection_state(&mut self, col: CollectionId, s: &CollectionStatus)
         -> Result<(), StoreError>;                                                   // 20 stav, chyba, pokrytí
     fn extend_occurrences(&mut self, w: &OccurrenceWrite) -> Result<(), StoreError>; // 21
-    fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError>;     // 22 náhrobky, osiřelé raw
+    fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError>;     // 22 náhrobky; osiřelá raw bez ohledu na stáří
     fn checkpoint(&mut self, mode: CheckpointMode) -> Result<CheckpointInfo, StoreError>; // 23
 
     // Fáze 3 (soubor outboxu), zde jen pro tvar:
@@ -177,11 +177,11 @@ Obnova (`restore`) je offline příkaz `musubi-syncd restore`, ne operace traitu
 
 - tenanti: vložit, smazat;
 - klíče API: vložit hash, najít podle hashe, zneplatnit;
-- účty: vložit nebo nahradit, najít podle id, najít podle (tenant, poskytovatel, `subject`), vypsat účty tenanta, změnit stav, smazat. Trojice (tenant, poskytovatel, `subject`) je unikátní: stejná trojice pod jiným id je `AlreadyExists`, takže nové připojení téhož účtu Google zachová jeho id. Odpojení (`AccountState::Removing`): engine odhlásí kanály účtu, každou jeho kolekci odstraní přes `purge_collection` a nakonec zavolá `delete_account`, které smaže účet s tokeny, úlohami a kanály; po restartu kroky pokračují;
+- účty: vložit nebo nahradit, najít podle id, najít podle (tenant, poskytovatel, `subject`), vypsat účty tenanta, změnit stav, smazat. Trojice (tenant, poskytovatel, `subject`) je unikátní: stejná trojice pod jiným id je `AlreadyExists`, takže nové připojení téhož účtu Google zachová jeho id. Odpojení (`AccountState::Removing`): engine odhlásí kanály účtu, každou jeho kolekci odstraní přes `purge_collection` a nakonec zavolá `delete_account`, které smaže účet s tokeny, úlohami a kanály; po restartu kroky pokračují. Úloha nese účet v indexovaném sloupci `account` (může být prázdný), odvozeném z druhu úlohy; `ExtendIndex` a `Maintain` patří tenantovi a smaže je jen `delete_tenant`;
 - šifrované tokeny: zapsat, přečíst (zapečetěný blob);
 - rozběhnuté přihlášení OAuth: `put_oauth_state` uloží záznam pod SHA-256 parametru `state` (tenant, poskytovatel, případně účet k novému připojení, ověřovač PKCE, platnost) a smaže prošlé; `take_oauth_state` ho v jedné transakci vrátí a smaže, takže `state` platí jednou. Stav tedy není podepsaný a bezstavový: jednorázovost z K6 vyžaduje záznam;
-- fronta úloh: zařadit se sloučením duplicit podle klíče `dedup`, kdy platí dřívější `due`; pronajmout splatné na dobu `lease_for`; prodloužit pronájem (`extend_lease`, dlouhé úplné čtení); dokončit; přeplánovat s volbou `count_attempt` (chyba s odkladem počítá pokus, omezení rychlosti ani plánované pokračování ne). Prodloužení, dokončení i přeplánování jen s platným `LeaseId`, jinak `LeaseLost`. Úloha s pokračováním (další část úplného čtení) zařadí pokračování před `complete`: pád mezi tím nechá starou úlohu znovu běžet (stránky jsou idempotentní), nikdy nezůstane žádná;
-- watch kanály: zapsat, najít podle id kanálu, vypsat kanály tenanta nebo jednoho jeho účtu (před `delete_account` a `delete_tenant`), smazat, vypsat ty, kterým brzy vyprší platnost. `ChannelRecord` je `{ tenant, account, collection: CollectionId, sub: Subscription }`, klíčem je `sub.channel` (samostatné `id` by ho jen opakovalo). Token kanálu je v `Subscription` jako `SecretString`, ne prostý `String`. Webhook tak oznámení ověří přes `PushSource::verify` bez otevření úložiště tenanta.
+- fronta úloh: zařadit se sloučením duplicit podle klíče `dedup` v rámci tenanta a jen mezi nepronajatými úlohami (běžící úloha se nesloučí, aby nepřišla o nový podnět), kdy platí dřívější `due`; pronajmout splatné na dobu `lease_for`; prodloužit pronájem (`extend_lease`, dlouhé úplné čtení); dokončit; přeplánovat s volbou `count_attempt` (chyba s odkladem počítá pokus, omezení rychlosti ani plánované pokračování ne). Prodloužení, dokončení i přeplánování jen s platným `LeaseId`, jinak `LeaseLost`. Úloha s pokračováním (další část úplného čtení) zařadí pokračování před `complete`: pád mezi tím nechá starou úlohu znovu běžet (stránky jsou idempotentní), nikdy nezůstane žádná;
+- watch kanály: zapsat, najít podle id kanálu, vypsat kanály tenanta nebo jednoho jeho účtu (před `delete_account` a `delete_tenant`), smazat, vypsat ty, kterým brzy vyprší platnost. `ChannelRecord` je `{ tenant, account, collection: CollectionId, sub: Subscription }`, klíčem je `sub.channel` (samostatné `id` by ho jen opakovalo). Token kanálu je v `Subscription` jako `SecretString`, ne prostý `String`. Webhook tak oznámení ověří přes `PushSource::verify` bez otevření úložiště tenanta. V `control.db` je token kanálu uložený nešifrovaně: není to přihlašovací údaj, podvržené oznámení umí jen spustit synchronizaci kolekce kanálu, která čte poskytovatele tokeny účtu, a `verify` potřebuje prostou hodnotu u každého oznámení bez cesty přes trezor. Rozhodnutí znovu posoudí K6 (bezpečnostní revize).
 
 `TokenVault` je pohled enginu na tokeny účtu: `load(account) -> Option<AccountTokens>` a `store(account, &AccountTokens)`, prosté tokeny (`refresh`, `access` jako `SecretString`, `access_until`). Implementuje ho `musubi-syncd` nad `write_tokens`/`read_tokens` se šifrováním AES-GCM vázaným na tenanta a účet; model ani engine šifrování neznají. Když `Provider::refresh` vrátí nový (rotovaný) refresh token, engine ho nejdřív trvale uloží přes `store` a nový access token použije až po `Ok` (návrh 7): starý refresh token už neplatí, ztráta nového by vynutila nové přihlášení.
 
@@ -290,7 +290,7 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
 - **Přijetí:**
   - kontraktní testy invariantů z kapitoly 3.3 procházejí;
   - `kill -9` podprocesu uprostřed smyčky `apply_page` (200 opakování v CI): po znovuotevření je kurzor kolekce shodný s poslední celou stránkou a žádná položka není zdvojená;
-  - syntetický import 50 000 událostí se souběžnými čtenáři: největší WAL nepřekročí 256 MB a `stats()` hlásí délky `TRUNCATE` a neúspěšné resety;
+  - syntetický import 50 000 událostí se souběžnými čtenáři: největší WAL nepřekročí 256 MB a `stats()` hlásí délky `TRUNCATE` a neúspěšné resety; v release buildu (CI ho tak pouští) proběhne aspoň jeden `TRUNCATE`, neúspěšných resetů není víc než úspěšných a nejdelší čekání čtení na bránu je do 50 ms bez ohledu na rychlost fsync (`SqliteTenant::gate_wait_max`, protože `StoreStats` je typ modelu);
   - záloha za běhu zápisu přes backup API, obnova do nového adresáře: `range` a `changes` vrací totéž co zdroj k okamžiku zálohy;
   - líná migrace při otevření: tenant se starší verzí schématu se otevře a migruje, novější verzi odmítne;
   - LRU zavře nejdéle nepoužitý soubor a znovuotevření je pod 1 ms (měří se, nehlídá).
@@ -472,7 +472,7 @@ GitHub Actions, workflow `.github/workflows/ci.yml`, akce připnuté na SHA, cac
 | bench-smoke | `cargo run -p musubi-testkit --bin bench --release --locked -- --smoke` | PR |
 | nightly | dlouhé crash testy, plné benchmarky, fuzz rekurence | v noci |
 
-Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1, K2 a K7. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
+Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1, K2 a K7. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
 
 `deny.toml`:
 

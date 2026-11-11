@@ -197,8 +197,9 @@ pub trait TenantStore: Send {
     /// re-indexed meanwhile) is skipped.
     fn extend_occurrences(&mut self, w: &OccurrenceWrite) -> Result<(), StoreError>;
 
-    /// Removes tombstones, journal entries and orphaned raw bodies older than
-    /// `older_than`. Never makes `Seq` values reusable.
+    /// Removes tombstones and journal entries older than `older_than`, and raw
+    /// bodies no item refers to any more, whatever their age. Never makes `Seq`
+    /// values reusable.
     fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError>;
 
     /// Runs a WAL checkpoint (the store's own checkpointer, phase 0 condition 4).
