@@ -24,7 +24,15 @@ musubi-testkit = { path = "crates/musubi-testkit", version = "0.0.0" }
 async-trait = "0.1.92"
 futures-core = { version = "0.3.34", default-features = false, features = ["alloc"] }
 http = { version = "1.5.0", default-features = false, features = ["std"] }
-jiff = { version = "0.2.43", features = ["serde"] }
+# Bundled tzdb only (jiff-tzdb), never the host's /usr/share/zoneinfo or local
+# zone: recurrence expansion must give the same result on every machine.
+jiff = { version = "0.2.43", default-features = false, features = [
+    "std",
+    "tz-fat",
+    "tzdb-bundle-always",
+    "perf-inline",
+    "serde",
+] }
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["raw_value"] }

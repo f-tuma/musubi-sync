@@ -6,7 +6,9 @@ all-features = true
 
 [advisories]
 # Any advisory (vulnerability, unmaintained, unsound, yanked) fails the check
-# unless listed here with a reason and a review date.
+# unless listed here with a reason and a review date. `yanked` is set
+# explicitly: the cargo-deny default is "warn".
+yanked = "deny"
 ignore = [
     # rsa 0.9 (Marvin timing side channel on RSA private-key operations), pulled
     # by jsonwebtoken 11 with the rust_crypto backend. We never hold an RSA

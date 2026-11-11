@@ -53,6 +53,14 @@ musubi-engine -> musubi-store-sqlite (normal): not allowed
 
 A new crate under `crates/` fails the same test until it is added to `ALLOWED`.
 
+The test checks direct edges only: each crate's own `[dependencies]`,
+`[build-dependencies]` and `[dev-dependencies]` entries. A path through another
+crate is not followed. For normal dependencies that is enough, because the
+`ALLOWED` table is closed (every crate a crate may use only uses crates it may use
+too); keep it closed when adding an edge. For dev-dependencies it is not: a dev
+dependency of `musubi-engine` on `musubi-syncd` would pull `musubi-google` into
+the engine's tests without failing the test, so review dev-dependency edges by hand.
+
 cargo-deny does not do this check: its `bans.deny` `wrappers` cannot tell
 dev-dependencies apart, and `graph.exclude-dev` would also hide the forbidden
 engine → google dev-dependency and drop dev-dependencies from the licence and

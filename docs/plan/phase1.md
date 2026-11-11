@@ -49,9 +49,10 @@ Směr závislostí:
 Pravidla:
 
 - `musubi-model` nezávisí na žádném crate projektu a nedělá I/O.
+- Všechny crates mají `publish = false`: fáze 1 nic na crates.io nevydává. Crate, který se vydávat bude, změní příznak ve vlastním PR.
 - Engine nezná SQLite ani Google. Pracuje proti traitům. V testech dostane `musubi-store-sqlite` nad dočasným adresářem a `FakeProvider` z `musubi-testkit`: skriptované stránky, chyby (`CursorExpired`, `ReauthRequired`, `RateLimited`) a oznámení, s počítadlem volání. Obojí jsou dev-závislosti. `musubi-google` engine nepoužívá ani v testech; cestu engine + adaptér + falešný server Google testuje `musubi-syncd` v K6 a K7. Proto K5 nezávisí na K4.
 - Adaptér nezná engine ani úložiště.
-- `musubi-store-sqlite` a `musubi-google` smí přímo použít jen `musubi-syncd` (a testy). Dev-závislosti pro testy jsou povolené. CI to hlídá testem `crates/musubi-testkit/tests/dependency_direction.rs`, který běží v `cargo test --workspace`: přečte `cargo metadata` a porovná interní závislosti každého crate s tabulkou povolených (tabulka výše); dev-závislosti povoluje kromě `musubi-engine` → `musubi-google`. Nový crate, který v tabulce chybí, test také zastaví. Pravidla a postup změny jsou v `CONTRIBUTING.md`.
+- `musubi-store-sqlite` a `musubi-google` smí přímo použít jen `musubi-syncd` (a testy). Dev-závislosti pro testy jsou povolené. CI to hlídá testem `crates/musubi-testkit/tests/dependency_direction.rs`, který běží v `cargo test --workspace`: přečte `cargo metadata` a porovná interní závislosti každého crate s tabulkou povolených (tabulka výše); dev-závislosti povoluje kromě `musubi-engine` → `musubi-google`. Nový crate, který v tabulce chybí, test také zastaví. Test kontroluje jen přímé hrany. Pro běžné závislosti to stačí, protože tabulka je uzavřená (co smí crate použít, používá jen to, co smí i on); u dev-závislostí by cesta přes jiný crate prošla, proto se kontrolují při revizi. Pravidla a postup změny jsou v `CONTRIBUTING.md`.
 - Proč ne `cargo-deny` (ověřeno v K0 s cargo-deny 0.20): `[[bans.deny]]` s `wrappers` nerozliší dev-závislosti, takže zakáže i povolené `musubi-engine` → `musubi-store-sqlite` v `[dev-dependencies]`. Volba `[graph] exclude-dev = true` je globální: pustí i zakázané `musubi-engine` → `musubi-google` v testech a vyřadí dev-závislosti i z kontroly licencí a advisories.
 
 Co záměrně nevzniká:
@@ -60,7 +61,7 @@ Co záměrně nevzniká:
 - Samostatný crate pro API, ověřování nebo šifrování: jsou to moduly `musubi-syncd`, dokud je nepotřebuje druhá binárka.
 - Backend PostgreSQL: později, za stejným traitem.
 
-Hlavní externí závislosti podle kapitoly 8 návrhu: `tokio`, `reqwest` (rustls), `axum`, `tower-http`, `serde`, `serde_json`, `jiff`, `rusqlite` (bundled), `oauth2` 5.0, `jsonwebtoken` 11 (backend `rust_crypto`), `aes-gcm`, `secrecy`, `zeroize`, `tracing`, `governor`, v testech `proptest` a `insta`. Nic dalšího bez důvodu v PR.
+Hlavní externí závislosti podle kapitoly 8 návrhu: `tokio`, `reqwest` (rustls), `axum`, `tower-http`, `serde`, `serde_json`, `jiff` (jen přibalená tzdb: `default-features = false`, `tzdb-bundle-always`, bez `tzdb-zoneinfo` a `tz-system`, aby rozbalení opakování dalo na každém stroji stejný výsledek), `rusqlite` (bundled), `oauth2` 5.0, `jsonwebtoken` 11 (backend `rust_crypto`), `aes-gcm`, `secrecy`, `zeroize`, `tracing`, `governor`, v testech `proptest` a `insta`. Nic dalšího bez důvodu v PR.
 
 ## 3. Úložiště
 
@@ -97,14 +98,14 @@ Podmínky z kapitoly 4.3 návrhu jsou požadavky. Fáze 1 plní všechny, které
 
 ### 3.3 Rozhraní úložiště
 
-Úzké rozhraní, proti kterému se píše engine. Logika slučování ani plánování v něm není: jediný zapisovatel tenanta si stav přečte, rozhodne a zapíše výsledek jednou operací. Ve fázi 1 má `TenantStore` 17 operací (5–21) a továrna `Storage` 4, ve fázi 3 přibude 6.
+Úzké rozhraní, proti kterému se píše engine. Logika slučování ani plánování v něm není: jediný zapisovatel tenanta si stav přečte, rozhodne a zapíše výsledek jednou operací. Ve fázi 1 má `TenantStore` 19 operací (5–23) a továrna `Storage` 4, ve fázi 3 přibude 6.
 
 Náčrt (signatury, ne implementace):
 
 ```rust
 /// Továrna a životní cyklus. Implementuje `musubi-store-sqlite`, později PostgreSQL.
 pub trait Storage: Send + Sync {
-    type Tenant: TenantStore;
+    type Tenant: TenantStore + 'static;
     fn open(&self, t: TenantId) -> Result<Self::Tenant, StoreError>;         // 1  líná migrace, LRU
     fn create_tenant(&self, t: TenantId) -> Result<(), StoreError>;          // 2
     fn delete_tenant(&self, t: TenantId) -> Result<(), StoreError>;          // 3  smaže všechny soubory
@@ -122,22 +123,25 @@ pub trait TenantStore: Send {
     fn range(&self, q: &RangeQuery) -> Result<RangePage, StoreError>;                // 10 stránka, varianta jen s id
     fn changes(&self, since: Seq, limit: u32) -> Result<ChangesPage, StoreError>;    // 11 `CursorTooOld` po prořezu
     fn unseen_count(&self, col: CollectionId, read: ReadId) -> Result<u64, StoreError>; // 12 pro pojistku mazání
+    fn unseen(&self, col: CollectionId, read: ReadId, after: Option<&RemoteKey>, limit: u32)
+        -> Result<Vec<RemoteKey>, StoreError>;                                       // 13 klíče pro pojistku, keyset
     fn series_to_extend(&self, until: Timestamp, limit: u32)
-        -> Result<Vec<SeriesRef>, StoreError>;                                       // 13 posun horizontu indexu
-    fn stats(&self) -> Result<StoreStats, StoreError>;                               // 14 WAL, TRUNCATE, velikosti
+        -> Result<Vec<SeriesRef>, StoreError>;                                       // 14 posun horizontu indexu
+    fn stats(&self) -> Result<StoreStats, StoreError>;                               // 15 WAL, TRUNCATE, velikosti
 
     // Zápis: volá jen zapisovatel tenanta, každá operace je jedna transakce.
-    fn apply_discovery(&mut self, d: &DiscoveryWrite) -> Result<(), StoreError>;     // 15
-    fn apply_page(&mut self, p: &PageWrite) -> Result<Seq, StoreError>;              // 16 položky, raw, entity,
+    fn apply_discovery(&mut self, d: &DiscoveryWrite) -> Result<(), StoreError>;     // 16
+    fn apply_page(&mut self, p: &PageWrite) -> Result<Seq, StoreError>;              // 17 položky, raw, entity,
                                                                                      //    umístění, výskyty,
                                                                                      //    žurnál, kurzor
     fn finish_full_read(&mut self, col: CollectionId, read: ReadId)
-        -> Result<Seq, StoreError>;                                                  // 17 náhrobky nepřítomných
+        -> Result<Seq, StoreError>;                                                  // 18 náhrobky nepřítomných
+    fn purge_collection(&mut self, col: CollectionId) -> Result<Seq, StoreError>;   // 19 zaniklá kolekce, odpojení
     fn set_collection_state(&mut self, col: CollectionId, s: &CollectionStatus)
-        -> Result<(), StoreError>;                                                   // 18 stav, chyba, pokrytí
-    fn extend_occurrences(&mut self, w: &OccurrenceWrite) -> Result<(), StoreError>; // 19
-    fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError>;     // 20 náhrobky, osiřelé raw
-    fn checkpoint(&mut self, mode: CheckpointMode) -> Result<CheckpointInfo, StoreError>; // 21
+        -> Result<(), StoreError>;                                                   // 20 stav, chyba, pokrytí
+    fn extend_occurrences(&mut self, w: &OccurrenceWrite) -> Result<(), StoreError>; // 21
+    fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError>;     // 22 náhrobky, osiřelé raw
+    fn checkpoint(&mut self, mode: CheckpointMode) -> Result<CheckpointInfo, StoreError>; // 23
 
     // Fáze 3 (soubor outboxu), zde jen pro tvar:
     // fn accept(&self, m: &MutationWrite) -> Result<Accepted, AcceptError>;        // outbox.db, FULL
@@ -153,24 +157,40 @@ pub trait TenantStore: Send {
 
 Závazné signatury, typy a jejich kontrakty jsou od K0 v `crates/musubi-model/src/store.rs` a `control.rs`; náčrt výše je jejich zkratka. Upřesnění z K0 proti původnímu náčrtu:
 
-- `ReadId` přiděluje engine, musí být větší než `CollectionState::last_read` (o jedna víc je vždy platné). `CollectionState::active_read` drží rozběhnuté úplné čtení, aby po pádu pokračovalo se stejným `ReadId`.
-- `PageWrite` nese kromě `upserts` a `removals` i seznam `unchanged`: klíče, které přišly se stejným validátorem nebo hashem surového obsahu. Nic se pro ně nezapíše, jen se označí jako viděné čtením `read` (jinak by je `finish_full_read` smazal).
+- `ReadId` přiděluje engine, musí být větší než `CollectionState::last_read` (o jedna víc je vždy platné). `CollectionState::active_read` drží rozběhnuté úplné čtení, aby po pádu pokračovalo se stejným `ReadId`. Stránka s `read: Some(r)` čtení `r` zahájí; je-li aktivní starší čtení, nahradí ho a jeho značky „viděno" zahodí (nové úplné čtení po `CursorExpired`). Starší `r` nebo `r` nepřevyšující `last_read` je `StoreError::StaleRead` a nic se nezapíše.
+- Dokud je čtení aktivní, každá stránka kolekce označí klíče svých `upserts`, `unchanged` i `removals` jako viděné, ať má `read` jakýkoli. Delta stránky zapsané mezi poslední stránkou čtení a `finish_full_read` (pád, dokončení pozdržené pojistkou mazání) se tak počítají a jejich položky se nesmažou.
+- `PageWrite::last` označí poslední stránku: na stránce aktivního čtení nastaví `CollectionState::read_complete`. `finish_full_read` projde jen pro aktivní čtení s `read_complete`, jinak vrátí `StaleRead`; po restartu tak engine z `read_complete` pozná, zda čtení ještě běží, nebo zbývá jen dokončit.
+- `PageWrite` nese kromě `upserts` a `removals` i seznam `unchanged`: klíče, které přišly se stejným validátorem nebo hashem surového obsahu. Nic se pro ně nezapíše, jen se označí jako viděné (jinak by je `finish_full_read` smazal).
+- Pojistka hromadného mazání: `unseen_count` řekne, kolik položek by `finish_full_read` smazal, `unseen` vrátí jejich klíče po stránkách (keyset podle klíče). Engine je ověří přes `Provider::fetch`; objekty, které stále existují, znovu označí jako viděné přes `apply_page` s `read: Some(r)`, `cursor: None` a klíči v `unchanged` (nebo v `upserts`, pokud se změnily). Zbytek smaže `finish_full_read`.
+- `finish_full_read` označí nepřítomnou položku za smazanou i s entitou. To platí jen ve fázi 1, kde má entita jedno umístění. Ve fázích 3 a 4 s více umístěními nepřítomnost položky jen odpojí dané umístění a entita zůstane (návrh 12.7); operace se tehdy změní.
+- `purge_collection` odstraní kolekci, kterou engine přestal synchronizovat (zmizela z úplného objevení a je to potvrzené, nebo se odpojuje její účet): náhrobky všech položek s entitami a výskyty, záznamy v žurnálu, smazání kolekce. Její `CollectionId` se znovu nepoužije. Tím má `CollectionState::gone` operaci, která ho ukončí.
+- `CollectionStatus` nese i `synced_at` (konec posledního úspěšného čtení jakéhokoli průchodu, návrh 3.1) a `full_read_at` (konec posledního dokončeného úplného čtení) pro stav v API.
 - Hash surového obsahu je SHA-256 (`Raw::hash`, typ `RawHash`).
-- Každá položka nese `schema_version` kanonického tvaru (`Kind::SCHEMA_VERSION`) a `mapping_version` kodeku.
-- Výjimky série u Googlu jsou ve fázi 1 samostatné položky a entity. Spojuje je `Correlation { uid, recurrence_id }`: výskyt hlavní série nahrazený výjimkou se z `range` vynechá.
+- Každá položka nese `schema_version` kanonického tvaru (`Kind::SCHEMA_VERSION`) a `mapping_version` kodeku; `ItemState` vrací obojí, takže zapisovatel pozná položku dekódovanou starším tvarem. Operace, která takové položky vyjmenuje pro nové dekódování ze surové vrstvy, ve fázi 1 není: `Event::SCHEMA_VERSION` je 1 a nic se nepřevádí. Přidá ji první změna kanonického tvaru (nejpozději fáze 2).
+- Výjimky série u Googlu jsou ve fázi 1 samostatné položky a entity. Spojuje je `Correlation { uid, recurrence_id }`: výskyt hlavní série nahrazený výjimkou se z `range` vynechá. `recurrence_id` je `Timestamp` (stejně v `OccurrenceRow`, `RangeCursor` a `OccurrenceView`): u výskytu v zóně skutečný okamžik; u plovoucího a celodenního výskytu místní datum a čas zapsaný, jako by byl v UTC. Obě strany korelace tak porovnávají stejná čísla bez zóny.
 - Pravidla opakování jsou v kanonickém tvaru textem RRULE; rozbalení dělá engine přes `musubi-recurrence` a výsledek zapíše jako `Occurrences` (řádky plus `SeriesSpan` s `indexed_until`).
 - `RangePage::unindexed` (jen na první stránce) vrací série, jejichž index končí dřív než okno dotazu; volající je pro tento dotaz rozbalí sám přes `musubi-recurrence`. Index posouvá `series_to_extend` a `extend_occurrences`.
 
 Obnova (`restore`) je offline příkaz `musubi-syncd restore`, ne operace traitu: nesmí běžet nad otevřeným tenantem.
 
-`ControlStore` je samostatný trait nad `control.db` (18 operací, synchronní, `&self`): tenanti (vložit, smazat), klíče API (vložit hash, najít podle hashe, zneplatnit), účty a jejich stav, šifrované tokeny (zapsat, přečíst), fronta úloh (zařadit se sloučením duplicit podle klíče `dedup`, kdy platí dřívější `due`; pronajmout splatné na dobu `lease_for`; dokončit nebo přeplánovat, obojí jen s platným `LeaseId`, jinak `LeaseLost`) a watch kanály (zapsat, najít podle id kanálu, smazat, vypsat ty, kterým brzy vyprší platnost).
+`ControlStore` je samostatný trait nad `control.db` (25 operací, synchronní, `&self`):
+
+- tenanti: vložit, smazat;
+- klíče API: vložit hash, najít podle hashe, zneplatnit;
+- účty: vložit nebo nahradit, najít podle id, najít podle (tenant, poskytovatel, `subject`), vypsat účty tenanta, změnit stav, smazat. Trojice (tenant, poskytovatel, `subject`) je unikátní: stejná trojice pod jiným id je `AlreadyExists`, takže nové připojení téhož účtu Google zachová jeho id. Odpojení (`AccountState::Removing`): engine odhlásí kanály účtu, každou jeho kolekci odstraní přes `purge_collection` a nakonec zavolá `delete_account`, které smaže účet s tokeny, úlohami a kanály; po restartu kroky pokračují;
+- šifrované tokeny: zapsat, přečíst (zapečetěný blob);
+- rozběhnuté přihlášení OAuth: `put_oauth_state` uloží záznam pod SHA-256 parametru `state` (tenant, poskytovatel, případně účet k novému připojení, ověřovač PKCE, platnost) a smaže prošlé; `take_oauth_state` ho v jedné transakci vrátí a smaže, takže `state` platí jednou. Stav tedy není podepsaný a bezstavový: jednorázovost z K6 vyžaduje záznam;
+- fronta úloh: zařadit se sloučením duplicit podle klíče `dedup`, kdy platí dřívější `due`; pronajmout splatné na dobu `lease_for`; prodloužit pronájem (`extend_lease`, dlouhé úplné čtení); dokončit; přeplánovat s volbou `count_attempt` (chyba s odkladem počítá pokus, omezení rychlosti ani plánované pokračování ne). Prodloužení, dokončení i přeplánování jen s platným `LeaseId`, jinak `LeaseLost`. Úloha s pokračováním (další část úplného čtení) zařadí pokračování před `complete`: pád mezi tím nechá starou úlohu znovu běžet (stránky jsou idempotentní), nikdy nezůstane žádná;
+- watch kanály: zapsat, najít podle id kanálu, vypsat kanály tenanta nebo jednoho jeho účtu (před `delete_account` a `delete_tenant`), smazat, vypsat ty, kterým brzy vyprší platnost. `ChannelRecord` je `{ tenant, account, collection: CollectionId, sub: Subscription }`, klíčem je `sub.channel` (samostatné `id` by ho jen opakovalo). Token kanálu je v `Subscription` jako `SecretString`, ne prostý `String`. Webhook tak oznámení ověří přes `PushSource::verify` bez otevření úložiště tenanta.
+
+`TokenVault` je pohled enginu na tokeny účtu: `load(account) -> Option<AccountTokens>` a `store(account, &AccountTokens)`, prosté tokeny (`refresh`, `access` jako `SecretString`, `access_until`). Implementuje ho `musubi-syncd` nad `write_tokens`/`read_tokens` se šifrováním AES-GCM vázaným na tenanta a účet; model ani engine šifrování neznají. Když `Provider::refresh` vrátí nový (rotovaný) refresh token, engine ho nejdřív trvale uloží přes `store` a nový access token použije až po `Ok` (návrh 7): starý refresh token už neplatí, ztráta nového by vynutila nové přihlášení.
 
 Invarianty, které hlídají kontraktní testy traitu (běží proti každé implementaci):
 
 - stránka je celá i s kurzorem, nebo není vůbec;
 - opakovaná stránka se stejnými validátory nezmění položky, entity ani žurnál a neposune `seq`; jen zaznamená, že ji úplné čtení vidělo;
 - `seq` roste a nikdy se znovu nepoužije, ani po prořezu a pádu;
-- `finish_full_read` označí jako smazané jen položky, které čtení s daným `ReadId` nevidělo;
+- dokud je úplné čtení `r` aktivní, každá stránka kolekce (i delta stránka po jeho poslední stránce) označí své klíče jako viděné čtením `r`; `finish_full_read(col, r)` projde jen po stránce `r` s `last` a označí jako smazané jen živé položky, které `r` nevidělo;
 - jedna položka na (kolekce, vzdálený klíč), jedna entita na položku (ve fázi 1);
 - `range` vrací výskyty seřazené, stránkované a bez duplicit přes hranici stránky.
 
@@ -457,7 +477,7 @@ Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou
 Ověřeno v K0 (cargo-deny 0.20) proti dnešnímu stromu a proti zkušebnímu crate se všemi plánovanými závislostmi z kapitoly 2 v aktuálních verzích (`reqwest` 0.13, `axum` 0.8, `rusqlite` 0.42, `oauth2` 5, `jsonwebtoken` 11.1 `rust_crypto`, `governor` 0.10 atd.):
 
 - **licence:** povolené MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib. Další jen výjimkou po jednotlivých crates s důvodem. Copyleft (GPL, LGPL, AGPL, EUPL, MPL) zakázaný. Plný strom potřebuje BSD-3-Clause (`curve25519-dalek`, `ed25519-dalek`, `subtle`, `matchit`), ISC (`rustls-webpki`, `untrusted`), Unicode-3.0 (ICU přes `url`) a Zlib (`foldhash`); BSD-2-Clause zatím nic nepotřebuje, zůstává jako běžná permisivní licence. Jediná licence mimo seznam je CDLA-Permissive-2.0 u `webpki-root-certs` (přes `reqwest` 0.13 s rustls): K4 přidá výjimku `[[licenses.exceptions]]` jen pro tento crate s důvodem (permisivní licence dat kořenových certifikátů);
-- **advisories:** zakázané, výjimka pro RUSTSEC-2023-0071 (`rsa` 0.9 přes `jsonwebtoken`). Soukromý klíč RSA nepoužíváme, krátkodobé tokeny podepisujeme Ed25519. Výjimka má datum revize (1. 2. 2027) a padá, až knihovny přejdou na `rsa` 0.10. Zkušební strom ukázal i RUSTSEC-2026-0387 (časová proměnlivost v `crypto-bigint` 0.5 přes `p256`/`p384` v `jsonwebtoken` `rust_crypto`, opraveno v 0.7.6). Rozhodne K6: buď druhá výjimka s důvodem (ECDSA by se použilo jen k ověření veřejným klíčem), nebo podepisovat Ed25519 přímo přes `ed25519-dalek` bez `jsonwebtoken`;
+- **advisories:** zakázané včetně stažených verzí (`yanked = "deny"` výslovně, výchozí hodnota cargo-deny je jen varování), výjimka pro RUSTSEC-2023-0071 (`rsa` 0.9 přes `jsonwebtoken`). Soukromý klíč RSA nepoužíváme, krátkodobé tokeny podepisujeme Ed25519. Výjimka má datum revize (1. 2. 2027) a padá, až knihovny přejdou na `rsa` 0.10. Zkušební strom ukázal i RUSTSEC-2026-0387 (časová proměnlivost v `crypto-bigint` 0.5 přes `p256`/`p384` v `jsonwebtoken` `rust_crypto`, opraveno v 0.7.6). Rozhodne K6: buď druhá výjimka s důvodem (ECDSA by se použilo jen k ověření veřejným klíčem), nebo podepisovat Ed25519 přímo přes `ed25519-dalek` bez `jsonwebtoken`;
 - **bans:** `multiple-versions` jako chyba; každá výjimka (`skip`) s důvodem a crate, který ji tahá, přidá ten kontrolní bod, který závislost přináší. K0 žádnou nepotřebuje. Předpoklad fáze 0 o `p256`/`p384` a `ed25519-dalek` neplatí: dvě verze těchto crates tahá `openidconnect`, který fáze 1 nepoužívá. Plný strom místo toho potřebuje výjimky pro `base64` 0.22/0.23, `getrandom` 0.2/0.3/0.4, `hashbrown` 0.14/0.16/0.17, `rand` 0.8/0.9 (s `rand_chacha`, `rand_core`), `syn` 2/3, `thiserror` 1/2 (s `thiserror-impl`, přes `oauth2`) a `r-efi` 5/6. Dalším duplicitám se vyhneme volbou verzí: `sha2` 0.10 a `aes-gcm` 0.10 (stejná generace RustCrypto jako `jsonwebtoken`), `tower-http` 0.6 (stejně jako `reqwest`). `oauth2` s `default-features = false` (jinak tahá `reqwest` 0.12) a vlastním HTTP klientem. `reqwest` 0.13 s funkcí `rustls` tahá `aws-lc-rs` (C a CMake), který návrh odmítl; K4 použije `rustls-no-provider` s `ring`. Interní závislosti ve workspace mají `version` vedle `path`, jinak je `wildcards = "deny"` hlásí. Směr závislostí `cargo-deny` nehlídá (kapitola 2);
 - **sources:** jen crates.io; git závislosti zakázané (převzaté jádro `rrule` je vendored kód, ne git závislost).
 
