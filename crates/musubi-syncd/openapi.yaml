@@ -299,8 +299,9 @@ paths:
       description: |
         Authenticated by the channel id and channel token headers
         (`X-Goog-Channel-ID`, `X-Goog-Channel-Token`, `X-Goog-Resource-ID`,
-        `X-Goog-Resource-State`). A change enqueues a sync of the channel's
-        collection and answers at once.
+        `X-Goog-Resource-State`). A change enqueues the engine's sync of the
+        channel's collection, delayed briefly so a burst of notifications
+        coalesces into one delta read, and answers at once.
       security: []
       responses:
         "200": { description: Accepted. }
@@ -325,6 +326,10 @@ paths:
   /v1/admin/tenants/{id}:
     delete:
       summary: Delete a tenant with its data, accounts, keys and jobs (instance admin)
+      description: |
+        Each account is removed first: its watch channels are stopped at
+        Google while its tokens still exist, then the tokens are deleted.
+        Open streams of the tenant end.
       parameters:
         - $ref: "#/components/parameters/Id"
       responses:

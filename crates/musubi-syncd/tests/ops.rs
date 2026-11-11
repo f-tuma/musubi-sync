@@ -77,6 +77,15 @@ async fn backup_of_a_running_node_restores_into_a_stopped_one() {
         .expect("free port")
         .to_string();
     let data = dir.path().join("data");
+    // A looser existing data directory is tightened at startup.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .mode(0o755)
+            .create(&data)
+            .expect("data dir");
+    }
     let config = dir.path().join("config.json");
     std::fs::write(&config, config_json(&addr, &data, &google).to_string()).expect("config");
     let cfg = config.to_str().expect("utf8");
@@ -114,7 +123,7 @@ async fn backup_of_a_running_node_restores_into_a_stopped_one() {
         vec![event("e1", "1", 1)],
     );
 
-    let backup = dir.path().join("backup");
+    let backup = dir.path().join("backups/backup");
     let out = run(&[
         "backup",
         "--config",
@@ -132,6 +141,7 @@ async fn backup_of_a_running_node_restores_into_a_stopped_one() {
         use std::os::unix::fs::PermissionsExt as _;
         let mode = |p: &Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
         assert_eq!(mode(&backup), 0o700, "a backup holds secrets");
+        assert_eq!(mode(backup.parent().expect("parent")), 0o700);
         assert_eq!(mode(&backup.join("control.db")), 0o600);
         assert_eq!(mode(&data), 0o700);
     }
