@@ -1,16 +1,68 @@
-//! `musubi-syncd`: the server binary (`serve`, `backup`, `restore`).
+//! `musubi-syncd`: the server binary.
 //!
-//! Skeleton from checkpoint K0; K6 implements it. This is the only crate that
-//! wires the SQLite store and the Google adapter into the engine.
+//! ```text
+//! musubi-syncd serve   --config <file>
+//! musubi-syncd backup  --config <file> --to <dir>     (node running)
+//! musubi-syncd restore --config <file> --from <dir>   (node stopped)
+//! ```
 
-// Linked so that the dependency graph matches docs/plan/phase1.md chapter 2.
-use musubi_engine as _;
-use musubi_google as _;
-use musubi_model as _;
-use musubi_recurrence as _;
-use musubi_store_sqlite as _;
+use std::path::PathBuf;
+use std::process::ExitCode;
 
-fn main() {
-    eprintln!("musubi-syncd: not implemented yet (phase 1, checkpoint K6)");
-    std::process::exit(2);
+use musubi_syncd::App;
+use musubi_syncd::config::Config;
+
+const USAGE: &str = "usage: musubi-syncd serve --config <file>
+       musubi-syncd backup --config <file> --to <dir>
+       musubi-syncd restore --config <file> --from <dir>";
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("musubi-syncd: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), String> {
+    let mut args = std::env::args().skip(1);
+    let cmd = args.next().ok_or(USAGE)?;
+    let (mut config, mut dir) = (None, None);
+    while let Some(flag) = args.next() {
+        let v = args.next().ok_or(USAGE)?;
+        match (cmd.as_str(), flag.as_str()) {
+            (_, "--config") => config = Some(PathBuf::from(v)),
+            ("backup", "--to") | ("restore", "--from") => dir = Some(PathBuf::from(v)),
+            _ => return Err(USAGE.into()),
+        }
+    }
+    let config = Config::load(&config.ok_or(USAGE)?)?;
+    let rt = || {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())
+    };
+    match (cmd.as_str(), dir) {
+        ("serve", None) => rt()?.block_on(serve(config)),
+        ("backup", Some(to)) => rt()?.block_on(musubi_syncd::backup(&config, &to)),
+        ("restore", Some(from)) => musubi_syncd::restore(&config, &from),
+        _ => Err(USAGE.into()),
+    }
+}
+
+async fn serve(c: Config) -> Result<(), String> {
+    let app = App::open(&c)?;
+    let listener = tokio::net::TcpListener::bind(c.listen)
+        .await
+        .map_err(|e| format!("{}: {e}", c.listen))?;
+    eprintln!("musubi-syncd: listening on {}", c.listen);
+    axum::serve(listener, app.router())
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await
+        .map_err(|e| e.to_string())
 }

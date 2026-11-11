@@ -156,9 +156,24 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 
 ## OAuth token endpoint
 
-- Only `grant_type=refresh_token`. `authorization_code` (K6 needs it, along
-  with `id_token`) answers `unsupported_grant_type`. Nothing else is
-  checked: `client_id`, `client_secret` and `scope` are not validated.
+- Grants: `refresh_token` and `authorization_code`; anything else answers
+  `unsupported_grant_type`. `client_secret` and `scope` are not validated;
+  `client_id` is checked only against the authorization code.
+- **The consent screen grants at once.** `GET /o/oauth2/v2/auth` answers
+  `302` to `redirect_uri?code=…&state=…` without a login or consent page. It
+  requires `response_type=code` and PKCE with `code_challenge_method=S256`
+  (Google also accepts `plain` and no PKCE) and ignores `scope`,
+  `access_type`, `prompt` and `login_hint`. Errors answer the token
+  endpoint's JSON `400`; Google shows an HTML error page instead.
+- **Authorization codes are spent by their first redemption**, failed ones
+  included, and never expire by time (Google: about 10 minutes,
+  *undocumented*). A wrong `redirect_uri` answers `redirect_uri_mismatch`, a
+  wrong `code_verifier` `invalid_grant`.
+- **The `id_token` is not signed** (the signature part is a placeholder).
+  Its claims are `iss`, `aud`, `sub` (`Config::subject`), `iat` and `exp`;
+  Google adds `azp`, `at_hash`, `email` and more depending on the scopes.
+  The response always carries the current `refresh_token`; Google returns
+  one only on first consent or with `prompt=consent`.
 - **Access tokens never expire by time.** `expires_in` is always `3599`;
   `FakeGoogle::expire_access_tokens` invalidates all of them at once.
 - `scope` in the response is always `calendar.readonly`.

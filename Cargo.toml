@@ -22,6 +22,7 @@ musubi-engine = { path = "crates/musubi-engine", version = "0.0.0" }
 musubi-testkit = { path = "crates/musubi-testkit", version = "0.0.0" }
 
 async-trait = "0.1.92"
+base64 = "0.23.1"
 axum = { version = "0.8.9", default-features = false }
 # Only for the vendored rrule core in musubi-recurrence (civil time marked UTC);
 # no "clock", so no host time zone is ever consulted.
@@ -50,6 +51,10 @@ reqwest = { version = "0.13.5", default-features = false, features = [
     "query",
     "json",
 ] }
+# Ed25519 tokens, AES-256-GCM token sealing, SHA-256 and randomness of
+# musubi-syncd: already in the tree as the rustls provider, so no extra crypto
+# crates (plan, chapter 7).
+ring = "0.17.14"
 # Bundled SQLite, built with LIBSQLITE3_FLAGS from .cargo/config.toml. The default
 # feature only adds a wasm backend.
 rusqlite = { version = "0.42.0", default-features = false, features = ["bundled", "backup", "cache"] }
@@ -61,8 +66,10 @@ sha2 = "0.10.9"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+zeroize = "1.9.1"
 
 # Test-only.
+tempfile = "3.27.0"
 insta = { version = "1.49.0", features = ["json"] }
 # Without `fork`/`timeout` (rusty-fork, tempfile): not needed, fewer duplicates.
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
