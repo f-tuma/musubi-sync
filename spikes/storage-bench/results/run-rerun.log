@@ -1,0 +1,147 @@
+d526f5b5071ef365309b49921264b6e1dac14ecb0e50aaf884c61f34e7f17efd
+   Compiling storage-bench v0.0.0 (/home/flamendrin/orca/workspaces/musubi-sync/phase0-storage/spikes/storage-bench)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.71s
+     Running unittests src/main.rs (target/release/deps/storage_bench-c6744e9c2bc74131)
+
+running 1 test
+test datagen::tests::deterministic_and_sized ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.02s
+# Environment
+st 11. listopadu 2026, 15:09:42 UTC
+CPU(s):                                  20
+Model name:                              Intel(R) Core(TM) Ultra 7 265K
+CPU(s) scaling MHz:                      70%
+CPU max MHz:                             6500,0000
+               total        used        free      shared  buff/cache   available
+Mem:              62          17          32           1          14          44
+7.3.3-1-cachyos
+/dev/nvme0n1p2[/@home] btrfs  rw,noatime,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/@home
+postgres (PostgreSQL) 17.11 (Debian 17.11-1.pgdg13+2)
+cargo 1.99.0 (5f94df478 2026-08-27)
+other running containers: 14
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | ingest solo large tenant page=250 | 411 | 7.880 | 220.902 | 362.452 | 15712 items/s; ckpt=bg: max WAL 108.7 MB, 34 passive, 25 truncate (max 355 ms; 3 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | ingest solo large tenant page=2500 | 49 | 79.951 | 436.401 | 436.401 | 20756 items/s; ckpt=bg: max WAL 184.1 MB, 21 passive, 14 truncate (max 342 ms; 3 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) (n < 100: p99 is the max, not a stable percentile) |
+| sqlite | ingest concurrent page=250 | 3008 | 12.170 | 27.464 | 46.008 | 100 tenants x 16 writers: 188986 items/s aggregate; ckpt=bg: max WAL 60.5 MB, 506 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | ingest concurrent page=2500 | 2000 | 13.446 | 46.224 | 50.962 | 100 tenants x 16 writers: 213272 items/s aggregate; ckpt=bg: max WAL 51.1 MB, 404 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | ingest solo regular tenants page=250 | 240 | 3.032 | 8.909 | 9.487 | 47753 items/s; ckpt=bg: max WAL 60.4 MB, 64 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | ingest solo regular tenants page=2500 | 160 | 3.272 | 15.845 | 16.102 | 52216 items/s; ckpt=bg: max WAL 50.9 MB, 60 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+<!-- sqlite ANALYZE all tenants: 1.9 s -->
+| sqlite | incremental sync page=25 (txn only) | 3000 | 1.051 | 4.004 | 12.069 | writer connection already open; ckpt=bg: max WAL 7.3 MB, 1119 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | disk size | - | - | - | - | all tenant files 5.58 GB; large tenant (100k) 433 MB; regular tenant (5k) 22.1 MB |
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | range regular week 5 coll | 2000 | 0.134 | 0.395 | 0.564 | avg 35 rows |
+| sqlite | range regular week 20 coll | 2000 | 0.362 | 0.500 | 0.624 | avg 140 rows |
+| sqlite | range regular month 5 coll | 2000 | 0.210 | 0.538 | 0.646 | avg 150 rows |
+| sqlite | range regular month 20 coll | 2000 | 0.825 | 1.001 | 1.155 | avg 591 rows |
+| sqlite | range regular month 20 coll ids-only | 2000 | 0.337 | 0.398 | 0.451 | avg 590 rows |
+| sqlite | range large week 5 coll | 2000 | 1.243 | 3.439 | 3.986 | avg 705 rows |
+| sqlite | range large week 20 coll | 2000 | 6.444 | 8.630 | 9.427 | avg 2783 rows |
+| sqlite | range large month 5 coll | 2000 | 4.243 | 13.375 | 17.420 | avg 2920 rows |
+| sqlite | range large month 20 coll | 2000 | 24.010 | 28.142 | 30.216 | avg 11761 rows |
+| sqlite | range large month 20 coll ids-only | 2000 | 5.832 | 6.796 | 7.905 | avg 11759 rows |
+| sqlite | changes regular since head-100 limit 500 | 2000 | 0.066 | 0.111 | 0.151 | avg 60 rows |
+| sqlite | changes regular since random limit 500 | 2000 | 0.395 | 0.433 | 0.484 | avg 456 rows |
+| sqlite | changes large since head-100 limit 500 | 2000 | 0.045 | 0.047 | 0.163 | avg 100 rows |
+| sqlite | changes large since random limit 500 | 2000 | 0.429 | 0.497 | 0.531 | avg 498 rows |
+| sqlite | range regular month 20 coll, 8 reader threads | 16000 | 0.872 | 1.988 | 45.368 | 6369 queries/s |
+| sqlite | mixed read (month range + changes) baseline, no writers | 205340 | 0.785 | 0.986 | 8.058 | 8 readers, same 8 tenants; ckpt=bg: max WAL 0.0 MB, 0 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | mixed read (month range + changes) with 8 writers | 82844 | 1.908 | 3.664 | 11.794 | 8 readers, same 8 tenants; ckpt=bg: max WAL 134.6 MB, 1181 passive, 321 truncate (max 797 ms; 42 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | mixed write page=250 updates | 45257 | 2.783 | 15.893 | 800.704 | 377361 items/s while reading |
+| sqlite | outbox accept, synchronous=FULL, 1 writer | 2000 | 1.022 | 1.742 | 10.424 | mutation+entity rev+journal+outbox in one fsync'd txn |
+| sqlite | outbox accept, synchronous=FULL, 16 tenants concurrently | 4800 | 2.109 | 2.885 | 3.814 | ckpt=bg: max WAL 79.7 MB, 81 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+<!-- created 10000 small tenant files in 16.0 s, 2705 MB -->
+| sqlite | open + pragmas + first query, cold (page cache dropped) | 10000 | 0.554 | 0.943 | 3.408 | 10000 tenants in 6.5 s |
+| sqlite | close, cold (page cache dropped) | 10000 | 0.050 | 0.097 | 0.172 |  |
+| sqlite | open + pragmas + first query, warm page cache | 10000 | 0.136 | 0.197 | 0.413 | 10000 tenants in 1.8 s |
+| sqlite | close, warm page cache | 10000 | 0.036 | 0.055 | 0.205 |  |
+| sqlite | request via LRU of open DBs (open on miss + query) | 100000 | 0.010 | 0.282 | 0.844 | LRU 1000 of 10000, Zipf s=1.1, hit rate 77.8 %, RSS +164 MB with 1000 open |
+| sqlite | schema migration at open (ADD COLUMN) | 10000 | 1.998 | 8.320 | 40.029 | 10000 tenant files |
+| tenant | raw layer | items | raw body MB | stored body MB | raw table MB (pages, before VACUUM) | file MB (after VACUUM) | file bytes / item |
+|---|---|---|---|---|---|---|---|
+| t00100.db | plain | 5000 | 5.2 | 5.1 | 14.0 | 21.2 | 4245 |
+| t00100.db | zstd | 5000 | 5.2 | 3.1 | 5.5 | 11.7 | 2343 |
+| t00100.db | zstd-dict | 5000 | 5.2 | 1.0 | 5.5 | 9.3 | 1869 |
+| t100001.db | plain | 100000 | 94.4 | 93.4 | 263.8 | 412.5 | 4125 |
+| t100001.db | zstd | 100000 | 94.4 | 56.3 | 99.6 | 230.5 | 2305 |
+| t100001.db | zstd-dict | 100000 | 94.4 | 17.7 | 99.2 | 187.1 | 1871 |
+<!-- SQLITE_MEMSTATUS=0 -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | range regular week 5 coll | 2000 | 0.131 | 0.377 | 0.520 | avg 35 rows |
+| sqlite | range regular week 20 coll | 2000 | 0.362 | 0.495 | 0.566 | avg 140 rows |
+| sqlite | range regular month 5 coll | 2000 | 0.212 | 0.545 | 0.674 | avg 150 rows |
+| sqlite | range regular month 20 coll | 2000 | 0.834 | 1.042 | 1.339 | avg 591 rows |
+| sqlite | range regular month 20 coll ids-only | 2000 | 0.333 | 0.394 | 0.462 | avg 590 rows |
+| sqlite | range large week 5 coll | 2000 | 1.122 | 2.855 | 3.891 | avg 705 rows |
+| sqlite | range large week 20 coll | 2000 | 5.901 | 8.394 | 9.229 | avg 2783 rows |
+| sqlite | range large month 5 coll | 2000 | 4.058 | 13.176 | 15.943 | avg 2920 rows |
+| sqlite | range large month 20 coll | 2000 | 22.464 | 25.724 | 27.237 | avg 11761 rows |
+| sqlite | range large month 20 coll ids-only | 2000 | 5.825 | 8.061 | 8.659 | avg 11759 rows |
+| sqlite | changes regular since head-100 limit 500 | 2000 | 0.075 | 0.164 | 0.204 | avg 63 rows |
+| sqlite | changes regular since random limit 500 | 2000 | 0.405 | 0.486 | 0.808 | avg 459 rows |
+| sqlite | changes large since head-100 limit 500 | 2000 | 0.044 | 0.047 | 0.188 | avg 100 rows |
+| sqlite | changes large since random limit 500 | 2000 | 0.449 | 0.568 | 0.667 | avg 498 rows |
+| sqlite | range regular month 20 coll, 8 reader threads | 16000 | 0.874 | 2.122 | 14.963 | 6345 queries/s |
+<!-- SQLITE_MEMSTATUS=1 -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | range regular week 5 coll | 2000 | 0.126 | 0.369 | 0.472 | avg 35 rows |
+| sqlite | range regular week 20 coll | 2000 | 0.349 | 0.465 | 0.589 | avg 140 rows |
+| sqlite | range regular month 5 coll | 2000 | 0.224 | 0.594 | 0.713 | avg 150 rows |
+| sqlite | range regular month 20 coll | 2000 | 0.844 | 1.024 | 1.180 | avg 591 rows |
+| sqlite | range regular month 20 coll ids-only | 2000 | 0.350 | 0.413 | 0.636 | avg 590 rows |
+| sqlite | range large week 5 coll | 2000 | 1.262 | 3.506 | 4.367 | avg 705 rows |
+| sqlite | range large week 20 coll | 2000 | 5.338 | 7.305 | 7.899 | avg 2783 rows |
+| sqlite | range large month 5 coll | 2000 | 3.896 | 12.050 | 14.436 | avg 2920 rows |
+| sqlite | range large month 20 coll | 2000 | 24.355 | 28.729 | 34.314 | avg 11761 rows |
+| sqlite | range large month 20 coll ids-only | 2000 | 5.919 | 7.164 | 8.161 | avg 11759 rows |
+| sqlite | changes regular since head-100 limit 500 | 2000 | 0.065 | 0.159 | 0.211 | avg 63 rows |
+| sqlite | changes regular since random limit 500 | 2000 | 0.400 | 0.446 | 0.614 | avg 459 rows |
+| sqlite | changes large since head-100 limit 500 | 2000 | 0.046 | 0.048 | 0.166 | avg 100 rows |
+| sqlite | changes large since random limit 500 | 2000 | 0.428 | 0.492 | 0.527 | avg 498 rows |
+| sqlite | range regular month 20 coll, 8 reader threads | 16000 | 4.421 | 6.420 | 9.653 | 1633 queries/s |
+<!-- SQLITE_CKPT=bg -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | ingest solo large tenant page=250 | 411 | 8.031 | 188.501 | 224.518 | 16383 items/s; ckpt=bg: max WAL 109.0 MB, 35 passive, 24 truncate (max 216 ms; 4 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | ingest solo large tenant page=2500 | 49 | 83.773 | 347.190 | 347.190 | 19245 items/s; ckpt=bg: max WAL 131.1 MB, 22 passive, 15 truncate (max 327 ms; 2 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) (n < 100: p99 is the max, not a stable percentile) |
+<!-- SQLITE_CKPT=inline -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | ingest solo large tenant page=250 | 411 | 20.892 | 36.463 | 38.592 | 11770 items/s; ckpt=inline (wal_autocheckpoint=1000): max WAL 8.1 MB |
+| sqlite | ingest solo large tenant page=2500 | 49 | 106.423 | 188.346 | 188.346 | 18375 items/s; ckpt=inline (wal_autocheckpoint=1000): max WAL 38.3 MB (n < 100: p99 is the max, not a stable percentile) |
+<!-- SQLITE_CKPT=passive -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | ingest solo large tenant page=250 | 411 | 8.442 | 17.031 | 20.267 | 27903 items/s; ckpt=passive-50ms: max WAL 1861.2 MB, 48 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | ingest solo large tenant page=2500 | 49 | 65.751 | 118.192 | 118.192 | 29359 items/s; ckpt=passive-50ms: max WAL 1249.0 MB, 32 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) (n < 100: p99 is the max, not a stable percentile) |
+<!-- SQLITE_WAL_HARD_MB=256 -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | ingest solo large tenant page=250 | 411 | 8.292 | 77.351 | 125.105 | 24695 items/s; ckpt=bg: max WAL 273.0 MB, 46 passive, 6 truncate (max 27 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | ingest solo large tenant page=2500 | 49 | 70.324 | 162.376 | 162.376 | 28009 items/s; ckpt=bg: max WAL 312.6 MB, 33 passive, 3 truncate (max 23 ms; 2 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) (n < 100: p99 is the max, not a stable percentile) |
+<!-- SQLITE_CKPT=bg -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | mixed read (month range + changes) baseline, no writers | 189216 | 0.855 | 1.069 | 5.313 | 8 readers, same 8 tenants; ckpt=bg: max WAL 0.0 MB, 0 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | mixed read (month range + changes) with 8 writers | 76111 | 2.046 | 4.051 | 12.172 | 8 readers, same 8 tenants; ckpt=bg: max WAL 169.0 MB, 1296 passive, 326 truncate (max 569 ms; 38 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | mixed write page=250 updates | 49246 | 2.750 | 12.998 | 573.563 | 410572 items/s while reading |
+<!-- SQLITE_CKPT=passive -->
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | mixed read (month range + changes) baseline, no writers | 193963 | 0.830 | 1.084 | 6.190 | 8 readers, same 8 tenants; ckpt=passive-50ms: max WAL 0.0 MB, 3200 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | mixed read (month range + changes) with 8 writers | 74613 | 2.083 | 3.830 | 12.951 | 8 readers, same 8 tenants; ckpt=passive-50ms: max WAL 3141.3 MB, 1644 passive, 0 truncate (max 0 ms; 0 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | mixed write page=250 updates | 54394 | 2.759 | 8.323 | 37.667 | 453438 items/s while reading |
+| backend | test | n | p50 ms | p99 ms | max ms | notes |
+|---|---|---|---|---|---|---|
+| sqlite | acceptmix accept during ingest, no reader | 1056 | 12.476 | 104.890 | 134.749 | enqueue->commit, synchronous=FULL, same writer as ingest; ckpt=bg: max WAL 108.8 MB, 169 passive, 83 truncate (max 113 ms; 9 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | acceptmix ingest page=250, no reader | 1189 | 8.918 | 98.598 | 122.690 | 13667 items/s incl. accepts |
+| sqlite | acceptmix accept during ingest, long reader (1.5 s snapshot) | 892 | 9.353 | 242.341 | 337.334 | enqueue->commit, synchronous=FULL, same writer as ingest; ckpt=bg: max WAL 2979.2 MB, 26 passive, 139 truncate (max 57 ms; 138 busy: readers past 10 ms or another checkpoint running; then back-off 1 s or +32 MB WAL) |
+| sqlite | acceptmix ingest page=250, long reader (1.5 s snapshot) | 1189 | 9.941 | 23.975 | 275.696 | 15485 items/s incl. accepts |
+EXIT 0

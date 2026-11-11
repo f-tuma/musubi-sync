@@ -1,0 +1,4 @@
+[env]
+# The bundled SQLite defaults to MEMSTATUS=1, which takes a process-wide mutex on every malloc
+# and serializes concurrent readers on different connections. Production builds would set this too.
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"

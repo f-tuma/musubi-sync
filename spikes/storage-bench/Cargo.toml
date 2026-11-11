@@ -1,0 +1,18 @@
+[package]
+name = "storage-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+rusqlite = { version = "0.41", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-postgres = "0.7"
+futures-util = "0.3"
+libc = "0.2"
+
+[profile.release]
+debug = 1
+# Any panic, including in the background checkpointer thread, must fail the whole run.
+panic = "abort"
