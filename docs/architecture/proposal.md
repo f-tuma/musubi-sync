@@ -2,7 +2,7 @@
 
 **Datum:** 11. 11. 2026 · **Stav:** návrh k rozhodnutí, revize 5 · **Rozsah:** výzkum a architektura, žádná změna kódu
 
-Revize 5 zapracovává rozhodnutí o ověřování a pozvánkách, která uživatel svěřil koordinátorovi. Jádro **nemá přihlašování koncových uživatelů** (kapitoly 1 a 7) a **koncové šifrování není cílem**. Pozvánky jsou nastavené tak, aby uživatel viděl **jednu pozvánku, úplný seznam účastníků a žádný spam** (kapitoly 12.7, 14.6, 14.7 a 14.9). Revize 4 přidala pravidla synchronizace v jádru ([kapitola 13](#13-pravidla-synchronizace)), plánování mezi tenanty ([kapitola 14](#14-plánování-mezi-tenanty)), posouzení federace ([kapitola 15](#15-federace)) a volitelné „smazat všude" (kapitola 12.7). Model jednoho záznamu na více místech je v [kapitole 12](#12-jeden-záznam-na-více-místech-entita-a-umístění). Stav rozhodnutí je v kapitole 11.4.
+Revize 6 zapisuje přijetí verdiktu o federaci a přechod Musubi najednou (kapitola 11.4). Revize 5 zapracovává rozhodnutí o ověřování a pozvánkách, která uživatel svěřil koordinátorovi. Jádro **nemá přihlašování koncových uživatelů** (kapitoly 1 a 7) a **koncové šifrování není cílem**. Pozvánky jsou nastavené tak, aby uživatel viděl **jednu pozvánku, úplný seznam účastníků a žádný spam** (kapitoly 12.7, 14.6, 14.7 a 14.9). Revize 4 přidala pravidla synchronizace v jádru ([kapitola 13](#13-pravidla-synchronizace)), plánování mezi tenanty ([kapitola 14](#14-plánování-mezi-tenanty)), posouzení federace ([kapitola 15](#15-federace)) a volitelné „smazat všude" (kapitola 12.7). Model jednoho záznamu na více místech je v [kapitole 12](#12-jeden-záznam-na-více-místech-entita-a-umístění). Stav rozhodnutí je v kapitole 11.4.
 
 Projekt se jmenuje **musubi-sync** (repozitář `f-tuma/musubi-sync`, démon `musubi-syncd`). Je to samostatná služba a knihovna, která stahuje data z mnoha účtů u různých poskytovatelů do jednoho místa, drží je aktuální, umí do nich zapisovat zpět, udržuje jeden záznam shodný na všech jeho umístěních, zrcadlí záznamy mezi kalendáři podle pravidel uživatele, doručuje pozvánky mezi lidmi na stejném serveru a aplikacím nabízí rychlé čtení a proud změn. Musubi je první aplikace nad ním, ne jeho součást.
 
@@ -956,12 +956,15 @@ Beta `events/delta` se sleduje, ale návrh na ní nestojí.
 - **Sdílení kalendáře se zápisem** je pozdější fáze (12). Sdílení ke čtení zůstává ve fázi 9.
 - **Vlastní e-mailové pozvánky (iMIP)** pro vnější účastníky u záznamu bez poskytovatele s plánováním nejsou v první verzi; patří k doméně e-mailu. Do té doby platí chyba `no_scheduling_channel`.
 
+**Rozhodnuto uživatelem (11. 11. 2026, druhé kolo):**
+
+- **Federace:** verdikt z kapitoly 15.6 je přijat. Zúžený rozsah (jen plánovací zprávy, ve výchozím stavu vypnutá, povolení protějšci, podpisy RFC 9421, souhlas příjemce), fáze 10 po vydání 1.0, externí bezpečnostní revize jako podmínka.
+- **Přechod Musubi** proběhne najednou ve fázi přechodu: nová verze Musubi nad musubi-sync, ne postupné nahrazování po poskytovatelích. Otázky vlastních kalendářů Musubi (kapitola 14.5) a členství v kalendářích se rozhodnou v té fázi.
+
 **Zbývá rozhodnout:**
 
-1. **Úložiště.** Závisí na otázce, které nasazení je první: self-host nebo jeden uzel → SQLite na tenanta; hostované Musubi se závazkem dostupnosti → PostgreSQL. Čísla dodá test ve fázi 0.
-2. **Federace: přijmout verdikt z kapitoly 15.6?** Zúžený rozsah, fáze 10, externí revize jako podmínka a stavba až na poptávku dvou provozovatelů. Druhá možnost je federaci z plánu vypustit úplně.
-3. **Hostovaná instance nebo relé webhooků** provozované projektem: ano, nebo jen software.
-4. **Přechod Musubi:** postupné nahrazování po poskytovatelích, nebo nová verze nad musubi-sync najednou. Patří k tomu dvě otázky: zda se vlastní kalendáře Musubi stanou interními kolekcemi jádra (kapitola 14.5) a zda členství v kalendářích Musubi nahradí pozvánky a sdílení z kapitoly 14, nebo zůstane v aplikaci.
+1. **Úložiště.** SQLite na tenanta, nebo PostgreSQL. Uživatel počká na čísla z testu ve fázi 0 (`docs/research/phase0/storage.md`).
+2. **Hostovaná instance nebo relé webhooků** provozované projektem: rozhodne se později; koordinátor uživateli tehdy předloží možnosti.
 
 **Platí doporučení, dokud nikdo nenamítne:**
 
