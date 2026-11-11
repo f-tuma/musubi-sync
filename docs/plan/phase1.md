@@ -91,7 +91,7 @@ Podmínky z kapitoly 4.3 návrhu jsou požadavky. Fáze 1 plní všechny, které
 | id se nikdy znovu nepoužijí | `changes.seq` je `AUTOINCREMENT` | id mutací `AUTOINCREMENT` |
 | stránka příjmu jedna transakce `synchronous=NORMAL` | ano | — |
 | metriky: největší WAL, délka `TRUNCATE`, počet neúspěšných resetů na tenanta | ano | i pro `outbox.db` |
-| outbox v samostatném souboru jako zdroj pravdy, promítnutí s vodoznakem, žádná atomicita přes soubory, kontrola výchozí revize včetně nepromítnutých mutací; doručení z promítnutí commitnutá v `outbox.db` dřív než vodoznak v `main.db` (návrh, kapitola 3.5) | jen rozhraní a rozvržení souborů | ano |
+| outbox v samostatném souboru jako zdroj pravdy, promítnutí s vodoznakem, žádná atomicita přes soubory, kontrola výchozí revize včetně nepromítnutých mutací; doručení z promítnutí commitnutá v `outbox.db` dřív než vodoznak v `main.db`; replay jako první po otevření tenanta a doručení, která už v outboxu jsou, mají přednost před novým výpočtem (návrh, kapitola 3.5) | jen rozhraní a rozvržení souborů | ano |
 | záloha: nejdřív `main.db`, potom `outbox.db` | pořadí v kódu zálohy | ano |
 
 ### 3.3 Rozhraní úložiště
@@ -141,8 +141,8 @@ pub trait TenantStore: Send {
     // Fáze 3 (soubor outboxu), zde jen pro tvar:
     // fn accept(&self, m: &MutationWrite) -> Result<Accepted, AcceptError>;        // outbox.db, FULL
     // fn unprojected(&self, after: MutationId, limit: u32) -> …;
-    // fn insert_deliveries(&self, d: &[DeliveryWrite]) -> …;                       // outbox.db, idempotentně podle
-    //                                                                               //   (mutace, umístění), před `project`
+    // fn insert_deliveries(&self, d: &[DeliveryWrite]) -> …;                       // outbox.db, před `project`;
+    //     insert-or-ignore podle (mutace, umístění): nikdy nezmění stav existujícího doručení
     // fn project(&mut self, batch: &ProjectionWrite) -> …;                         // main.db + vodoznak
     // fn due_deliveries(&self, limit: u32) -> …;
     // fn record_outcome(&self, d: DeliveryId, o: &DeliveryOutcome) -> …;
@@ -329,7 +329,7 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
 - **Cíl:** projít kritéria hotovosti z kapitoly 1 na celé binárce proti falešnému serveru.
 - **Crates:** `musubi-testkit` (harness a generátor zátěže), testy v `musubi-syncd`.
 - **Přijetí:** testy a benchmarky z kapitoly 6 procházejí s rozpočty níže.
-- **Závisí na:** K4, K5, K6.
+- **Závisí na:** K3, K4, K5, K6.
 - **Souběžně:** crash testy a benchmarky jsou nezávislé; měření na ext4/disku s PLP běží souběžně, pokud je stroj k dispozici.
 
 ### K8. Živá kontrola proti Google (spouští uživatel)
