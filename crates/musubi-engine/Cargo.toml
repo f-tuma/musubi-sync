@@ -11,6 +11,20 @@ publish = false
 [dependencies]
 musubi-model.workspace = true
 musubi-recurrence.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+http.workspace = true
+jiff.workspace = true
+secrecy.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+musubi-store-sqlite.workspace = true
+musubi-testkit.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true

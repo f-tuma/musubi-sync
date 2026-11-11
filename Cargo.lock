@@ -833,8 +833,19 @@ dependencies = [
 name = "musubi-engine"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
+ "futures-util",
+ "http",
+ "jiff",
  "musubi-model",
  "musubi-recurrence",
+ "musubi-store-sqlite",
+ "musubi-testkit",
+ "secrecy",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

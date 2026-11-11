@@ -16,9 +16,11 @@
 //! `recurrenceOverrides` it has itself (RDATE as an empty patch, EXDATE as
 //! `{"excluded": true}`). A provider exception that is a separate remote object
 //! (Google: an event with `recurringEventId`) is its own item and entity in phase 1:
-//! its `uid` equals the master's and its `recurrence_id` names the replaced
-//! occurrence; a cancelled exception has `status: cancelled`. The engine joins them
-//! by (`uid`, `recurrence_id`) when it builds the occurrence index.
+//! its `recurrence_id` names the replaced occurrence and a cancelled exception has
+//! `status: cancelled`. The engine joins an exception to its master by the
+//! master's remote key ([`crate::remote::RemoteObject::master`]) and
+//! `recurrence_id`, never by `uid`: imported series keep a foreign iCalendar UID
+//! on the master that their exceptions need not share (plan ch. 9, question 3).
 //!
 //! Every change of these types that changes the JSON is a new
 //! [`crate::kind::Kind::SCHEMA_VERSION`].
@@ -34,7 +36,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarEvent {
-    /// iCalendar UID; with `recurrence_id` the correlation key (proposal 2.4).
+    /// iCalendar UID. Not the series join key: an exception joins its master by
+    /// [`crate::remote::RemoteObject::master`] (plan ch. 9, question 3).
     pub uid: String,
     /// Set on a single instance of a series: the original start of the replaced
     /// occurrence, in `recurrence_id_time_zone` (or floating).

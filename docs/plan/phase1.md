@@ -350,7 +350,7 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
   - `ReauthRequired` přepne účet do stavu „vyžaduje přihlášení" a dotazování se zastaví;
   - chybějící kalendář v discovery není smazání, pokud discovery není úplné;
   - zrušený výskyt importované série (cizí iCalUID) se k předloze připojí podle `recurringEventId` a nezobrazí se jako živý (otevřená otázka 3);
-  - `RecurrenceError::TooExpensive` z rozbalení výskytů (série se v tomto okně nedá rozbalit) engine zviditelní u položky a nikdy ji nebere jako prázdnou sérii: nesmaže kvůli ní výskyty z indexu (test se sérií `FREQ=MINUTELY` se starým DTSTART).
+  - `RecurrenceError::TooExpensive` z rozbalení výskytů (série se v tomto okně nedá rozbalit) engine zviditelní u položky a nikdy ji nebere jako prázdnou sérii: nesmaže kvůli ní výskyty z indexu (test se sérií `FREQ=MINUTELY` se starým DTSTART). Rozhodnuto (review PR #13): když se série při novém příjmu nedá rozbalit do celého horizontu, engine zkusí kratší horizonty (dosavadní `indexed_until` položky, pak konec okna) a uloží nejdelší, který projde; bez řádků zůstane, jen když neprojde žádný (test s úpravou série). „U položky" znamená `RangePage::unindexed` spolu se stavem indexu entity (`indexed_until`), které ukáže API z K6; žádný nový sloupec s chybou.
 - **Závisí na:** K1, K2. Na K4 ne: engine i jeho testy pracují jen s traity.
 - **Souběžně:** K6 a dobíhající K3, K4.
 
@@ -511,5 +511,5 @@ Rozhodnuto (koordinátor, 11. 11. 2026): soubor outboxu se implementuje ve fázi
 
 1. **Stroj pro měření ext4/XFS a disku s PLP.** Bez něj zůstane toto měření otevřené i po fázi 1.
 2. **Testovací účet Google, projekt GCP a veřejná adresa pro webhook** pro K8.
-3. **Uid zrušeného výskytu importované série.** Google vrací zrušený výskyt jen jako skořápku s `recurringEventId` bez `iCalUID`. Adaptér K4 odvodí uid z id předlohy, což u série s cizím iCalUID (import) nesedí s uid předlohy. `musubi-model` se v K4 nemění; K5 rozhodne, zda vazbu na sérii ponese `Correlation`, nebo `RemoteObject`.
+3. **Uid zrušeného výskytu importované série.** Rozhodnuto (koordinátor, 11. 11. 2026, K5): vazbu na sérii nese `RemoteObject::master: Option<RemoteKey>` (Google `recurringEventId`). `Correlation` tvar nemění; `Correlation.uid` je neprůhledný klíč série daný poskytovatelem (remote key předlohy: vlastní klíč u předlohy a samostatné události, `master` u výjimky), **ne** iCalUID. Úložiště se nemění, páruje dál podle (kolekce, uid, recurrence_id). Zrušený výskyt je živá položka bez řádků výskytů, která potlačí výskyt předlohy; živě se neukáže.
 4. **Přeskok vpřed u drahých sérií (oprava 12 z `recurrence.md`, odložena).** `TooExpensive` dnes znamená „v tomto okně nerozbalitelné". Známé případy: `FREQ=MINUTELY` (nebo `SECONDLY`) se starým DTSTART, kde okno leží za rozpočtem 1 000 000 vygenerovaných okamžiků, a nemožné pravidlo jako `BYMONTH=2;BYMONTHDAY=30` daleko od DTSTART (jádro skončí po `MAX_ITER_LOOP` = 100 000 prázdných period, `was_limited`). Otázka: zda a kdy doplnit přeskok na začátek okna; do té doby to K5 hlásí, nemlčí.

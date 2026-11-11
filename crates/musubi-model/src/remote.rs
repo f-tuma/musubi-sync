@@ -100,6 +100,10 @@ pub struct RemoteObject {
     pub validator: Validator,
     /// The content, unchanged.
     pub raw: Raw,
+    /// Set for a single instance of a series: key of the series master in the
+    /// same collection (Google `recurringEventId`). Exceptions join their master
+    /// by it, never by iCalendar UID (plan ch. 9, question 3).
+    pub master: Option<RemoteKey>,
 }
 
 /// Opaque resume position of an adapter in one collection (proposal 2.3).
