@@ -84,15 +84,16 @@ fn corrupt(e: impl std::fmt::Display) -> Error {
 /// Opens a connection: `busy_timeout` first, so that switching to WAL already
 /// waits on a lock instead of failing, then WAL and the tuning from the
 /// phase-0 report (32 MB page cache, 256 MB mmap). `journal_size_limit` cuts the
-/// WAL back to 4 MB after a reset; `wal_autocheckpoint` at 65536 pages (256 MB)
-/// is only a fuse behind the store's own checkpointer.
-fn connect(path: &Path, synchronous: &str) -> Result<Connection> {
+/// WAL back to 4 MB after a reset. `autocheckpoint` is in pages: tenant files
+/// pass 65536 (256 MB), only a fuse behind the store's own checkpointer;
+/// control.db, which has no checkpointer, keeps SQLite's default 1000.
+fn connect(path: &Path, synchronous: &str, autocheckpoint: u32) -> Result<Connection> {
     let c = Connection::open(path)?;
     c.busy_timeout(BUSY_TIMEOUT)?;
     c.execute_batch(&format!(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous={synchronous}; PRAGMA temp_store=MEMORY;
          PRAGMA cache_size=-32768; PRAGMA mmap_size=268435456;
-         PRAGMA journal_size_limit=4194304; PRAGMA wal_autocheckpoint=65536;"
+         PRAGMA journal_size_limit=4194304; PRAGMA wal_autocheckpoint={autocheckpoint};"
     ))?;
     c.set_prepared_statement_cache_capacity(64);
     Ok(c)

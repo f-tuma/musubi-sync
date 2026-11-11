@@ -66,11 +66,11 @@ fn after(now: Timestamp, d: Duration) -> Result<Timestamp> {
 impl SqliteControl {
     /// Opens (creating if missing) the control database at `path`.
     pub fn open(path: &std::path::Path) -> Result<Self, StoreError> {
-        let writer = connect(path, "FULL")?;
+        let writer = connect(path, "FULL", 1000)?;
         writer
             .execute_batch(crate::schema::CONTROL)
             .map_err(crate::Error::from)?;
-        let reader = connect(path, "FULL")?;
+        let reader = connect(path, "FULL", 1000)?;
         Ok(Self {
             writer: Mutex::new(writer),
             reader: Mutex::new(reader),
@@ -155,14 +155,18 @@ fn collect<T>(
     rows.map(|r| r?).collect()
 }
 
-/// The account a job belongs to, or `None` for tenant-level jobs.
+/// The account a job belongs to, or `None` for tenant-level jobs. Renewing a
+/// channel that is not stored is `NotFound`: the job would have no account and
+/// outlive `delete_account`.
 fn job_account(c: &Connection, kind: &JobKind) -> Result<Option<[u8; 16]>> {
     Ok(match kind {
         JobKind::Discover { account } | JobKind::Sync { account, .. } => Some(account.to_bytes()),
-        JobKind::RenewChannel { channel } => c
-            .prepare_cached("SELECT account FROM channels WHERE id = ?1")?
-            .query_row([&channel.0], |r| r.get(0))
-            .optional()?,
+        JobKind::RenewChannel { channel } => Some(
+            c.prepare_cached("SELECT account FROM channels WHERE id = ?1")?
+                .query_row([&channel.0], |r| r.get(0))
+                .optional()?
+                .ok_or(StoreError::NotFound)?,
+        ),
         JobKind::ExtendIndex | JobKind::Maintain => None,
     })
 }
@@ -228,9 +232,11 @@ impl ControlStore for SqliteControl {
 
     fn upsert_account(&self, a: &AccountRecord) -> Result<(), StoreError> {
         self.write(|c| {
-            c.execute(
+            // An account never moves to another tenant: the same id there is `AlreadyExists`.
+            let n = c.execute(
                 "INSERT INTO accounts(id, tenant, provider, subject, state) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(id) DO UPDATE SET tenant = ?2, provider = ?3, subject = ?4, state = ?5",
+                 ON CONFLICT(id) DO UPDATE SET provider = ?3, subject = ?4, state = ?5
+                 WHERE tenant = ?2",
                 params![
                     a.id.to_bytes(),
                     a.tenant.to_bytes(),
@@ -240,6 +246,9 @@ impl ControlStore for SqliteControl {
                 ],
             )
             .map_err(unique)?;
+            if n == 0 {
+                return Err(StoreError::AlreadyExists.into());
+            }
             Ok(())
         })
     }
@@ -393,11 +402,16 @@ impl ControlStore for SqliteControl {
         self.write(|c| {
             let tenant = job.tenant.to_bytes();
             if let Some(key) = &job.dedup {
+                // An unleased job, else one whose lease expired (its holder gets
+                // `LeaseLost`). `enqueue` has no `now`, so expiry is by the wall clock.
                 let existing: Option<i64> = c
                     .query_row(
-                        "UPDATE jobs SET due = min(due, ?3)
-                         WHERE tenant = ?1 AND dedup = ?2 AND lease IS NULL RETURNING id",
-                        params![tenant, key, us(job.due)],
+                        "UPDATE jobs SET due = min(due, ?3), lease = NULL, lease_until = NULL
+                         WHERE id = (SELECT id FROM jobs
+                           WHERE tenant = ?1 AND dedup = ?2 AND (lease IS NULL OR lease_until <= ?4)
+                           ORDER BY lease IS NOT NULL, id LIMIT 1)
+                         RETURNING id",
+                        params![tenant, key, us(job.due), us(Timestamp::now())],
                         |r| r.get(0),
                     )
                     .optional()?;
@@ -523,17 +537,35 @@ impl ControlStore for SqliteControl {
         count_attempt: bool,
     ) -> Result<(), StoreError> {
         self.write(|c| {
-            held(c.execute(
-                "UPDATE jobs SET lease = NULL, lease_until = NULL, due = ?3,
-                   attempts = attempts + ?4
-                 WHERE id = ?1 AND lease = ?2",
-                params![
-                    id.0 as i64,
-                    lease.0 as i64,
-                    us(due),
-                    i64::from(count_attempt)
-                ],
-            )?)
+            let (id, lease) = (id.0 as i64, lease.0 as i64);
+            let (tenant, dedup): ([u8; 16], Option<String>) = c
+                .query_row(
+                    "SELECT tenant, dedup FROM jobs WHERE id = ?1 AND lease = ?2",
+                    params![id, lease],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?
+                .ok_or(StoreError::LeaseLost)?;
+            // A job enqueued with the same key while this one ran is merged into
+            // it, as if enqueued after the reschedule (the earlier `due` wins).
+            let mut due = us(due);
+            if let Some(key) = dedup {
+                let other: Option<i64> = c
+                    .query_row(
+                        "DELETE FROM jobs WHERE tenant = ?1 AND dedup = ?2 AND lease IS NULL
+                         RETURNING due",
+                        params![tenant, key],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                due = other.map_or(due, |o| o.min(due));
+            }
+            c.execute(
+                "UPDATE jobs SET lease = NULL, lease_until = NULL, due = ?2, attempts = attempts + ?3
+                 WHERE id = ?1",
+                params![id, due, i64::from(count_attempt)],
+            )?;
+            Ok(())
         })
     }
 

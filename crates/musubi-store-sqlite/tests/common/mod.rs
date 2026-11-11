@@ -168,3 +168,19 @@ pub fn page(col: CollectionId, upserts: Vec<ItemWrite>) -> PageWrite {
 pub fn keys(k: &[&str]) -> Vec<RemoteKey> {
     k.iter().map(|k| RemoteKey((*k).into())).collect()
 }
+
+/// The whole journal after `since`, read page by page (`changes` caps a page).
+pub fn journal(
+    tn: &SqliteTenant,
+    mut since: musubi_model::Seq,
+) -> Vec<musubi_model::journal::Change> {
+    let mut all = Vec::new();
+    loop {
+        let p = tn.changes(since, u32::MAX).unwrap();
+        all.extend(p.changes);
+        since = p.next;
+        if !p.more {
+            return all;
+        }
+    }
+}

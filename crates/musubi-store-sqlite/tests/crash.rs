@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::*;
-use musubi_model::{Cursor, Seq, Storage, TenantStore};
+use musubi_model::{Cursor, Seq, Storage, TenantStore, Validator};
 use musubi_store_sqlite::{SqliteStorage, SqliteTenant};
 
 const PER_PAGE: u64 = 10;
@@ -91,7 +91,18 @@ fn kill_mid_apply_page() {
             "round {round}: cursor {c}"
         );
         assert!(c >= pages && st.head >= head, "round {round}: went back");
-        let new = tn.changes(head, u32::MAX).unwrap().changes;
+        // The cursor and the page's items were committed together.
+        if c > 0 {
+            let shared = tn
+                .items_by_remote(tn.collections().unwrap()[0].id, &keys(&["shared"]))
+                .unwrap();
+            assert_eq!(
+                shared[0].validator,
+                Validator(format!("shared@{c}")),
+                "round {round}"
+            );
+        }
+        let new = journal(&tn, head);
         assert!(new.windows(2).all(|w| w[0].seq < w[1].seq));
         assert!(new.iter().all(|ch| ch.seq > head && ch.seq <= st.head));
         (head, pages) = (st.head, c);

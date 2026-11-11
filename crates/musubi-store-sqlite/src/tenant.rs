@@ -21,6 +21,7 @@ use musubi_model::time::TimeWindow;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::value::RawValue;
 
+use crate::schema::LONG_SPAN;
 use crate::storage::SqliteTenant;
 use crate::{Result, corrupt, enum_text, opt_ts, parse_enum, ts, us};
 
@@ -121,20 +122,6 @@ fn random_id(c: &Connection) -> Result<[u8; 16]> {
         .query_row([], |r| r.get(0))?)
 }
 
-/// Raises `meta.max_span` to cover `rows`.
-fn widen_span(c: &Connection, rows: &[OccurrenceRow]) -> Result<()> {
-    let span = rows
-        .iter()
-        .map(|r| us(r.end) - us(r.start))
-        .max()
-        .unwrap_or(0);
-    if span > 0 {
-        c.prepare_cached("UPDATE meta SET v = max(v, ?1) WHERE k = 'max_span'")?
-            .execute([span])?;
-    }
-    Ok(())
-}
-
 fn insert_occurrences(
     c: &Connection,
     entity: [u8; 16],
@@ -157,7 +144,7 @@ fn insert_occurrences(
             item
         ])?;
     }
-    widen_span(c, rows)
+    Ok(())
 }
 
 /// Tombstones a live item with its entity and placement and drops its occurrences.
@@ -410,6 +397,7 @@ fn apply_page(c: &Connection, p: &PageWrite) -> Result<Seq> {
     let mut st = read_state(c, col)?;
     if let Some(r) = p.read {
         let r = r.0 as i64;
+        let replaced = st.active != Some(r);
         match st.active {
             Some(a) if r == a => {}
             // A newer read replaces the active one; marks of `a` no longer count.
@@ -417,8 +405,11 @@ fn apply_page(c: &Connection, p: &PageWrite) -> Result<Seq> {
             None if st.last.is_none_or(|l| r > l) => st.active = Some(r),
             _ => return Err(StoreError::StaleRead.into()),
         }
-        if st.active != Some(r) || p.last {
+        // A new read starts incomplete; the read in progress only ever completes.
+        if replaced {
             st.complete = p.last;
+        } else if p.last {
+            st.complete = true;
         }
     }
     let mark = st.active;
@@ -516,19 +507,30 @@ fn place(t: Timestamp, zone: &TimeZone) -> Result<Timestamp> {
 }
 
 fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
+    // `IN ()` folds the query to nothing, which `INDEXED BY` below refuses to plan.
+    if q.collections.as_ref().is_some_and(Vec::is_empty) {
+        return Ok(RangePage {
+            occurrences: Vec::new(),
+            next: None,
+            unindexed: Vec::new(),
+        });
+    }
     let (ws, we) = (us(q.window.start()), us(q.window.end()));
-    let max_span = meta(c, "max_span")?;
     let cols: Vec<[u8; 16]> = q
         .collections
         .iter()
         .flatten()
         .map(|c| c.to_bytes())
         .collect();
-    let col_filter = |alias: &str| match &q.collections {
+    // Collections bind as ?first, ?first+1, … (numbered: the range query uses them twice).
+    let col_filter = |alias: &str, first: usize| match &q.collections {
         None => String::new(),
         Some(_) => format!(
             "AND {alias}.collection IN ({})",
-            vec!["?"; cols.len()].join(",")
+            (first..first + cols.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(",")
         ),
     };
     let after = q.after.map(|a| {
@@ -538,35 +540,52 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
             a.recurrence_id.map_or(NO_RID, us),
         )
     });
-    let lower = (ws - max_span - FLOAT_WIDEN).max(after.map_or(i64::MIN, |a| a.0));
-    // Candidates by index (widened for floating rows), exact overlap below.
-    let sql = format!(
-        "SELECT o.start, o.end, o.entity, o.rid, o.floating, {doc}
-         FROM occurrences o JOIN items i ON i.id = o.item
-         WHERE o.start >= ? AND o.start < ? AND o.end >= ? {keyset} {cols}
+    let floor = after.map_or(i64::MIN, |a| a.0);
+    let (lo, hi) = (
+        ws.saturating_sub(FLOAT_WIDEN),
+        we.saturating_add(FLOAT_WIDEN),
+    );
+    // Candidates by index (widened for floating rows), exact overlap below. Short
+    // occurrences by start, which an overlap bounds to [lo - LONG_SPAN, hi); long
+    // ones by end through their partial index (forced: for the merge's order the
+    // planner would rather walk `occurrences_time` from ?3). Both halves share
+    // the arguments.
+    let rest = format!(
+        "{keyset} {cols}
            AND NOT (o.rid <> {NO_RID} AND i.uid IS NOT NULL AND EXISTS (
              SELECT 1 FROM items x WHERE x.collection = i.collection AND x.uid = i.uid
-               AND x.recurrence_id = o.rid AND x.tombstone = 0 AND x.id <> i.id))
-         ORDER BY o.start, o.entity, o.rid",
-        doc = if q.ids_only { "NULL" } else { "i.observed" },
+               AND x.recurrence_id = o.rid AND x.tombstone = 0 AND x.id <> i.id))",
         keyset = if after.is_some() {
-            "AND (o.start, o.entity, o.rid) > (?, ?, ?)"
+            "AND (o.start, o.entity, o.rid) > (?4, ?5, ?6)"
         } else {
             ""
         },
-        cols = col_filter("o"),
+        cols = col_filter("o", 7),
     );
-    let mut args: Vec<rusqlite::types::Value> = vec![
-        lower.into(),
-        we.saturating_add(FLOAT_WIDEN).into(),
-        ws.saturating_sub(FLOAT_WIDEN).into(),
-    ];
-    if let Some((s, e, r)) = after {
-        args.extend([s.into(), e.to_vec().into(), r.into()]);
+    let sql = format!(
+        "SELECT o.start, o.end, o.entity, o.rid, o.floating, {doc}
+         FROM occurrences o JOIN items i ON i.id = o.item
+         WHERE o.start >= max(?1 - {LONG_SPAN}, ?3) AND o.start < ?2 AND o.end >= ?1
+           AND o.end - o.start <= {LONG_SPAN} {rest}
+         UNION ALL
+         SELECT o.start, o.end, o.entity, o.rid, o.floating, {doc}
+         FROM occurrences o INDEXED BY occurrences_long JOIN items i ON i.id = o.item
+         WHERE o.end - o.start > {LONG_SPAN} AND o.end >= ?1 AND o.start < ?2 AND o.start >= ?3
+           {rest}
+         ORDER BY 1, 3, 4",
+        doc = if q.ids_only { "NULL" } else { "i.observed" },
+    );
+    let mut args: Vec<rusqlite::types::Value> = vec![lo.into(), hi.into(), floor.into()];
+    // ?4..?6 are the keyset; unused (and NULL) on the first page.
+    match after {
+        Some((s, e, r)) => args.extend([s.into(), e.to_vec().into(), r.into()]),
+        None => args.extend(std::iter::repeat_n(rusqlite::types::Value::Null, 3)),
     }
     args.extend(cols.iter().map(|c| c.to_vec().into()));
     let limit = q.limit.max(1) as usize;
     let mut st = c.prepare_cached(&sql)?;
+    // Without collections the statement ends at the last parameter it uses.
+    args.truncate(st.parameter_count());
     let mut rows = st.query(params_from_iter(&args))?;
     let mut occurrences = Vec::new();
     let mut more = false;
@@ -613,8 +632,8 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
                AND e.series_first < ?1 AND (e.series_last IS NULL OR e.series_last >= ?2)
                AND (e.series_last IS NULL OR e.series_last > e.indexed_until)
                AND EXISTS (SELECT 1 FROM items i WHERE i.entity = e.id {})
-             ORDER BY e.indexed_until, e.id",
-            col_filter("i")
+             ORDER BY e.indexed_until, e.id LIMIT {UNINDEXED_MAX}",
+            col_filter("i", 3)
         );
         let mut args: Vec<rusqlite::types::Value> = vec![
             we.saturating_add(FLOAT_WIDEN).into(),
@@ -637,7 +656,15 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
     })
 }
 
+/// Most series in `RangePage::unindexed`.
+/// shortcut: series past this are left out until `extend_index` catches up;
+/// signal truncation if the model grows a field for it.
+const UNINDEXED_MAX: u32 = 10_000;
+/// Most entries in one `changes` page, whatever the caller asks.
+const CHANGES_MAX: u32 = 10_000;
+
 fn changes(c: &Connection, since: Seq, limit: u32) -> Result<ChangesPage> {
+    let limit = limit.min(CHANGES_MAX);
     let oldest = meta(c, "oldest")? as u64;
     if since.0 < oldest {
         return Err(StoreError::CursorTooOld {
@@ -1083,10 +1110,19 @@ impl TenantStore for SqliteTenant {
     fn prune(&mut self, older_than: Timestamp) -> Result<PruneInfo, StoreError> {
         Ok(self.shared.write(|c| {
             let cut = us(older_than);
-            let last: Option<i64> =
-                c.query_row("SELECT max(seq) FROM changes WHERE at < ?1", [cut], |r| {
-                    r.get(0)
-                })?;
+            // Walks seq order up to the first young entry: cost follows what is
+            // pruned, not the journal size. Entries after a young one stay.
+            let first_kept: Option<i64> = c
+                .query_row(
+                    "SELECT seq FROM changes WHERE at >= ?1 ORDER BY seq LIMIT 1",
+                    [cut],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let last: Option<i64> = match first_kept {
+                Some(k) => Some(k - 1).filter(|l| *l > 0),
+                None => c.query_row("SELECT max(seq) FROM changes", [], |r| r.get(0))?,
+            };
             let mut info = PruneInfo::default();
             if let Some(last) = last {
                 info.changes = c.execute("DELETE FROM changes WHERE seq <= ?1", [last])? as u64;
@@ -1110,5 +1146,84 @@ impl TenantStore for SqliteTenant {
 
     fn checkpoint(&mut self, mode: CheckpointMode) -> Result<CheckpointInfo, StoreError> {
         Ok(self.shared.checkpoint(mode)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use jiff::tz::TimeZone;
+    use musubi_model::TimeWindow;
+
+    use super::*;
+    use crate::schema::{MAIN_MIGRATIONS, migrate};
+
+    const H: i64 = 3_600_000_000;
+
+    /// VM steps and occurrences of one first-page `range` over `[from, to)` hours.
+    fn range_steps(c: &mut Connection, from: i64, to: i64) -> (u64, usize) {
+        let n = Arc::new(AtomicU64::new(0));
+        let counter = n.clone();
+        c.progress_handler(
+            1,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
+        let q = RangeQuery {
+            window: TimeWindow::new(
+                Timestamp::from_microsecond(from * H).unwrap(),
+                Timestamp::from_microsecond(to * H).unwrap(),
+            )
+            .unwrap(),
+            collections: None,
+            zone: TimeZone::UTC,
+            after: None,
+            limit: 10_000,
+            ids_only: true,
+        };
+        let p = range(c, &q).unwrap();
+        c.progress_handler(0, None::<fn() -> bool>).unwrap();
+        (n.load(Ordering::Relaxed), p.occurrences.len())
+    }
+
+    /// A multi-year occurrence is found without widening the scan of short ones.
+    #[test]
+    fn long_occurrence_does_not_widen_the_range_scan() {
+        let mut c = Connection::open_in_memory().unwrap();
+        migrate(&mut c, MAIN_MIGRATIONS).unwrap();
+        c.execute_batch(
+            "INSERT INTO items(id, collection, key, entity, kind, validator, raw_hash,
+               schema_version, mapping_version) VALUES (x'00000000000000000000000000000001', x'00000000000000000000000000000002', 'k', x'00000000000000000000000000000003', 'event', 'v', x'00000000000000000000000000000004', 1, 1)",
+        )
+        .unwrap();
+        let add = |c: &Connection, start: i64, end: i64| {
+            c.execute(
+                "INSERT INTO occurrences VALUES (?1, ?2, x'00000000000000000000000000000003', ?3, 0, x'00000000000000000000000000000002', x'00000000000000000000000000000001')",
+                params![start * H, end * H, NO_RID],
+            )
+            .unwrap();
+        };
+        // Two years of one-hour events every three hours before a one-day window.
+        let day = 24 * 730;
+        let rows = (0..day + 24)
+            .step_by(3)
+            .inspect(|h| add(&c, *h, h + 1))
+            .count() as u64;
+        let (base, found) = range_steps(&mut c, day, day + 24);
+        assert_eq!(found, 8);
+
+        add(&c, -24 * 365, day + 24 * 365);
+        let (steps, found) = range_steps(&mut c, day, day + 24);
+        assert_eq!(found, 9, "the long occurrence is found");
+        // A scan visiting every row costs several steps per row.
+        assert!(
+            steps < 2 * base && steps < rows,
+            "{steps} VM steps, {base} without it, {rows} rows"
+        );
     }
 }

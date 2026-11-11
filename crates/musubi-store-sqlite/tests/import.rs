@@ -4,7 +4,7 @@ mod common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use common::*;
 use jiff::tz::TimeZone;
@@ -72,7 +72,10 @@ fn import_keeps_wal_bounded() {
     let reads: u64 = readers.into_iter().map(|r| r.join().unwrap()).sum();
 
     let st = tn.stats().unwrap();
-    println!("{EVENTS} events in {took:?}, {reads} concurrent reads; {st:?}");
+    let waited = tn.gate_wait_max();
+    println!(
+        "{EVENTS} events in {took:?}, {reads} concurrent reads, reads waited at most {waited:?}; {st:?}"
+    );
     assert_eq!(st.items, EVENTS as u64);
     assert!(reads > 0);
     assert!(
@@ -80,4 +83,18 @@ fn import_keeps_wal_bounded() {
         "largest WAL {} bytes",
         st.wal_max_bytes
     );
+    // Release (CI runs this test so too) outpaces the background PASSIVE and
+    // resets the WAL; a debug build is too slow to get there.
+    if cfg!(not(debug_assertions)) {
+        assert!(st.truncates > 0, "{st:?}");
+    }
+    // A reset drains readers for at most 10 ms plus the TRUNCATE itself.
+    assert!(
+        waited < Duration::from_millis(500),
+        "reads waited {waited:?}"
+    );
+
+    // A page is capped whatever the caller asks.
+    let all = tn.changes(Seq(0), u32::MAX).unwrap();
+    assert_eq!((all.changes.len(), all.more), (10_000, true));
 }

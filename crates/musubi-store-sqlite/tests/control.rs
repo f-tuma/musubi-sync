@@ -113,6 +113,14 @@ fn accounts_and_tokens() {
         Some(SealedTokens(vec![1, 2, 3])),
         "upsert keeps tokens"
     );
+    let mut moved = reconnected.clone();
+    moved.tenant = T2;
+    c.insert_tenant(T2).unwrap();
+    assert!(
+        matches!(c.upsert_account(&moved), Err(StoreError::AlreadyExists)),
+        "an account never changes tenant"
+    );
+    assert_eq!(c.account(A1).unwrap(), Some(reconnected.clone()));
     let google = ProviderId("google".into());
     assert_eq!(
         c.account_by_subject(T1, &google, "sub-1").unwrap(),
@@ -209,12 +217,50 @@ fn enqueue_coalesces_unleased_jobs_per_tenant() {
         "dedup is scoped to the tenant"
     );
 
-    let leased = c.lease_due(Lane::Sync, t(5), 10, LEASE).unwrap();
+    // Leased now (enqueue checks lease expiry against the wall clock).
+    let leased = c
+        .lease_due(Lane::Sync, jiff::Timestamp::now(), 10, LEASE)
+        .unwrap();
     assert_eq!(leased.len(), 2);
     let mine = leased.iter().find(|j| j.id == a).unwrap();
     assert_eq!(mine.spec.due, t(5), "due became the earlier one");
     // A leased job no longer absorbs new ones.
-    assert_ne!(c.enqueue(&job(sync, 0, 5, Some("sync:5"))).unwrap(), a);
+    let b = c.enqueue(&job(sync.clone(), 0, 5, Some("sync:5"))).unwrap();
+    assert_ne!(b, a);
+    assert_eq!(
+        c.enqueue(&job(sync, 0, 1, Some("sync:5"))).unwrap(),
+        b,
+        "absorbed by the unleased one"
+    );
+}
+
+#[test]
+fn expired_lease_absorbs_and_reschedule_merges_duplicates() {
+    let (_d, c) = open();
+    let sync = JobKind::Sync {
+        account: A1,
+        collection: CollectionId::from_u128(5),
+    };
+    let a = c.enqueue(&job(sync.clone(), 0, 0, Some("k"))).unwrap();
+    // Leased long ago: the lease has expired by the wall clock.
+    let old = c.lease_due(Lane::Sync, t(0), 10, LEASE).unwrap();
+    assert_eq!(c.enqueue(&job(sync.clone(), 0, 3, Some("k"))).unwrap(), a);
+    assert!(matches!(
+        c.complete(a, old[0].lease),
+        Err(StoreError::LeaseLost)
+    ));
+
+    // A job leased now, a duplicate enqueued meanwhile, then the leased one is
+    // rescheduled: one unleased job with the earlier due remains.
+    let now = jiff::Timestamp::now();
+    let mine = c.lease_due(Lane::Sync, now, 10, LEASE).unwrap();
+    assert_eq!(mine[0].id, a);
+    let dup = c.enqueue(&job(sync, 0, 7, Some("k"))).unwrap();
+    assert_ne!(dup, a);
+    c.reschedule(a, mine[0].lease, t(9), false).unwrap();
+    let left = c.lease_due(Lane::Sync, t(100), 10, LEASE).unwrap();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!((left[0].id, left[0].spec.due), (a, t(7)));
 }
 
 #[test]
@@ -386,4 +432,16 @@ fn delete_tenant_cascades_and_survives_reopen() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].spec.tenant, T2);
     c.insert_tenant(T1).unwrap();
+}
+
+#[test]
+fn renew_channel_job_needs_its_channel() {
+    let (_d, c) = open();
+    let renew = JobKind::RenewChannel {
+        channel: ChannelId("gone".into()),
+    };
+    assert!(matches!(
+        c.enqueue(&job(renew, 0, 0, None)),
+        Err(StoreError::NotFound)
+    ));
 }

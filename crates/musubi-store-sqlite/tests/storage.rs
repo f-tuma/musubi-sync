@@ -63,7 +63,7 @@ fn sqlite_is_built_without_memstatus() {
 fn older_file_migrates_and_newer_is_refused_untouched() {
     let d = TempDir::new();
     let s = SqliteStorage::new(d.path(), 4).unwrap();
-    // Version 0: an empty file, as left by an interrupted creation.
+    // Version 0: an empty file not made by `create_tenant`.
     let old = TenantId::from_u128(1);
     std::fs::create_dir_all(main_db(d.path(), old).parent().unwrap()).unwrap();
     Connection::open(main_db(d.path(), old)).unwrap();
@@ -92,6 +92,34 @@ fn older_file_migrates_and_newer_is_refused_untouched() {
     ));
     assert_eq!(std::fs::read(&path).unwrap(), before, "file untouched");
     assert!(!path.with_extension("db-wal").exists());
+}
+
+#[test]
+fn interrupted_creation_leaves_nothing_behind() {
+    let d = TempDir::new();
+    let tenants = d.path().join("tenants");
+    // A crash before the rename: a half-built directory beside the tenants.
+    let leftover = tenants.join(format!(".{TENANT}.123.new"));
+    std::fs::create_dir_all(&leftover).unwrap();
+    std::fs::write(leftover.join("main.db"), b"").unwrap();
+    // An empty tenant directory (made by hand or by an older build).
+    std::fs::create_dir(tenants.join(TENANT.to_string())).unwrap();
+
+    let s = SqliteStorage::new(d.path(), 2).unwrap();
+    assert!(!leftover.exists(), "leftover removed on start");
+    s.create_tenant(TENANT).unwrap();
+    let mut tn = s.open(TENANT).unwrap();
+    let col = collection(&mut tn, "a");
+    tn.apply_page(&page(col, vec![event("e", "1", 1)])).unwrap();
+    assert!(matches!(
+        s.create_tenant(TENANT),
+        Err(StoreError::AlreadyExists)
+    ));
+    let names: Vec<_> = std::fs::read_dir(&tenants)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, [TENANT.to_string()]);
 }
 
 /// Open descriptors of this process pointing at `path`.
@@ -185,13 +213,11 @@ fn hot_backup_restores_the_snapshot() {
     assert_eq!(restored.stats().unwrap().head, info.head);
 
     // changes: the source's journal up to the backup head.
-    let journal =
-        |tn: &musubi_store_sqlite::SqliteTenant| tn.changes(Seq(0), 1_000_000).unwrap().changes;
-    let want: Vec<_> = journal(&src)
+    let want: Vec<_> = journal(&src, Seq(0))
         .into_iter()
         .filter(|c| c.seq <= info.head)
         .collect();
-    let got = journal(&restored);
+    let got = journal(&restored, Seq(0));
     assert_eq!(got, want);
 
     // range: the source's occurrences of entities existing at the backup head.
@@ -268,8 +294,9 @@ fn wal_reset_fails_backs_off_and_recovers() {
     drop(reader);
     std::thread::sleep(Duration::from_millis(1100));
     // Without the reader the background PASSIVE has caught up and the WAL
-    // restarts small, so one page must take it past the limit again. A reset
-    // can still lose to a concurrent PASSIVE; that backs off like a reader.
+    // restarts small, so one page must take it past the limit again. A
+    // background PASSIVE running longer than the reset's 10 ms drain still
+    // fails the reset like a reader would, hence the retries.
     for _ in 0..3 {
         let items = (0..70)
             .map(|i| big(&format!("r{n}-{i}"), 1 << 20))

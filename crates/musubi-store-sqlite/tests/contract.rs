@@ -225,6 +225,36 @@ fn newer_read_replaces_active_read() {
     assert_eq!(live_keys(&t, col, &["a", "b"]), ["a"]);
 }
 
+/// Invariant 4: a newer read replacing an already complete one starts incomplete,
+/// so the older read's completion cannot finish the newer one early.
+#[test]
+fn newer_read_replaces_complete_read() {
+    let (_d, _s, mut t) = setup();
+    let col = collection(&mut t, "cal");
+    t.apply_page(&page(col, vec![event("a", "1", 0), event("b", "1", 0)]))
+        .unwrap();
+    let mut p = page(col, vec![]);
+    p.read = Some(ReadId(5));
+    p.unchanged = keys(&["a", "b"]);
+    p.last = true;
+    t.apply_page(&p).unwrap();
+
+    let mut p = page(col, vec![]);
+    p.read = Some(ReadId(6));
+    p.unchanged = keys(&["a"]);
+    t.apply_page(&p).unwrap();
+    let state = t.collections().unwrap().pop().unwrap();
+    assert_eq!(
+        (state.active_read, state.read_complete),
+        (Some(ReadId(6)), false)
+    );
+    assert!(matches!(
+        t.finish_full_read(col, ReadId(6)),
+        Err(StoreError::StaleRead)
+    ));
+    assert_eq!(live_keys(&t, col, &["a", "b"]), ["a", "b"]);
+}
+
 /// Invariant 5: one item per key, one entity per item, one placement per entity;
 /// a removed key that comes back revives the same entity.
 #[test]

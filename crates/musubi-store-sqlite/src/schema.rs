@@ -15,14 +15,15 @@ pub(crate) const MAIN_MIGRATIONS: &[&str] = &[MAIN_V1];
 /// Schema version this binary writes.
 pub(crate) const MAIN_VERSION: u32 = MAIN_MIGRATIONS.len() as u32;
 
-/// Version 1. `meta` holds `schema`, `oldest` (oldest `since` that `changes`
-/// accepts after a prune) and `max_span` (longest occurrence in the index, which
-/// bounds the range scan); `projected` is reserved for phase 3.
+/// Version 1. `meta` holds `schema` and `oldest` (oldest `since` that `changes`
+/// accepts after a prune); `projected` is reserved for phase 3.
+/// Occurrences longer than [`LONG_SPAN`] have their own partial index, so that
+/// one long event does not widen the time scan of every range query.
 /// `items.seen` is the full read that last saw the item (invariant 4).
 /// `occurrences.rid` is `NO_RID` for a single event, so that row values compare.
 const MAIN_V1: &str = r#"
 CREATE TABLE meta(k TEXT PRIMARY KEY, v INTEGER NOT NULL);
-INSERT INTO meta VALUES ('oldest', 0), ('max_span', 0);
+INSERT INTO meta VALUES ('oldest', 0);
 CREATE TABLE collections(
   id BLOB PRIMARY KEY, account BLOB NOT NULL, remote TEXT NOT NULL, meta TEXT NOT NULL,
   cursor BLOB, active_read INTEGER, read_complete INTEGER NOT NULL DEFAULT 0, last_read INTEGER,
@@ -57,10 +58,15 @@ CREATE TABLE occurrences(
   floating INTEGER NOT NULL, collection BLOB NOT NULL, item BLOB NOT NULL);
 CREATE INDEX occurrences_time ON occurrences(start, entity, rid);
 CREATE INDEX occurrences_entity ON occurrences(entity);
+CREATE INDEX occurrences_long ON occurrences(end) WHERE end - start > 604800000000;
 CREATE TABLE changes(
   seq INTEGER PRIMARY KEY AUTOINCREMENT, kind INTEGER NOT NULL, target BLOB NOT NULL,
   op INTEGER NOT NULL, at INTEGER NOT NULL);
 "#;
+
+/// Occurrences longer than this (7 days, µs) are found through `occurrences_long`;
+/// the literal in [`MAIN_V1`] and in the range query must match it.
+pub(crate) const LONG_SPAN: i64 = 7 * 24 * 3600 * 1_000_000;
 
 /// Schema version stored in a tenant file; 0 if it has none yet.
 pub(crate) fn main_version(c: &Connection) -> Result<u32> {
@@ -92,6 +98,9 @@ pub(crate) fn migrate(c: &mut Connection, steps: &[&str]) -> Result<()> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Re-read under the write lock: another process may have migrated meanwhile.
     let found = main_version(&tx)?;
+    if found > supported {
+        return Err(StoreError::SchemaTooNew { found, supported }.into());
+    }
     for step in &steps[found as usize..] {
         tx.execute_batch(step)?;
     }
@@ -104,7 +113,8 @@ pub(crate) fn migrate(c: &mut Connection, steps: &[&str]) -> Result<()> {
 }
 
 /// `control.db`. `jobs.account` is derived from the job kind (`Discover`,
-/// `Sync`: its account; `RenewChannel`: the channel's account at enqueue time;
+/// `Sync`: its account; `RenewChannel`: the channel's account at enqueue time,
+/// `NotFound` without the channel;
 /// `ExtendIndex`, `Maintain`: none, they belong to the tenant) so that
 /// `delete_account` finds the account's jobs through an index.
 pub(crate) const CONTROL: &str = r#"
@@ -130,7 +140,8 @@ CREATE TABLE IF NOT EXISTS jobs(
 CREATE INDEX IF NOT EXISTS jobs_due ON jobs(lane, priority DESC, due);
 CREATE INDEX IF NOT EXISTS jobs_tenant ON jobs(tenant);
 CREATE INDEX IF NOT EXISTS jobs_account ON jobs(account) WHERE account IS NOT NULL;
-CREATE INDEX IF NOT EXISTS jobs_dedup ON jobs(tenant, dedup) WHERE dedup IS NOT NULL AND lease IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_dedup ON jobs(tenant, dedup)
+  WHERE dedup IS NOT NULL AND lease IS NULL;
 CREATE TABLE IF NOT EXISTS channels(
   id TEXT PRIMARY KEY, tenant BLOB NOT NULL, account BLOB NOT NULL, collection BLOB NOT NULL,
   remote TEXT NOT NULL, resource TEXT NOT NULL, token TEXT NOT NULL, expiration INTEGER NOT NULL);
@@ -141,6 +152,11 @@ CREATE INDEX IF NOT EXISTS channels_expiration ON channels(expiration);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_index_matches_long_span() {
+        assert!(MAIN_V1.contains(&format!("WHERE end - start > {LONG_SPAN};")));
+    }
 
     /// A file written by an older binary is migrated in place on open and keeps
     /// its data; a step added later runs exactly once.

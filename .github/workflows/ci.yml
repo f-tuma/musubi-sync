@@ -49,6 +49,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Includes the dependency-direction check (musubi-testkit/tests/dependency_direction.rs).
       - run: cargo test --workspace --locked
+      # K1: only an optimized build writes fast enough to reach the WAL hard
+      # limit and exercise the TRUNCATE path; the test asserts it in release.
+      - run: cargo test -p musubi-store-sqlite --release --locked --test import
 
   deny:
     runs-on: ubuntu-24.04

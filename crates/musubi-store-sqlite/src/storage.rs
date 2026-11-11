@@ -39,6 +39,12 @@ const CKPT_WAIT: Duration = Duration::from_millis(10);
 const RESET_BACKOFF: Duration = Duration::from_secs(1);
 const RESET_BACKOFF_GROWTH: u64 = 32 << 20;
 const SWEEP: Duration = Duration::from_millis(50);
+/// `wal_autocheckpoint` (pages) of tenant files: a 256 MB fuse behind the checkpointer.
+const TENANT_AUTOCHECKPOINT: u32 = 65536;
+/// Suffix of a tenant directory under construction.
+const TMP_SUFFIX: &str = ".new";
+/// How long a backup retries a busy or locked source.
+const BACKUP_BUSY: Duration = Duration::from_secs(30);
 /// Idle read connections kept per tenant.
 const IDLE_READERS: usize = 4;
 
@@ -71,6 +77,13 @@ impl SqliteStorage {
     pub fn new(dir: &Path, capacity: usize) -> Result<Self, StoreError> {
         let tenants = dir.join("tenants");
         fs::create_dir_all(&tenants).map_err(StoreError::Io)?;
+        // Tenants whose creation was interrupted (see `create_tenant`).
+        for e in fs::read_dir(&tenants).map_err(StoreError::Io)? {
+            let e = e.map_err(StoreError::Io)?;
+            if e.file_name().to_string_lossy().ends_with(TMP_SUFFIX) {
+                fs::remove_dir_all(e.path()).map_err(StoreError::Io)?;
+            }
+        }
         let inner = Arc::new(Inner {
             tenants,
             capacity: capacity.max(1),
@@ -109,20 +122,30 @@ impl Inner {
 
     fn open(&self, t: TenantId) -> Result<Arc<Shared>> {
         let mut o = self.open_mut();
-        o.tick += 1;
-        let tick = o.tick;
-        if let Some((s, used)) = o.lru.get_mut(&t) {
-            *used = tick;
-            return Ok(s.clone());
-        }
+        // Every cached tenant is also live.
         let shared = match o.live.get(&t).and_then(Weak::upgrade) {
             Some(s) => s,
             None => {
-                let s = Arc::new(Shared::open(&self.dir(t))?);
-                o.live.insert(t, Arc::downgrade(&s));
-                s
+                // Opening may migrate: not under the lock every tenant's open takes.
+                drop(o);
+                let opened = Arc::new(Shared::open(&self.dir(t))?);
+                o = self.open_mut();
+                // A concurrent open of the same tenant may have won; keep one writer.
+                match o.live.get(&t).and_then(Weak::upgrade) {
+                    Some(s) => s,
+                    None => {
+                        o.live.insert(t, Arc::downgrade(&opened));
+                        opened
+                    }
+                }
             }
         };
+        o.tick += 1;
+        let tick = o.tick;
+        if let Some((_, used)) = o.lru.get_mut(&t) {
+            *used = tick;
+            return Ok(shared);
+        }
         if o.lru.len() >= self.capacity
             && let Some(oldest) = o
                 .lru
@@ -179,16 +202,32 @@ impl Storage for SqliteStorage {
 
     fn create_tenant(&self, t: TenantId) -> Result<(), StoreError> {
         let dir = self.inner.dir(t);
-        match fs::create_dir(&dir) {
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(StoreError::AlreadyExists);
-            }
-            r => r.map_err(StoreError::Io)?,
+        if dir.join("main.db").exists() {
+            return Err(StoreError::AlreadyExists);
         }
-        // An interrupted creation leaves a file at version 0, which `open` migrates.
-        let mut c = connect(&dir.join("main.db"), "NORMAL")?;
-        migrate(&mut c, MAIN_MIGRATIONS)?;
-        Ok(())
+        // Built aside and renamed into place, so a crash never leaves a
+        // half-created tenant; `new` removes the leftovers.
+        let nanos = jiff::Timestamp::now().as_nanosecond();
+        let tmp = self.inner.tenants.join(format!(".{t}.{nanos}{TMP_SUFFIX}"));
+        let built = (|| {
+            fs::create_dir(&tmp)?;
+            let mut c = connect(&tmp.join("main.db"), "NORMAL", TENANT_AUTOCHECKPOINT)?;
+            migrate(&mut c, MAIN_MIGRATIONS)?;
+            drop(c);
+            // Replaces a missing or empty directory; a non-empty one is a tenant.
+            fs::rename(&tmp, &dir).map_err(|e| match e.kind() {
+                std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::AlreadyExists => {
+                    Error(StoreError::AlreadyExists)
+                }
+                _ => Error(StoreError::Io(e)),
+            })?;
+            fs::File::open(&self.inner.tenants)?.sync_all()?;
+            Ok::<_, Error>(())
+        })();
+        if built.is_err() {
+            let _ = fs::remove_dir_all(&tmp);
+        }
+        Ok(built?)
     }
 
     fn delete_tenant(&self, t: TenantId) -> Result<(), StoreError> {
@@ -211,7 +250,11 @@ impl Storage for SqliteStorage {
                 "backup destination is not empty",
             )));
         }
-        let shared = self.inner.open(t)?;
+        // Straight from the files: a backup does not evict an open tenant from the LRU.
+        let dir = self.inner.dir(t);
+        if !dir.join("main.db").exists() {
+            return Err(StoreError::NotFound);
+        }
         let mut info = BackupInfo {
             files: Vec::new(),
             bytes: 0,
@@ -219,7 +262,7 @@ impl Storage for SqliteStorage {
         };
         // Order is fixed (plan 3.2): main.db first, then outbox.db (phase 3).
         for name in ["main.db", "outbox.db"] {
-            let src = shared.dir.join(name);
+            let src = dir.join(name);
             if !src.exists() {
                 continue;
             }
@@ -244,9 +287,11 @@ fn snapshot(src: &Path, out: &Path) -> Result<Connection> {
     let mut to = Connection::open(out)?;
     {
         let b = Backup::new(&from, &mut to)?;
+        let deadline = Instant::now() + BACKUP_BUSY;
         loop {
             match b.step(-1)? {
                 StepResult::Done => break,
+                _ if Instant::now() >= deadline => return Err(StoreError::Busy.into()),
                 // Busy or locked: wait and retry.
                 _ => std::thread::sleep(Duration::from_millis(5)),
             }
@@ -271,6 +316,14 @@ pub struct SqliteTenant {
     pub(crate) shared: Arc<Shared>,
 }
 
+impl SqliteTenant {
+    /// Longest time a read of this process waited for a WAL reset since the
+    /// tenant was opened. Not part of `StoreStats` (a model type).
+    pub fn gate_wait_max(&self) -> Duration {
+        Duration::from_micros(self.shared.gate.wait_max_us.load(Ordering::Relaxed))
+    }
+}
+
 pub(crate) struct Shared {
     dir: PathBuf,
     main: PathBuf,
@@ -287,6 +340,8 @@ struct Gate {
     /// Running reads, and whether a reset is draining them.
     state: Mutex<(usize, bool)>,
     changed: Condvar,
+    /// Longest time a read waited for a reset, in microseconds.
+    wait_max_us: AtomicU64,
 }
 
 impl Gate {
@@ -296,8 +351,13 @@ impl Gate {
 
     fn enter(&self) -> GateRead<'_> {
         let mut s = self.lock();
-        while s.1 {
-            s = self.changed.wait(s).unwrap_or_else(|p| p.into_inner());
+        if s.1 {
+            let start = Instant::now();
+            while s.1 {
+                s = self.changed.wait(s).unwrap_or_else(|p| p.into_inner());
+            }
+            let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+            self.wait_max_us.fetch_max(us, Ordering::Relaxed);
         }
         s.0 += 1;
         GateRead(self)
@@ -378,7 +438,7 @@ impl Shared {
             .into());
         }
         drop(probe);
-        let mut conn = connect(&main, "NORMAL")?;
+        let mut conn = connect(&main, "NORMAL", TENANT_AUTOCHECKPOINT)?;
         migrate(&mut conn, MAIN_MIGRATIONS)?;
         let wal = dir.join("main.db-wal");
         Ok(Self {
@@ -409,7 +469,7 @@ impl Shared {
         let idle = self.readers.lock().unwrap_or_else(|p| p.into_inner()).pop();
         match idle {
             Some(c) => Ok(c),
-            None => connect(&self.main, "NORMAL"),
+            None => connect(&self.main, "NORMAL", TENANT_AUTOCHECKPOINT),
         }
     }
 
@@ -444,7 +504,9 @@ impl Shared {
         let size = self.wal_size();
         if size >= WAL_HARD && (Instant::now() >= w.next_reset.0 || size >= w.next_reset.1) {
             // The page is committed; a failed reset only delays the next one.
-            let _ = self.truncate(&mut w, size);
+            if let Err(e) = self.truncate(&mut w, size) {
+                tracing::warn!(error = %e.0, dir = %self.dir.display(), "WAL reset failed");
+            }
         }
         Ok(r)
     }
@@ -474,25 +536,26 @@ impl Shared {
             .truncate_max_us
             .fetch_max(micros, Ordering::Relaxed);
         let reset = match r {
-            Ok(busy) => busy == 0,
+            Ok(busy) => Ok(busy == 0),
             Err(e)
                 if matches!(
                     e.sqlite_error_code(),
                     Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
                 ) =>
             {
-                false
+                Ok(false)
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => Err(e),
         };
-        if reset {
+        if let Ok(true) = reset {
             self.stats.truncates.fetch_add(1, Ordering::Relaxed);
             w.next_reset = (Instant::now(), 0);
         } else {
+            // Busy or an error: either way back off instead of retrying every page.
             self.stats.reset_failures.fetch_add(1, Ordering::Relaxed);
             w.next_reset = (Instant::now() + RESET_BACKOFF, size + RESET_BACKOFF_GROWTH);
         }
-        Ok((reset, took))
+        Ok((reset?, took))
     }
 
     fn passive(&self) -> Result<()> {
