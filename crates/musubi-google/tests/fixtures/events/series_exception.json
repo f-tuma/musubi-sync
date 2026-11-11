@@ -1,0 +1,18 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3425621100000000\"",
+  "id": "7s3r1e2s4m5a6s7t8e9r0abcde_20261109T080000Z",
+  "status": "confirmed",
+  "created": "2026-10-01T07:00:00.000Z",
+  "updated": "2026-11-05T15:21:00.000Z",
+  "summary": "Weekly sync (moved)",
+  "organizer": {"email": "anna@example.com", "self": true},
+  "start": {"dateTime": "2026-11-09T14:00:00+01:00", "timeZone": "Europe/Prague"},
+  "end": {"dateTime": "2026-11-09T14:45:00+01:00", "timeZone": "Europe/Prague"},
+  "recurringEventId": "7s3r1e2s4m5a6s7t8e9r0abcde",
+  "originalStartTime": {"dateTime": "2026-11-09T09:00:00+01:00", "timeZone": "Europe/Prague"},
+  "iCalUID": "7s3r1e2s4m5a6s7t8e9r0abcde@google.com",
+  "sequence": 2,
+  "reminders": {"useDefault": true},
+  "eventType": "default"
+}

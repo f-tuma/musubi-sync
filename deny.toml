@@ -32,6 +32,13 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.93
+exceptions = [
+    # Mozilla's root certificates as data, pulled by rustls-platform-verifier
+    # (reqwest 0.13 with rustls, musubi-google, K4). CDLA-Permissive-2.0 is a
+    # permissive data licence: use and redistribution without conditions beyond
+    # keeping the licence text.
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+]
 # The list covers the planned phase 1 stack; entries unused by today's tree are fine.
 unused-allowed-license = "allow"
 
@@ -43,6 +50,15 @@ multiple-versions = "deny"
 # Dependency direction between workspace crates is not checked here: cargo-deny
 # cannot tell dev-dependencies apart. See crates/musubi-testkit/tests/dependency_direction.rs.
 wildcards = "deny"
+skip = [
+    # syn 2 next to syn 3: jni-macros and jni-sys-macros (rustls-platform-verifier
+    # on Android, via reqwest in musubi-google, K4) and jiff-static are still on
+    # syn 2. Drop when they move to syn 3.
+    { crate = "syn@2", reason = "jni (rustls-platform-verifier) and jiff-static still use syn 2" },
+    # ring 0.17 pins windows-sys 0.52; everything else (tokio, rustls-platform-verifier)
+    # is on 0.61. ring is the rustls provider by decision (no aws-lc-rs). K4.
+    { crate = "windows-sys@0.52", reason = "ring 0.17 still uses windows-sys 0.52" },
+]
 
 [sources]
 unknown-registry = "deny"

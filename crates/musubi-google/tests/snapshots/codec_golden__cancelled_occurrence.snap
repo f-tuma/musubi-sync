@@ -1,0 +1,19 @@
+---
+source: crates/musubi-google/tests/codec_golden.rs
+expression: decode(stringify! (cancelled_occurrence))
+---
+{
+  "uid": "7s3r1e2s4m5a6s7t8e9r0abcde@google.com",
+  "recurrenceId": "2026-11-16T09:00:00",
+  "recurrenceIdTimeZone": "Europe/Prague",
+  "title": "",
+  "start": "2026-11-16T09:00:00",
+  "timeZone": "Europe/Prague",
+  "duration": "PT0S",
+  "showWithoutTime": false,
+  "status": "cancelled",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

@@ -1,0 +1,41 @@
+---
+source: crates/musubi-google/tests/codec_golden.rs
+expression: decode(stringify! (series_master))
+---
+{
+  "uid": "7s3r1e2s4m5a6s7t8e9r0abcde@google.com",
+  "title": "Weekly sync",
+  "start": "2026-10-05T09:00:00",
+  "timeZone": "Europe/Prague",
+  "duration": "PT30M",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "recurrenceRules": [
+    "FREQ=WEEKLY;BYDAY=MO;UNTIL=20261231T225959Z"
+  ],
+  "recurrenceOverrides": {
+    "2026-11-02T09:00:00": {
+      "excluded": true
+    },
+    "2026-11-04T09:00:00": {},
+    "2026-12-28T09:00:00": {
+      "excluded": true
+    }
+  },
+  "participants": {
+    "anna@example.com": {
+      "email": "anna@example.com",
+      "roles": {
+        "owner": true
+      },
+      "participationStatus": "needs-action",
+      "expectReply": false
+    }
+  },
+  "useDefaultAlerts": true,
+  "created": "2026-10-01T07:00:00Z",
+  "updated": "2026-11-05T15:20:00Z",
+  "sequence": 1
+}

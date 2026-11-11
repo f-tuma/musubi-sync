@@ -1,0 +1,19 @@
+---
+source: crates/musubi-google/tests/codec_golden.rs
+expression: decode(stringify! (unknown_field))
+---
+{
+  "uid": "unkn0wnf13ld0000000000000@google.com",
+  "title": "Event with a field Google added later",
+  "start": "2026-11-13T08:00:00",
+  "timeZone": "UTC",
+  "duration": "PT1H",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "useDefaultAlerts": false,
+  "created": "2026-11-04T10:00:00Z",
+  "updated": "2026-11-04T10:00:00Z",
+  "sequence": 0
+}

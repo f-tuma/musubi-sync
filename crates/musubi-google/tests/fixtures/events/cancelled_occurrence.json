@@ -1,0 +1,8 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3425621200000000\"",
+  "id": "7s3r1e2s4m5a6s7t8e9r0abcde_20261116T080000Z",
+  "status": "cancelled",
+  "recurringEventId": "7s3r1e2s4m5a6s7t8e9r0abcde",
+  "originalStartTime": {"dateTime": "2026-11-16T09:00:00+01:00", "timeZone": "Europe/Prague"}
+}
