@@ -1,6 +1,6 @@
 # musubi-sync: návrh samostatného synchronizačního primitiva
 
-**Datum:** 11. 11. 2026 · **Stav:** návrh k rozhodnutí, revize 5 · **Rozsah:** výzkum a architektura, žádná změna kódu
+**Datum:** 11. 11. 2026 · **Stav:** návrh k rozhodnutí, revize 6 · **Rozsah:** výzkum a architektura, žádná změna kódu
 
 Revize 6 zapisuje přijetí verdiktu o federaci a přechod Musubi najednou (kapitola 11.4). Revize 5 zapracovává rozhodnutí o ověřování a pozvánkách, která uživatel svěřil koordinátorovi. Jádro **nemá přihlašování koncových uživatelů** (kapitoly 1 a 7) a **koncové šifrování není cílem**. Pozvánky jsou nastavené tak, aby uživatel viděl **jednu pozvánku, úplný seznam účastníků a žádný spam** (kapitoly 12.7, 14.6, 14.7 a 14.9). Revize 4 přidala pravidla synchronizace v jádru ([kapitola 13](#13-pravidla-synchronizace)), plánování mezi tenanty ([kapitola 14](#14-plánování-mezi-tenanty)), posouzení federace ([kapitola 15](#15-federace)) a volitelné „smazat všude" (kapitola 12.7). Model jednoho záznamu na více místech je v [kapitole 12](#12-jeden-záznam-na-více-místech-entita-a-umístění). Stav rozhodnutí je v kapitole 11.4.
 
@@ -958,12 +958,12 @@ Beta `events/delta` se sleduje, ale návrh na ní nestojí.
 
 **Rozhodnuto uživatelem (11. 11. 2026, druhé kolo):**
 
-- **Federace:** verdikt z kapitoly 15.6 je přijat. Zúžený rozsah (jen plánovací zprávy, ve výchozím stavu vypnutá, povolení protějšci, podpisy RFC 9421, souhlas příjemce), fáze 10 po vydání 1.0, externí bezpečnostní revize jako podmínka.
-- **Přechod Musubi** proběhne najednou ve fázi přechodu: nová verze Musubi nad musubi-sync, ne postupné nahrazování po poskytovatelích. Otázky vlastních kalendářů Musubi (kapitola 14.5) a členství v kalendářích se rozhodnou v té fázi.
+- **Federace:** verdikt z kapitoly 15.6 je přijat. Zúžený rozsah (jen plánovací zprávy, ve výchozím stavu vypnutá, jen vyjmenovaní partneři, podpisy RFC 9421, souhlas příjemce), fáze 10 po vydání 1.0, externí bezpečnostní revize jako podmínka a stavba až na poptávku aspoň dvou provozovatelů.
+- **Přechod Musubi** proběhne najednou ve fázi 8 (kapitola 11.1): nová verze Musubi nad musubi-sync, ne postupné nahrazování po poskytovatelích. Otázky vlastních kalendářů Musubi (kapitola 14.5) a členství v kalendářích se rozhodnou v rámci fáze 8.
 
 **Zbývá rozhodnout:**
 
-1. **Úložiště.** SQLite na tenanta, nebo PostgreSQL. Uživatel počká na čísla z testu ve fázi 0 (`docs/research/phase0/storage.md`).
+1. **Úložiště.** SQLite na tenanta, nebo PostgreSQL. Uživatel počká na čísla z testu ve fázi 0; výstup bude v `docs/research/phase0/storage.md`.
 2. **Hostovaná instance nebo relé webhooků** provozované projektem: rozhodne se později; koordinátor uživateli tehdy předloží možnosti.
 
 **Platí doporučení, dokud nikdo nenamítne:**
