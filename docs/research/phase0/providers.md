@@ -1,6 +1,6 @@
 # Fáze 0: ověření faktů o poskytovatelích
 
-Stav k 2026-11-11. Podklad pro `docs/architecture/proposal.md`, revize 5. Návrh se tímto dokumentem nemění.
+Stav k 2026-11-11. Podklad pro `docs/architecture/proposal.md`, revize 6. Čísla kapitol a rizik jsou oproti revizi 5 stejná. Návrh se tímto dokumentem nemění.
 
 ## Otázka
 
@@ -115,7 +115,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
 - **Dopad (kap. 2.4, 12.7, bod 3).**
   - Adaptér musí posílat hlavičku vždy, i u subscriptions. Jinak se přesun mezi kalendáři projeví jako smazání a vytvoření s novým ID.
   - S hlavičkou by ID přesun téže schránky přežilo. To je dobrý základ pro párování přesunu.
-- **Živý test potřeba** (T3): jak přesun hlásí delta a subscription.
+- **Živý test potřeba** (T2): jak přesun hlásí delta a subscription.
 
 ### G5. Životnost subscriptions a jejich počet
 
@@ -155,7 +155,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - Stránka `event-delta` hlavičku uvádí bez stropu.
   - Konkrétní číslo pro Outlook jsem v oficiální dokumentaci nenašel. Často citovaných 1000 u `/messages` platí pro `$top`, ne pro delta **(neověřeno)**.
 - **Dopad (kap. 5.2):** dokud není strop změřený, posílat `Prefer: odata.maxpagesize` a číst skutečnou velikost stránky z odpovědi. Kód nesmí předpokládat, že ji server dodrží.
-- **Živý test potřeba** (T4).
+- **Živý test potřeba** (T3).
 
 ### G8. Potlačení pozvánek
 
@@ -168,12 +168,18 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - Neoficiální obchvat: [Glen Scales, Exchange MVP](https://glenscales.substack.com/p/workarounds-for-sendinvitationsmode), 2026-09-28.
     - Vytvořit událost s `isDraft=true` a pak přes rozšířené MAPI vlastnosti (MessageFlags, PidLidFInvited) přepnout příznaky.
     - Nepodporované a křehké.
-  - EWS jako náhradní cesta nepřipadá v úvahu ([Exchange Team](https://techcommunity.microsoft.com/blog/exchange/retirement-of-exchange-web-services-in-exchange-online/3924440), MC1227454, 2026-02-05). EWS v Exchange Online je od **2026-10-01** blokované, pokud správce výslovně nepovolí AppID, a **2027-04-01** se definitivně vypíná.
+  - EWS jako náhradní cesta nepřipadá v úvahu. Zdroje:
+    - [Exchange Team: „Exchange Online EWS, Your Time is Almost Up"](https://techcommunity.microsoft.com/blog/exchange/exchange-online-ews-your-time-is-almost-up/4492361), publikováno 2026-02-05, aktualizováno 2026-10-27;
+    - [MC1227454](https://mc.merill.net/message/MC1227454), 2026-02-05.
+  - Od 2026-10-01 Microsoft po tenantech **postupně** nastavuje `EWSEnabled=False`. Nejde o pevný zákaz k jednomu dni:
+    - seznam povolených AppID (`EWSAllowedAppIDs`) Microsoft předvyplní podle využití za posledních 60 dní, a to „a few days before" přepnutí daného tenanta ([Take control of your EWSAllowedAppIDs list](https://techcommunity.microsoft.com/blog/exchange/take-control-of-your-ewsallowedappids-list-before-ews-access-changes/4553534), 2026-09-04);
+    - správce může EWS znovu zapnout až do **2027-04-01**, kdy se definitivně vypíná bez výjimek.
+  - Posun seznamu povolených AppID na 2026-10-10, jak ho uvádí kontrola PR, jsem v těchto zdrojích nenašel **(neověřeno)**.
 - **Dopad (kap. 12.9, 14.6).**
   - Riziko 6 (kap. 11.3) platí pro Graph v plné míře.
   - Kopie schůzky bez účastníků je v Graphu jediná podporovaná bezpečná cesta. Bod 6 spiku je tím z dokumentace zodpovězen.
   - Obchvat přes `isDraft` do návrhu nedávat. Nanejvýš ho jednou živě vyzkoušet a zapsat jako zamítnutý.
-- **Živý test:** volitelný (T5, krok 3), jen pro záznam.
+- **Živý test:** volitelný (T4, krok 3), jen pro záznam.
 
 ### G9. Smí organizátor zapsat odpověď účastníka?
 
@@ -184,7 +190,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
 - **Dopad (kap. 11.3 riziko 6, kap. 14.6).**
   - Dokud test neprojde, adaptér Graphu musí hlásit schopnost „zápis odpovědi účastníka organizátorem" jako `false`.
   - Následek, který návrh popisuje: vnější účastníci uvidí „čeká".
-- **Živý test potřeba** (T5).
+- **Živý test potřeba** (T4).
 
 ### G10. Okno `transactionId`
 
@@ -195,7 +201,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
     - „No infinite deduplication window is assumed";
     - obnova je jen pozorovací, výpisem s hledáním `transactionId`.
 - **Dopad (kap. 12.5).** `transactionId` je pomocník pro rychlé opakování, ne idempotency klíč. Nejistý výsledek po delší době řeší pozorování, ne nový POST. Kap. 12.5 by to měla říct výslovně.
-- **Živý test potřeba** (T6), jen pro změření praktického okna. Návrh na výsledku stát nesmí.
+- **Živý test potřeba** (T5), jen pro změření praktického okna. Návrh na výsledku stát nesmí.
 
 ### G11. Podmíněné zápisy u To Do
 
@@ -204,7 +210,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - Zdroj: [todoTask-delta](https://learn.microsoft.com/en-us/graph/api/todotask-delta?view=graph-rest-1.0), aktualizace 2026-06-19. Delta je per seznam (`/me/todo/lists/{id}/tasks/delta`) a podporuje `Prefer: odata.maxpagesize`.
   - Musubi (`provider_profiles.ts`, profil `microsoft-task-update/delete-v1`): „A response ETag or preflight comparison cannot prove To Do conditional-write enforcement". Přenositelné UPDATE a DELETE jsou vypnuté.
 - **Dopad (kap. 3.5, 6.2, 12.6).** Do důkazu hlásit pro To Do `conditional_write: none`. Konflikty se pak řeší čtením před zápisem s vědomým oknem souběhu.
-- **Živý test potřeba** (T7).
+- **Živý test potřeba** (T6).
 
 ### G12. Delta kontaktů se složkou a bez ní
 
@@ -220,7 +226,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   2. pro každou složku spustit `contactFolders/{id}/contacts/delta`.
 
   Nedokumentovaná cesta bez složky do návrhu nepatří.
-- **Živý test:** volitelný (T8), jen jestli chceme mít pojistku.
+- **Živý test:** volitelný (T7), jen jestli chceme mít pojistku.
 
 ### G13. `changeKey` a `If-Match` u kontaktů a událostí
 
@@ -236,7 +242,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - Používat `@odata.etag` (ne `changeKey`) v `If-Match` a ověřit to zvlášť pro každý endpoint a typ účtu.
   - DELETE v Graphu považovat za nepodmíněný. Návrh by měl mít u Graphu schopnost `conditional_delete: false`.
   - Ztrátový počet e-mailů patří do profilu adaptéru.
-- **Živý test potřeba** (T7).
+- **Živý test potřeba** (T6).
 
 ### G14. Jak Graph hlásí přesun mezi kalendáři
 
@@ -245,7 +251,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - Přesun tedy dělá uživatel v klientu Outlook.
   - Podle G4 si s `ImmutableId` ID přesun ve stejné schránce drží. `calendarView/delta` je jen nad primárním kalendářem a přesun ven z něj ukáže jako `@removed`.
 - **Dopad (kap. 12.7, bod 3).** Párování přesunu podle neměnného ID je u Graphu reálné, ale jen když adaptér sleduje všechny kalendáře schránky.
-- **Živý test potřeba** (T3).
+- **Živý test potřeba** (T2).
 
 ---
 
@@ -271,7 +277,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
 - **Dopad (kap. 2.6, 5.4).**
   - Plánovat obnovu podle `expiration` vrácené serverem, ne podle konstanty.
   - Výchozí plán: obnova po 6 dnech.
-- **Živý test potřeba** (T9), jen požádat o 30 dní a přečíst `expiration`.
+- **Živý test potřeba** (T8), jen požádat o 30 dní a přečíst `expiration`.
 
 ### O3. Limity batch endpointu
 
@@ -311,10 +317,10 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - U `none` Google varuje: „can have significant adverse effects, including events not syncing to external calendars or events being lost altogether for some users".
   - Zdroj: [events resource](https://developers.google.com/workspace/calendar/api/v3/reference/events), pole `attendees[].responseStatus`. To, zda se událost účastníkovi s účtem Google objeví v kalendáři, řídí jeho nastavení „Add invitations to my calendar".
 - **Dopad (kap. 12.9, 14.6).**
-  - Kap. 14.6 platí. Zkoušku „přidat místního účastníka samostatným PATCH se `sendUpdates=none`" provést (T10).
+  - Kap. 14.6 platí. Zkoušku „přidat místního účastníka samostatným PATCH se `sendUpdates=none`" provést (T9).
   - Výslovné varování o ztrátě událostí u `none` je důvod nepoužívat `none` u schůzek s vnějšími účastníky. Doplnit do kap. 14.6.
   - Tvrzení „Google vloží událost účastníkovi s účtem Google i bez e-mailu" je ověřené jen nepřímo: závisí na jeho nastavení.
-- **Živý test potřeba** (T10).
+- **Živý test potřeba** (T9).
 
 ### O6. Smí organizátor zapsat `attendees[].responseStatus`?
 
@@ -325,7 +331,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
 - **Dopad (kap. 11.3 riziko 6, 14.6).**
   - U Googlu jde odpověď místního účastníka do položky organizátora zapsat, takže ji vnější účastníci uvidí.
   - Riziko je ve vedlejších účincích u účastníků s Google účtem. Zda se zápis drží i u účastníka, který je zároveň uživatelem Google, je potřeba vyzkoušet.
-- **Živý test potřeba** (T10, krok 4).
+- **Živý test potřeba** (T9, krok 4).
 
 ### O7. Google Tasks: klientská ID, skryté pole pro značku, sync tokeny
 
@@ -342,7 +348,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - „Google Tasks značku neunese" platí. Jediná možnost je viditelný text v `notes`, a to návrh správně nechce.
   - Nejistý výsledek vytvoření se řeší pozorováním podle obsahu.
   - Inkrement přes `updatedMin` je závislý na hodinách serveru. Brát ho s přesahem, například `updatedMin = poslední_updated − 1 min`, a deduplikovat podle `etag`.
-- **Živý test potřeba** (T11). Ověřit, že klientské `id` v `insert` server ignoruje nebo odmítne, a že `updatedMin` vrací smazané a skryté úkoly.
+- **Živý test potřeba** (T10). Ověřit, že klientské `id` v `insert` server ignoruje nebo odmítne, a že `updatedMin` vrací smazané a skryté úkoly.
 
 ### O8. People API: kvóty, `clientData`, etag, sync token, push
 
@@ -379,7 +385,7 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - [events.move](https://developers.google.com/workspace/calendar/api/v3/reference/events/move) (2026-05-12): přesun „changes an event's organizer" a jde jen u událostí typu `default`.
   - Jak to vypadá v inkrementálním syncu zdrojového a cílového kalendáře, dokumentace neříká. Očekává se, že ve zdroji přijde `status: cancelled` a v cíli nová položka se **stejným** `id`.
 - **Dopad (kap. 12.7, bod 3):** pokud se očekávání potvrdí, párovat podle `id` a `iCalUID`.
-- **Živý test potřeba** (T3).
+- **Živý test potřeba** (T2).
 
 ### O11. Značka entity u událostí Google
 
@@ -404,22 +410,27 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - [vdirsyncer #1145](https://github.com/pimutils/vdirsyncer/issues/1145) hlásí `403` při PUT s `If-Match` na iCloud CardDAV. To je samostatné riziko pro zápis.
 - **Expirace tokenu na iCloudu: neověřeno.**
 - **Dopad (kap. 2.7, 3.3).** Profil serveru musí `sync-collection` zjistit z `supported-report-set`, nepředpokládat ho, a mít záložní ctag s PROPFIND ETagů. Tak to návrh už popisuje.
-- **Živý test potřeba** (T12).
+- **Živý test potřeba** (T11).
 
 ### I2. Dodržuje iCloud `SCHEDULE-AGENT=CLIENT`?
 
 - **Ověřeno sekundárně, negativně.**
-  - [pv-icloud #24](https://github.com/HappyCynic/pv-icloud/issues/24), přibližně 2026-10:
+  - Jediný zdroj je review komentář uživatele mwklein z **2026-10-13** v [pv-icloud #24](https://github.com/HappyCynic/pv-icloud/issues/24#issuecomment-6148936921). Nejde o text samotného issue. Repozitář HappyCynic/pv-icloud má 1 hvězdičku. Podle komentáře proběhl test 2026-10-13 na testovacím kalendáři s těmito výsledky:
     - iCloud inzeruje `calendar-auto-schedule` a `SCHEDULE-AGENT=CLIENT` **ignoruje**;
     - událost s vnějším účastníkem poslala pozvánku s parametrem i bez něj;
     - iCloud nastavil `SCHEDULE-STATUS=1.1`;
-    - odpovědi účastníků server do kopie organizátora zapíše sám během minut.
+    - odpovědi účastníků server do kopie organizátora zapíše sám během minut (decline nastavil `PARTSTAT=DECLINED` a změnil ETag);
+    - **podmíněné zápisy fungují**: `If-None-Match: *` při vytvoření vrátí `201`, DELETE s `If-Match` vrátí `204`, zastaralý ETag vrátí **`412`** a nic nezmění;
+    - iCloud **přepisuje vlastní adresy účtu** v `ORGANIZER` a `ATTENDEE` na cestu principalu s adresou v parametru `EMAIL=` (dopad na I3);
+    - smazání události s vnějším účastníkem (2 pokusy) **neposlalo zrušení**; úpravy test nezkoušel.
   - Opačný zdroj ([compass-calendar #3260](https://github.com/KeepSoftwareSimple/compass-calendar/issues/3260)) je jen nevyzkoušený plán.
   - Podle RFC 6638 §3.1 server plánuje jen tehdy, když `ORGANIZER` patří vlastníkovi kalendáře. Zda iCloud nepošle pozvánku, když `ORGANIZER` chybí nebo je cizí, je **neověřené**.
 - **Dopad (kap. 12.9, 14.6).**
   - Na iCloudu nejde pozvánku potlačit parametrem. Kap. 14.6 by měla iCloud vést stejně jako Graph: kopie bez účastníků, nebo e-mail navíc.
   - Návrh to snese, protože selhání znamená e-mail navíc, ne druhou pozvánku v kalendáři. Riziko 6 se ale rozšíří i na iCloud.
-- **Živý test potřeba** (T13). Jde o jedinou zkoušku z jednoho zdroje a test zároveň pošle skutečnou pozvánku, takže jen na vlastní testovací adresy.
+  - Pokud se `412` u zastaralého ETagu potvrdí, má iCloud CalDAV skutečný CAS a kap. 3.5 na něj může stavět. To je v rozporu s `403` z vdirsyncer #1145 u CardDAV (I1), proto test zvlášť pro obě služby.
+  - Smazání bez zrušení znamená, že vnější účastník si u sebe ponechá událost, která už neexistuje. Doplnit do kap. 12.7 a 14.6 jako známé chování iCloudu.
+- **Živý test potřeba** (T12). Jde o jedinou zkoušku z jednoho zdroje a test zároveň pošle skutečnou pozvánku, takže jen na vlastní testovací adresy.
 
 ### I3. `calendar-user-address-set`
 
@@ -427,8 +438,11 @@ Zdroje jsou uvedeny u každého faktu. Pokud není u data uvedeno jinak, znamen�
   - Musubi vlastnost čte (`apps/api/src/sync/caldav_scheduling.ts:82`) s `schedule-outbox-URL`, ale v testech jen proti falešnému serveru.
   - Veřejný zdroj s obsahem odpovědi iCloudu jsem nenašel.
   - Podle RFC 6638 obsahuje `mailto:` adresy a případně URN. Očekávají se e-maily Apple Account, tedy `@icloud.com` a aliasy.
-- **Dopad (kap. 14.2).** Do potvrzení nebrat adresy z vlastnosti jako ověřené pro mezitenantové plánování bez dalšího kroku. Návrh ověřuje identitu účtu jen přes přihlášení.
-- **Živý test potřeba** (T13, krok 1).
+  - Podle komentáře z I2 iCloud v uložené události nahrazuje vlastní adresy účtu cestou principalu s parametrem `EMAIL=` (sekundární zdroj, jeden test).
+- **Dopad (kap. 14.2).**
+  - Do potvrzení nebrat adresy z vlastnosti jako ověřené pro mezitenantové plánování bez dalšího kroku. Návrh ověřuje identitu účtu jen přes přihlášení.
+  - Normalizace adres musí `ORGANIZER` či `ATTENDEE` ve tvaru cesty principalu s `EMAIL=` převést na tu e-mailovou adresu a považovat ji za vlastní adresu účtu. Jinak párování účastníků (kap. 14.2, 14.7) uvidí po prvním zápisu na iCloud jinou adresu, než jakou zapsalo.
+- **Živý test potřeba** (T12, krok 1).
 
 ### I4. Plánování na iCloudu
 
@@ -514,8 +528,13 @@ JWKS v `jsonwebtoken` (zdrojový kód `src/jwk.rs`, `src/decoding.rs`):
 Advisories:
 
 - `rustsec/advisory-db` nemá žádný záznam pro `oauth2`, `openidconnect` ani `jsonwebtoken`.
-- `openidconnect` ale závisí na `rsa` 0.9 s **RUSTSEC-2023-0071** (Marvin, časový postranní kanál při operacích se soukromým klíčem). Ověřování podpisů veřejným klíčem, jediné, co děláme, to nezasahuje.
-- `cargo-deny` ho přesto nahlásí a výjimku je potřeba vědomě zapsat.
+- Obě knihovny ale tranzitivně táhnou `rsa` 0.9 s **RUSTSEC-2023-0071** (Marvin, časový postranní kanál při operacích se soukromým klíčem):
+  - `openidconnect` 4.1.0 závisí na `rsa ^0.9.2` povinně;
+  - `jsonwebtoken` 11.1.0 s backendem `rust_crypto` (`Cargo.toml`: `rust_crypto = [..., "dep:rsa"]`) závisí na `rsa ^0.9.6`.
+- Ověřování podpisů veřejným klíčem, jediné, co děláme, to nezasahuje. `cargo-deny` ho přesto nahlásí. Výjimka se týká **obou** crates a je potřeba ji vědomě zapsat.
+- Advisory nyní uvádí `patched = [">= 0.10.0"]` a `rsa` 0.10.0 vyšlo 2026-11-08 (crates.io). Výjimka je dočasná: čekáme, až `openidconnect` a `jsonwebtoken` přejdou na `rsa` 0.10. Pak výjimku odstranit.
+- Zdvojené kryptografické verze: `openidconnect` 4.1.0 používá `p256`/`p384` 0.14 a `ed25519-dalek` 3, kdežto `jsonwebtoken` 11.1.0 (`rust_crypto`) `p256`/`p384` 0.13 a `ed25519-dalek` 2. Strom závislostí tak ponese obě řady RustCrypto (delší build, větší binárka, dvojí audit). `cargo-deny` je ohlásí jako `multiple-versions` a potřebují výjimku, dokud se crates nesrovnají.
+- `jsonwebtoken` 11.1.0 má v `Cargo.toml` odznak `maintenance = "passively-maintained"`, přestože vydání přicházejí pravidelně.
 
 - **Dopad (kap. 8).**
   - Hodnocení „zralé" platí pro `oauth2` a `jsonwebtoken`.
@@ -552,7 +571,7 @@ Společná pravidla pro všechny testy:
 5. Porovnat `iCalUId` hlavní události s UID v `.ics` exportu a s `iCalUId` téže schůzky ve schránce pozvaného. Zkontrolovat i `uid` z bety.
 6. Pak změnit jednu výjimku a zavolat `GET /me/calendarView/delta` s předchozím delta tokenem. Očekává se položka výskytu typu `exception`. Zaznamenat, zda nese `seriesMasterId`.
 
-**T3. Přesun mezi kalendáři (G4, G14, O10).**
+**T2. Přesun mezi kalendáři (G4, G14, O10).**
 
 - Graph:
   1. Ve dvou kalendářích téže schránky a s `Prefer: IdType="ImmutableId"` přesunout událost v klientu Outlook.
@@ -563,9 +582,9 @@ Společná pravidla pro všechny testy:
   2. Inkrementální `events.list` se `syncToken` v A i v B.
   - Očekávání: v A `status: cancelled` se stejným `id`, v B nová položka se stejným `id` a `iCalUID`.
 
-**T4. Strop `maxpagesize` (G7).** `GET /me/calendarView/delta` s `Prefer: odata.maxpagesize=1000`, potom 5000, nad kalendářem s více než 6000 událostmi. Zaznamenat skutečnou velikost stránek a hlavičku `Preference-Applied`.
+**T3. Strop `maxpagesize` (G7).** `GET /me/calendarView/delta` s `Prefer: odata.maxpagesize=1000`, potom 5000, nad kalendářem s více než 6000 událostmi. Zaznamenat skutečnou velikost stránek a hlavičku `Preference-Applied`.
 
-**T5. Odpověď účastníka a pozvánky v Graphu (G8, G9).**
+**T4. Odpověď účastníka a pozvánky v Graphu (G8, G9).**
 
 1. Organizátor A vytvoří schůzku s účastníkem B, testovací adresou mimo tenant.
 2. `PATCH` události u A s `attendees: [{emailAddress: B, type: required, status: {response: "accepted"}}]`.
@@ -573,13 +592,13 @@ Společná pravidla pro všechny testy:
    - Dostal B e-mail?
 3. Volitelně zkusit obchvat přes `isDraft=true` a MAPI (G8) a zapsat výsledek jako zamítnutou cestu.
 
-**T6. Okno `transactionId` (G10).**
+**T5. Okno `transactionId` (G10).**
 
 - Dvakrát `POST /me/calendars/{id}/events` se stejným `transactionId` s odstupem 1 s, 1 min, 10 min a 1 h, vždy na novou událost.
 - Zaznamenat, kdy začne server vytvářet duplikát.
 - Výsledek slouží jen pro informaci.
 
-**T7. Podmíněné zápisy v Graphu (G11, G13). Pro event, contact a todoTask, na pracovním i osobním účtu:**
+**T6. Podmíněné zápisy v Graphu (G11, G13). Pro event, contact a todoTask, na pracovním i osobním účtu:**
 
 1. `GET` uloží `@odata.etag`.
 2. Upravit v jiném klientovi.
@@ -588,11 +607,11 @@ Společná pravidla pro všechny testy:
 5. Totéž s `changeKey` v `If-Match`.
 6. Kontakt: zapsat 4 e-maily a zjistit, kolik jich server uloží.
 
-**T8. Delta kontaktů bez složky (G12, volitelné).** Kontakty ve výchozí a ve vlastní složce. `GET /me/contacts/delta` a porovnat s deltami po složkách.
+**T7. Delta kontaktů bez složky (G12, volitelné).** Kontakty ve výchozí a ve vlastní složce. `GET /me/contacts/delta` a porovnat s deltami po složkách.
 
-**T9. Životnost watch kanálu Google (O2).** `events.watch` s `expiration` nastaveným na teď + 30 dní a druhý požadavek bez `expiration`. Zapsat vrácené `expiration`.
+**T8. Životnost watch kanálu Google (O2).** `events.watch` s `expiration` nastaveným na teď + 30 dní a druhý požadavek bez `expiration`. Zapsat vrácené `expiration`.
 
-**T10. Pozvánky a odpovědi v Googlu (O5, O6).**
+**T9. Pozvánky a odpovědi v Googlu (O5, O6).**
 
 1. Organizátor A vytvoří událost se `sendUpdates=none` a bez účastníků.
 2. `PATCH` přidá účastníka C (účet Google) se `sendUpdates=none`.
@@ -601,31 +620,34 @@ Společná pravidla pro všechny testy:
 3. Změnit čas se `sendUpdates=none`. Dostal C oznámení?
 4. A zapíše `attendees[C].responseStatus=accepted`. Drží se, nebo se vrátí na `needsAction`? Opakovat s účastníkem mimo Google.
 
-**T11. Google Tasks (O7).**
+**T10. Google Tasks (O7).**
 
 - `tasks.insert` s tělem obsahujícím `id`. Očekává se, že server ID ignoruje nebo odmítne.
 - Smazat a dokončit úkol, vyčistit seznam.
 - `tasks.list` s `updatedMin`, `showDeleted=true` a `showHidden=true`. Očekává se, že vrátí smazané i skryté úkoly.
 
-**T12. iCloud `sync-collection` (I1).**
+**T11. iCloud `sync-collection` (I1).**
 
 1. PROPFIND `supported-report-set` na kolekci kalendáře i adresáře.
 2. `REPORT sync-collection` s prázdným tokenem, pak s vráceným tokenem po jedné změně.
 3. Token starý 30 dní: zaznamenat chybu, očekává se `valid-sync-token` precondition.
 4. PUT s `If-Match` na kontakt, kvůli `403` z vdirsyncer #1145.
 
-**T13. Plánování na iCloudu (I2, I3).**
+**T12. Plánování na iCloudu (I2, I3).**
 
 1. PROPFIND `calendar-user-address-set` a `schedule-outbox-URL` na principalu.
 2. PUT události s `ORGANIZER` vlastníka a jedním `ATTENDEE;SCHEDULE-AGENT=CLIENT` na vlastní testovací adresu. Přišel e-mail? Jakou hodnotu má `SCHEDULE-STATUS`?
-3. Totéž bez `ORGANIZER` a s cizím `ORGANIZER`.
+3. Totéž bez `ORGANIZER` a s cizím `ORGANIZER`. I cizí `ORGANIZER` musí být adresa, kterou testovací tým vlastní: iCloud by jinak mohl poslat odpověď (REPLY) cizímu člověku.
+4. DELETE události s vnějším účastníkem: přišlo zrušení (CANCEL)? Zopakovat pro úpravu času.
+5. PUT a DELETE se zastaralým ETagem v `If-Match`. Očekává se `412`.
+6. Číst uloženou událost zpět: mají vlastní adresy tvar cesty principalu s `EMAIL=`?
 
 ---
 
 ## Verdikt a doporučení
 
 1. **Model jedné položky na sérii v Graphu má oporu v dokumentaci.** Úplnost výjimek a stránkování je ale jen živá otázka (T1). Spike z kap. 11.2 zůstává podmínkou, rozhodovací tabulka platí.
-2. **Pozvánky.** Graph potlačení nemá (ověřeno) a EWS jako náhrada končí 2027-04-01. iCloud `SCHEDULE-AGENT=CLIENT` podle jediného veřejného testu ignoruje. Kap. 14.6 doporučuji upravit: potlačení je podporované jen u Googlu (celý požadavek) a u obecného CalDAV podle profilu. Pro Graph a iCloud je bezpečnou cestou kopie bez účastníků.
+2. **Pozvánky.** Graph potlačení nemá (ověřeno) a EWS jako náhrada končí 2027-04-01. iCloud `SCHEDULE-AGENT=CLIENT` podle jediného veřejného testu ignoruje a podle téhož testu při smazání neposílá zrušení. Kap. 14.6 doporučuji upravit: potlačení je podporované jen u Googlu (celý požadavek) a u obecného CalDAV podle profilu. Pro Graph a iCloud je bezpečnou cestou kopie bez účastníků.
 3. **Odpověď účastníka u organizátora.** U Googlu je pole zapisovatelné, s vedlejšími účinky. U Graphu je to neověřené a výchozí schopnost je `false`.
 4. **Podmíněné zápisy nejsou u Graphu jednotné.** Používat `@odata.etag`, ne `changeKey`. DELETE brát jako nepodmíněný a To Do jako bez CAS. Schopnosti v kap. 6.2 rozdělit na `conditional_update` a `conditional_delete` po typu položky.
 5. **`transactionId` není idempotency klíč.** Okno není dokumentované, obnova je pozorovací.
@@ -639,17 +661,18 @@ Společná pravidla pro všechny testy:
    - neověřená aplikace Google 100 uživatelů;
    - iCloud 25 hesel pro aplikace;
    - Google Calendar nově s denním prahem 1 000 000 požadavků na projekt.
-8. **Rust:** `oauth2`, `openidconnect` a `jsonwebtoken` jsou použitelné a s permisivní licencí. Cache JWKS je vlastní kód. U `openidconnect` zapsat výjimku pro RUSTSEC-2023-0071 v `cargo-deny`.
+8. **Rust:** `oauth2`, `openidconnect` a `jsonwebtoken` jsou použitelné a s permisivní licencí. Cache JWKS je vlastní kód. RUSTSEC-2023-0071 (`rsa` 0.9) táhne `openidconnect` i `jsonwebtoken` s `rust_crypto`; výjimka v `cargo-deny` pro oba, dočasně, dokud nepřejdou na opravené `rsa` 0.10. Strom ponese dvojí řadu `p256`/`ed25519-dalek`.
 9. **WebDAV-Push** je experimentální soukromý draft mimo IETF se čtyřmi serverovými implementacemi. Jen jako volitelná schopnost po 1.0.
 
 ## Otevřené riziko
 
 - **Pozvánky navíc u Graphu a iCloudu jsou nevyhnutelné**, pokud má položka u poskytovatele účastníky. Riziko 6 je tím širší, než návrh uvádí.
-- **iCloud bez dokumentace:** chování se může změnit bez ohlášení (I1–I5). Jediný zdroj k `SCHEDULE-AGENT` je jeden issue.
+- **iCloud bez dokumentace:** chování se může změnit bez ohlášení (I1–I5). Jediný zdroj k `SCHEDULE-AGENT`, `412` a smazání bez zrušení je jeden review komentář (mwklein, 2026-10-13) v repozitáři s 1 hvězdičkou.
 - **`maxpagesize` a stránkování výjimek v Graphu** nejsou známé. Úvodní sync může být pomalejší než odhad v kap. 5.2.
 - **Watch kanál Google** má maximum nedokumentované. Obnova se musí řídit vrácenou expirací.
 - **Kvóty People API** nejsou veřejné, takže kapacitu pro kontakty nejde předem spočítat.
 - **Nový denní práh Google Calendar** (1 000 000 na projekt, od 2026-05-01) s ohlášeným budoucím účtováním může změnit ekonomiku hostované služby.
+- **Vnější účastník iCloud schůzky** si po smazání ponechá neplatnou kopii, pokud se chybějící zrušení potvrdí (T12 krok 4).
 - **Sekundární zdroje** (Q&A, blogy, issues) jsou označené a mohou být zastaralé. Musubi sondy platí jen pro zaznamenané typy účtů.
 
 ## Souhrnná tabulka
@@ -659,38 +682,41 @@ Společná pravidla pro všechny testy:
 | Graph: `exceptionOccurrences`/`cancelledOccurrences` přes `$select`+`$expand` jen na GET hlavní události | ano (dok.) | model sérií má oporu (11.2) | ano, T1: úplnost polí, stovky výjimek |
 | Graph: `iCalUId` se liší pro každý výskyt; `uid` jen v betě | ano (dok.) | korelace sérií přes `uid` (beta) nebo `iCalUId` hlavní události (2.4) | ano, T1 krok 5 |
 | Graph: `events/delta` jen v betě; v1.0 `calendarView/delta` jen primární kalendář, bez `$select` | ano (dok.) | sekundární kalendáře přes subscription a dotazování (2.6, 11.2) | ano, T1 krok 6 |
-| Graph: immutable ID přes `Prefer` u každého požadavku i subscription | ano (dok.) | povinná hlavička v adaptéru (2.4, 12.7) | ano, T3 (přesun) |
+| Graph: immutable ID přes `Prefer` u každého požadavku i subscription | ano (dok.) | povinná hlavička v adaptéru (2.4, 12.7) | ano, T2 (přesun) |
 | Graph: subscription 10 080 min, todoTask 4 230 min, 1 000 na schránku | ano (dok.) | potvrzuje 2.6 | ne |
 | Graph: `$batch` 20, 4 souběžné, 10 000 / 10 min | ano (dok.) | semafor 4 i pro dávky (5.3) | ne |
-| Graph: strop `odata.maxpagesize` | ne | nepředpokládat velikost stránky (5.2) | ano, T4 |
-| Graph: potlačení pozvánek | ano, neexistuje | kopie bez účastníků; EWS končí 2027-04-01 (12.9, 14.6) | volitelný, T5 krok 3 |
-| Graph: organizátor zapíše odpověď účastníka | ne | výchozí schopnost `false` (11.3 r. 6, 14.6) | ano, T5 |
-| Graph: okno `transactionId` | ano, nedokumentováno | jen pomocník, obnova pozorováním (12.5) | informativně, T6 |
-| Graph: To Do podmíněný zápis | ne | `conditional_write: none` (3.5, 6.2) | ano, T7 |
-| Graph: delta kontaktů bez složky | ne (jen Q&A) | stavět na deltě po složkách (2.7) | volitelný, T8 |
-| Graph: `If-Match` u kontaktů a událostí | ne (Q&A + Musubi sonda) | `@odata.etag`, DELETE nepodmíněný (2.7, 3.5) | ano, T7 |
-| Graph: počet e-mailů kontaktu | ne | ztrátovost v profilu (2.7) | ano, T7 krok 6 |
-| Graph: hlášení přesunu mezi kalendáři | ne | párování podle immutable ID (12.7) | ano, T3 |
+| Graph: strop `odata.maxpagesize` | ne | nepředpokládat velikost stránky (5.2) | ano, T3 |
+| Graph: potlačení pozvánek | ano, neexistuje | kopie bez účastníků; EWS končí 2027-04-01 (12.9, 14.6) | volitelný, T4 krok 3 |
+| Graph: organizátor zapíše odpověď účastníka | ne | výchozí schopnost `false` (11.3 r. 6, 14.6) | ano, T4 |
+| Graph: okno `transactionId` | ano, nedokumentováno | jen pomocník, obnova pozorováním (12.5) | informativně, T5 |
+| Graph: To Do podmíněný zápis | ne | `conditional_write: none` (3.5, 6.2) | ano, T6 |
+| Graph: delta kontaktů bez složky | ne (jen Q&A) | stavět na deltě po složkách (2.7) | volitelný, T7 |
+| Graph: `If-Match` u kontaktů a událostí | ne (Q&A + Musubi sonda) | `@odata.etag`, DELETE nepodmíněný (2.7, 3.5) | ano, T6 |
+| Graph: počet e-mailů kontaktu | ne | ztrátovost v profilu (2.7) | ano, T6 krok 6 |
+| Graph: hlášení přesunu mezi kalendáři | ne | párování podle immutable ID (12.7) | ano, T2 |
 | Google: events `maxResults` 2500, výchozí 250 | ano (dok.) | potvrzuje 5.2 | ne |
-| Google: watch TTL výchozí 604 800 s, maximum nedokumentované | částečně | obnova podle vrácené expirace (2.6, 5.4) | ano, T9 |
+| Google: watch TTL výchozí 604 800 s, maximum nedokumentované | částečně | obnova podle vrácené expirace (2.6, 5.4) | ano, T8 |
 | Google: batch 1000 volání, počítá se N× | ano (dok.) | batch šetří kola, ne kvótu (5.2) | ne |
 | Google: klientské ID base32hex 5–1024 | ano (dok.) | potvrzuje 12.5; UUID → base32hex | ne |
-| Google: `sendUpdates` jen na celý požadavek; `none` varování o ztrátě | ano (dok.) | potvrzuje 14.6; nepoužívat `none` u vnějších | ano, T10 |
-| Google: organizátor zapíše `responseStatus` | ano (writable) s výhradou | odpověď viditelná, riziko resetu (14.6) | ano, T10 krok 4 |
+| Google: `sendUpdates` jen na celý požadavek; `none` varování o ztrátě | ano (dok.) | potvrzuje 14.6; nepoužívat `none` u vnějších | ano, T9 |
+| Google: organizátor zapíše `responseStatus` | ano (writable) s výhradou | odpověď viditelná, riziko resetu (14.6) | ano, T9 krok 4 |
 | Google Tasks: bez skrytého pole, bez sync tokenu, bez push, stránka 100 | ano (dok.) | potvrzuje 12.10, 13.4 | ne |
-| Google Tasks: klientské ID | ne (nedokumentováno) | pozorování podle obsahu (12.5) | ano, T11 |
+| Google Tasks: klientské ID | ne (nedokumentováno) | pozorování podle obsahu (12.5) | ano, T10 |
 | People: etag povinný, `400 failedPrecondition` | ano (dok.) | mapovat na konflikt (2.7) | ne |
 | People: sync token 7 dní, bez push, stránka 1000, `clientData` | ano (dok.) | potvrzuje 2.7, 12.10 | ne |
 | People: minutové kvóty | ne (jen konzole) | adaptivně na `429`, souběžnost 1 (5.3) | ne (konzole) |
 | Google: neověřená aplikace 100 uživatelů | ano (dok.) | doplnit do 11.3 r. 12 | ne |
-| Google: hlášení `events.move` v syncu | ne | párování podle `id` (12.7) | ano, T3 |
-| iCloud: CalDAV `sync-collection` | ano (sekundárně) | potvrzuje 3.3 | ano, T12 |
-| iCloud: CardDAV `sync-collection` | ne | zjišťovat z `supported-report-set` (2.7) | ano, T12 |
-| iCloud: `SCHEDULE-AGENT=CLIENT` dodržen | ne, sekundárně ignorován | iCloud jako Graph, kopie bez účastníků (14.6) | ano, T13 |
-| iCloud: `calendar-user-address-set` | ne | adresy neověřené bez dalšího kroku (14.2) | ano, T13 krok 1 |
+| Google: hlášení `events.move` v syncu | ne | párování podle `id` (12.7) | ano, T2 |
+| iCloud: CalDAV `sync-collection` | ano (sekundárně) | potvrzuje 3.3 | ano, T11 |
+| iCloud: CardDAV `sync-collection` | ne | zjišťovat z `supported-report-set` (2.7) | ano, T11 |
+| iCloud: `SCHEDULE-AGENT=CLIENT` dodržen | ne, sekundárně ignorován | iCloud jako Graph, kopie bez účastníků (14.6) | ano, T12 |
+| iCloud CalDAV: zastaralý `If-Match` → `412` | sekundárně (1 test) | CAS u CalDAV možný (3.5) | ano, T12 krok 5 |
+| iCloud: smazání s vnějším účastníkem bez zrušení | sekundárně (1 test) | vnější kopie zůstane (12.7, 14.6) | ano, T12 krok 4 |
+| iCloud: `calendar-user-address-set`; přepis vlastních adres na cestu principalu s `EMAIL=` | ne (přepis jen sekundárně) | normalizace adres, adresy neověřené bez dalšího kroku (14.2) | ano, T12 krok 1 |
 | iCloud: limity rychlosti | ne (nezveřejněno) | konzervativní souběžnost, `Retry-After` (5.3) | ne (jen metriky) |
 | iCloud: 25 hesel pro aplikace, zrušení při změně hesla | ano (sekundárně) | `401` znamená výzvu uživateli (3.1, 7) | ne |
 | WebDAV-Push: soukromý draft -00, mimo IETF, 4 serverové implementace | ano | volitelná schopnost po 1.0 (5.4) | ne |
 | `oauth2` 5.0.0, `openidconnect` 4.1.0, `jsonwebtoken` 11.1.0: aktivní, MIT/Apache | ano | potvrzuje kap. 8; cache JWKS vlastní | ne |
-| `openidconnect` → `rsa` RUSTSEC-2023-0071 | ano | výjimka v `cargo-deny`, ověřování nezasaženo | ne |
+| `openidconnect` a `jsonwebtoken` (`rust_crypto`) → `rsa` 0.9, RUSTSEC-2023-0071; opraveno v `rsa` 0.10.0 | ano | dočasná výjimka v `cargo-deny` pro oba crates, ověřování nezasaženo (8) | ne |
+| Zdvojené `p256` 0.13/0.14 a `ed25519-dalek` 2/3 | ano | výjimka `multiple-versions`, delší build (8) | ne |
 | DAVx⁵ GPL-3.0, Nango ELv2 | ano | potvrzuje kap. 1 | ne |
