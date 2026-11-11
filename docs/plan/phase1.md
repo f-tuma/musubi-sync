@@ -30,7 +30,7 @@ Jeden Cargo workspace, `edition = "2024"`, licence MIT, toolchain stable připnu
 | `musubi-google` | `Provider` a `PushSource` pro Google Calendar (transport, stránkování, watch kanály, obnova tokenu) a `Codec<Event>` pro JSON událostí | `musubi-model` |
 | `musubi-engine` | aktor účtu, plánovač nad trvalou frontou úloh, příjem stránek, sloučení do entity, index výskytů, žurnál, sběrnice změn, pojistky mazání | `musubi-model`, `musubi-recurrence` |
 | `musubi-syncd` | binárka: konfigurace, HTTP API (`axum`), SSE, příjem webhooků, průkazy volajících, OAuth tok, šifrování tokenů, příkazy `serve`, `backup`, `restore` | všechny výše |
-| `musubi-testkit` | falešný server Google, harness pro `kill -9`, fixtures, generátor zátěže pro benchmarky; `publish = false`, jen dev-závislost a vlastní binárky | `musubi-model` |
+| `musubi-testkit` | falešný server Google, skriptovaný `FakeProvider` (`Provider` a `PushSource` v paměti), harness pro `kill -9`, fixtures, generátor zátěže pro benchmarky; `publish = false`, jen dev-závislost a vlastní binárky | `musubi-model` |
 
 Směr závislostí:
 
@@ -49,9 +49,9 @@ Směr závislostí:
 Pravidla:
 
 - `musubi-model` nezávisí na žádném crate projektu a nedělá I/O.
-- Engine nezná SQLite ani Google. Pracuje proti traitům; v testech dostane `musubi-store-sqlite` nad dočasným adresářem a falešný server z `musubi-testkit`.
+- Engine nezná SQLite ani Google. Pracuje proti traitům. V testech dostane `musubi-store-sqlite` nad dočasným adresářem a `FakeProvider` z `musubi-testkit`: skriptované stránky, chyby (`CursorExpired`, `ReauthRequired`, `RateLimited`) a oznámení, s počítadlem volání. Obojí jsou dev-závislosti. `musubi-google` engine nepoužívá ani v testech; cestu engine + adaptér + falešný server Google testuje `musubi-syncd` v K6 a K7. Proto K5 nezávisí na K4.
 - Adaptér nezná engine ani úložiště.
-- `musubi-store-sqlite` a `musubi-google` smí přímo použít jen `musubi-syncd` (a testy). CI to hlídá: `cargo-deny` v sekci `bans` s výčtem `wrappers` **(neověřeno: přesná syntaxe se ověří v K0)**.
+- `musubi-store-sqlite` a `musubi-google` smí přímo použít jen `musubi-syncd` (a testy). Dev-závislosti pro testy jsou povolené. CI to hlídá: `cargo-deny` v sekci `bans` s výčtem `wrappers` **(neověřeno: přesná syntaxe a to, zda jde odlišit dev-závislosti, se ověří v K0)**.
 
 Co záměrně nevzniká:
 
@@ -85,18 +85,18 @@ Podmínky z kapitoly 4.3 návrhu jsou požadavky. Fáze 1 plní všechny, které
 | --- | --- | --- |
 | build s `SQLITE_DEFAULT_MEMSTATUS=0` (`LIBSQLITE3_FLAGS` v `.cargo/config.toml`) | ano | — |
 | `busy_timeout` jako první pragma, zápisy `BEGIN IMMEDIATE`, čtecí a zapisovací spojení zvlášť | ano | — |
-| jeden zapisovatel na soubor | ano (zapisovatel tenanta pro `main.db`) | přijetí mutací pro `outbox.db` |
+| jeden zapisovatel na soubor | ano (zapisovatel tenanta pro `main.db`) | jediný zapisovatel outboxu pro `outbox.db`: přijetí, doručení z promítnutí, výsledky doručení |
 | vlastní checkpointer: `PASSIVE` na pozadí, `TRUNCATE` v zapisovači po stránce nad prahem 64 MB, čekání na čtenáře nejvýš 10 ms, back-off 1 s nebo +32 MB; `journal_size_limit`, vysoký `wal_autocheckpoint` | ano | přijetí reset nikdy nevolá |
 | omezená délka čtecích transakcí; dlouhá čtení přes backup API nebo `VACUUM INTO` | ano: rozsah je stránkovaný, export a záloha jdou přes backup API | — |
 | id se nikdy znovu nepoužijí | `changes.seq` je `AUTOINCREMENT` | id mutací `AUTOINCREMENT` |
 | stránka příjmu jedna transakce `synchronous=NORMAL` | ano | — |
 | metriky: největší WAL, délka `TRUNCATE`, počet neúspěšných resetů na tenanta | ano | i pro `outbox.db` |
-| outbox v samostatném souboru jako zdroj pravdy, promítnutí s vodoznakem, žádná atomicita přes soubory, kontrola výchozí revize včetně nepromítnutých mutací | jen rozhraní a rozvržení souborů | ano |
+| outbox v samostatném souboru jako zdroj pravdy, promítnutí s vodoznakem, žádná atomicita přes soubory, kontrola výchozí revize včetně nepromítnutých mutací; doručení z promítnutí commitnutá v `outbox.db` dřív než vodoznak v `main.db` (návrh, kapitola 3.5) | jen rozhraní a rozvržení souborů | ano |
 | záloha: nejdřív `main.db`, potom `outbox.db` | pořadí v kódu zálohy | ano |
 
 ### 3.3 Rozhraní úložiště
 
-Úzké rozhraní, proti kterému se píše engine. Logika slučování ani plánování v něm není: jediný zapisovatel tenanta si stav přečte, rozhodne a zapíše výsledek jednou operací. Ve fázi 1 má `TenantStore` 18 operací, ve fázi 3 přibude 5.
+Úzké rozhraní, proti kterému se píše engine. Logika slučování ani plánování v něm není: jediný zapisovatel tenanta si stav přečte, rozhodne a zapíše výsledek jednou operací. Ve fázi 1 má `TenantStore` 17 operací (5–21) a továrna `Storage` 4, ve fázi 3 přibude 6.
 
 Náčrt (signatury, ne implementace):
 
@@ -141,6 +141,8 @@ pub trait TenantStore: Send {
     // Fáze 3 (soubor outboxu), zde jen pro tvar:
     // fn accept(&self, m: &MutationWrite) -> Result<Accepted, AcceptError>;        // outbox.db, FULL
     // fn unprojected(&self, after: MutationId, limit: u32) -> …;
+    // fn insert_deliveries(&self, d: &[DeliveryWrite]) -> …;                       // outbox.db, idempotentně podle
+    //                                                                               //   (mutace, umístění), před `project`
     // fn project(&mut self, batch: &ProjectionWrite) -> …;                         // main.db + vodoznak
     // fn due_deliveries(&self, limit: u32) -> …;
     // fn record_outcome(&self, d: DeliveryId, o: &DeliveryOutcome) -> …;
@@ -218,11 +220,11 @@ Google ve fázi 1 (fakta z [providers.md](../research/phase0/providers.md)):
 Pořadí je závazné jen tam, kde to říkají závislosti. K0 je brána: dokud neprojde, nic dalšího nezačne.
 
 ```
-K0 ──┬── K1 úložiště ───────────────┬── K5 engine ──┬── K7 důkaz ── K8 živá kontrola
-     ├── K2 rekurence ──────────────┤               │
-     ├── K3 falešný Google ──┬──────┤               │
-     └── K4 adaptér Google ──┘(testy)               │
-                     K1 ─────────────── K6 server ──┘
+K0 ─┬─ K1 úložiště ──┬─ K5 engine ──────────────────┐
+    ├─ K2 rekurence ─┘                              │
+    │  K1 ─ K6 server (spojení s K4 a K5) ──────────┼─ K7 důkaz ─ K8 živá kontrola
+    ├─ K3 falešný Google ─┐                         │
+    └─ K4 adaptér Google ─┴─ testy transportu ──────┘
 ```
 
 ### K0. Kostra a rozhraní
@@ -234,7 +236,7 @@ K0 ──┬── K1 úložiště ───────────────
   - CI je zelené na prázdném workspace: fmt, clippy `-D warnings`, test, `cargo deny check`;
   - porušení směru závislostí (třeba `musubi-engine` → `musubi-store-sqlite` v `[dependencies]`) CI zastaví;
   - `cargo deny check` projde jen s dokumentovanými výjimkami (RUSTSEC-2023-0071 s důvodem a datem revize);
-  - v `musubi-model` je testovací implementace `Provider` v paměti, se kterou se přeloží a projde typový test stránkování: rozhraní jde implementovat bez `unsafe` a bez `todo!()`.
+  - kostra `FakeProvider` v `musubi-testkit` implementuje `Provider` a `PushSource` v paměti a projde typový test stránkování: rozhraní jde implementovat bez `unsafe` a bez `todo!()`. Skriptování dodělá K5.
 - **Závisí na:** nic.
 - **Souběžně:** nic; je to brána.
 
@@ -295,7 +297,7 @@ K0 ──┬── K1 úložiště ───────────────
 - **Cíl:** čtecí cesta z kapitoly 3 návrhu od úlohy po commit a proud změn.
 - **Crates:** `musubi-engine`.
 - **Obsah:** stavový automat účtu (3.1); plánovač nad frontou úloh v `ControlStore` s prioritami a omezovači; zapisovatel tenanta (jeden na tenanta); příjem stránky (dekódování a rozbalení výskytů před transakcí, jedna transakce na stránku); sloučení do entity s jedním umístěním; žurnál; sběrnice změn v paměti; slučování oznámení v okně 100–200 ms; obnova watch kanálů podle `expiration`; pojistné dotazování; posun horizontu indexu výskytů.
-- **Přijetí** (vše proti K3 a K1):
+- **Přijetí** (vše proti `FakeProvider` a K1):
   - připojení: data okna kolem dneška jsou v úložišti a v žurnálu dřív než výsledek úplného čtení;
   - nezměněný validátor: žádný zápis, žádný záznam v žurnálu;
   - mazání podle nepřítomnosti jen po úplném čtení; pojistka hromadného mazání pozdrží změnu a ověří ji druhým čtením;
@@ -304,8 +306,8 @@ K0 ──┬── K1 úložiště ───────────────
   - pronajatá úloha po restartu procesu znovu doběhne, žádná se neztratí ani nespustí dvakrát souběžně;
   - `ReauthRequired` přepne účet do stavu „vyžaduje přihlášení" a dotazování se zastaví;
   - chybějící kalendář v discovery není smazání, pokud discovery není úplné.
-- **Závisí na:** K1, K2, K4 (testy na K3).
-- **Souběžně:** K6.
+- **Závisí na:** K1, K2. Na K4 ne: engine i jeho testy pracují jen s traity.
+- **Souběžně:** K6 a dobíhající K3, K4.
 
 ### K6. Server
 
@@ -319,7 +321,7 @@ K0 ──┬── K1 úložiště ───────────────
   - webhook s neznámým kanálem nebo špatným tokenem kanálu je odmítnut a nic nezařadí; platný odpoví do 50 ms;
   - SSE doručí kurzor po commitu; klient se starým kurzorem dostane „nutný nový úvodní sync";
   - `musubi-syncd backup` a `restore` fungují nad běžícím, respektive zastaveným uzlem.
-- **Závisí na:** K1 (čtecí API může začít hned), K5 (spojení).
+- **Závisí na:** K1 (čtecí API může začít hned); K4 a K5 pro spojení.
 - **Souběžně:** K5.
 
 ### K7. Důkaz: crash testy, záloha v CI, benchmarky
@@ -327,7 +329,7 @@ K0 ──┬── K1 úložiště ───────────────
 - **Cíl:** projít kritéria hotovosti z kapitoly 1 na celé binárce proti falešnému serveru.
 - **Crates:** `musubi-testkit` (harness a generátor zátěže), testy v `musubi-syncd`.
 - **Přijetí:** testy a benchmarky z kapitoly 6 procházejí s rozpočty níže.
-- **Závisí na:** K5, K6.
+- **Závisí na:** K4, K5, K6.
 - **Souběžně:** crash testy a benchmarky jsou nezávislé; měření na ext4/disku s PLP běží souběžně, pokud je stroj k dispozici.
 
 ### K8. Živá kontrola proti Google (spouští uživatel)
@@ -445,7 +447,7 @@ Přehled licencí pro distribuci (`cargo-about`) přijde s prvním vydáním bin
 - Ověřování tokenů z vnějšího IdP (OIDC, fáze 8).
 - Backend PostgreSQL, průběžný odvoz WAL, úložiště objektů. Zálohy jsou ve fázi 1 jen snímky.
 - Komprese surové vrstvy: rozhodne se po K8 podle reálných payloadů, implementace až potom.
-- Group commit nebo sdílený accept log: patří k přijetí mutací ve fázi 3.
+- Group commit nebo sdílený accept log: měří se jako vstupní podmínka fáze 3.
 - Odchozí webhooky pro aplikace, export tenanta, generované SDK, obraz kontejneru, `cargo-about`.
 - Exportér metrik (Prometheus, OpenTelemetry). Metriky z podmínky 8 jsou ve fázi 1 v `stats()`, ve správcovském volání a v logu `tracing`.
 - Směrování tenantů mezi uzly a víc uzlů vůbec.
@@ -453,6 +455,7 @@ Přehled licencí pro distribuci (`cargo-about`) přijde s prvním vydáním bin
 
 ## 9. Otevřené otázky
 
-1. **Soubor outboxu až ve fázi 3.** Rozhodnutí uživatele dělá z odděleného souboru outboxu požadavek. Fáze 1 nemá mutace, proto plán soubor jen rezervuje (jméno, pořadí zálohy, rozhraní) a implementuje ho fáze 3 před první mutací. Pokud má být outbox i s přijetím a promítnutím hotový už ve fázi 1, přibude do K1 asi pět operací, crash test replaye a měření přijetí.
-2. **Stroj pro měření ext4/XFS a disku s PLP.** Bez něj zůstane toto měření otevřené i po fázi 1.
-3. **Testovací účet Google, projekt GCP a veřejná adresa pro webhook** pro K8.
+Rozhodnuto (koordinátor, 11. 11. 2026): soubor outboxu se implementuje ve fázi 3. Fáze 1 má jen jméno souboru, pořadí zálohy a signatury.
+
+1. **Stroj pro měření ext4/XFS a disku s PLP.** Bez něj zůstane toto měření otevřené i po fázi 1.
+2. **Testovací účet Google, projekt GCP a veřejná adresa pro webhook** pro K8.
