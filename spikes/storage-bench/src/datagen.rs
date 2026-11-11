@@ -39,6 +39,7 @@ impl Rng {
     }
 }
 
+#[derive(Clone)]
 pub struct Occ {
     pub start: i64,
     pub end: i64,
@@ -46,6 +47,7 @@ pub struct Occ {
     pub rid: i64,
 }
 
+#[derive(Clone)]
 pub struct Item {
     pub key: String,
     pub validator: String,
@@ -57,6 +59,7 @@ pub struct Item {
     pub link: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Page {
     pub coll: i64,
     pub cursor: String,

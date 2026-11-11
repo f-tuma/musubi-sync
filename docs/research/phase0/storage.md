@@ -36,13 +36,18 @@ Měří se:
   - Outbox s plným fsync, 16 tenantů naráz: SQLite p99 2,9 ms, PG 3,0 ms.
   - Mezi běhy ale SQLite kolísá 2,9–12,2 ms (předchozí běhy 8,8 a 12,2 ms, recenzent 3,0, 3,1 a 9,98 ms), PG 3,0–7,8 ms. SQLite je tedy občas nad hranicí 10 ms, PG má díky group commitu rezervu.
   - Jeden zapisovatel: SQLite p99 1,7 ms, PG 8,1 ms (chvost PG je šum, předchozí běh 3,3 ms).
-- **Přijetí zápisu na tenantovi, který právě přijímá velký import, cíl 10 ms u SQLite nesplní.** Mutace čeká na jediného zapisovatele tenanta, tedy na rozpracovanou stránku příjmu včetně případného resetu WAL: p99 105 ms bez čtenáře, 242 ms s dlouhým čtenářem (sekce 4.5). PG jsme v tomto scénáři neměřili.
+- **Přijetí zápisu na tenantovi, který právě přijímá velký import, cíl 10 ms spolehlivě nesplní ani jeden backend** (sekce 4.5.1, 3 běhy):
+  - SQLite s jedním zapisovatelem na tenanta: p99 205–373 ms, protože mutace čeká na rozpracovanou stránku a reset WAL.
+  - SQLite s outboxem v samostatném souboru (varianta A): p99 7,7–16,1 ms bez čtenáře, 54–83 ms s dlouhým čtenářem.
+  - PG: p99 22–37 ms bez čtenáře.
+  - Kratší transakce importu (varianta B) nepomáhají (76–173 ms).
+  - Varianta A je proto podmínkou pro SQLite. Zdrojem pravdy je soubor outboxu a promítnutí do položek ho následuje.
 - **Velký tenant (100 000 položek) s hustým rozsahem cíl nesplní ani jedna varianta.**
   - Měsíc přes 20 kolekcí vrací 11 761 výskytů s payloadem: SQLite p99 28,1 ms, PG 66,2 ms.
   - Jde o tvar API, ne o volbu backendu. Řešením je stránkování nebo dotaz bez payloadu (ids-only: SQLite 6,8 ms, PG 9,9 ms).
 - **Inkrementální sync** (stránka 25 položek včetně žurnálu a kurzoru, n = 3 000): SQLite p99 4,0 ms, PG 2,7 ms. Obě varianty jsou hluboko pod rozpočtem 20 ms.
 - **Příjem dat** je u obou řádově desítky tisíc položek/s na tenanta a 95–213 tisíc položek/s souhrnně. Úzkým hrdlem bude poskytovatel.
-- **WAL u SQLite neroste sám od sebe jen do rozumné velikosti.** Bez explicitního checkpointeru, který WAL resetuje (`TRUNCATE`), narostl v testu na 1,8–3,1 GB. S checkpointerem ze sekce 3.4 je maximum 51–184 MB. Cenou je chvost sólo příjmu velkého tenanta: stránka 250 p99 83–285 ms mezi běhy proti ~10–17 ms u PG, stránka 2500 p99 347–436 ms proti 102 ms. Čtenář, který drží snapshot 1,5 s a hned začíná další, nechá WAL narůst až na 3 GB; to žádný checkpoint nevyřeší.
+- **WAL u SQLite neroste sám od sebe jen do rozumné velikosti.** Bez explicitního checkpointeru, který WAL resetuje (`TRUNCATE`), narostl v testu na 1,8–3,1 GB. S checkpointerem ze sekce 3.4 je maximum 51–184 MB. Cenou je chvost sólo příjmu velkého tenanta: stránka 250 p99 83–285 ms mezi běhy proti ~10–17 ms u PG, stránka 2500 p99 347–436 ms proti 102 ms. Čtenář, který drží snapshot 1,5 s a hned začíná další, nechá WAL narůst až na 3–7 GB; to žádný checkpoint nevyřeší.
 - **Velikost:** ~4,4 KB na položku bez komprese (SQLite) a ~3,9 KB (PG). Odhad 2 KB z návrhu platí jen se zstd v surové vrstvě: 2,3 KB po řádcích, 1,9 KB se slovníkem (nejlepší případ: slovník trénovaný a měřený na syntetických tělech téhož tenanta).
 
 **Doporučení:**
@@ -195,7 +200,7 @@ Závěry:
 Je to standardní produkční vzor, ale **je to náš kód**:
 
 - musí omezit WAL (bez toho neomezený růst, viz výše),
-- musí se vypořádat s tenanty, jejichž reset blokuje dlouhý čtenář: zapisovač tím už nezpomalí, ale WAL roste, dokud čtenáři nenechají mezeru (sekce 4.5: cyklus 1,5 s snapshot / 0,2 s pauza, 138 ze 139 resetů busy, WAL 3 GB). Dlouhé čtení (export, záloha) proto musí jít přes backup API / `VACUUM INTO` nebo mít omezenou délku transakce,
+- musí se vypořádat s tenanty, jejichž reset blokuje dlouhý čtenář: zapisovač tím už nezpomalí, ale WAL roste, dokud čtenáři nenechají mezeru (sekce 4.5: cyklus 1,5 s snapshot / 0,2 s pauza, všechny resety busy, WAL 3–7 GB). Dlouhé čtení (export, záloha) proto musí jít přes backup API / `VACUUM INTO` nebo mít omezenou délku transakce,
 - musí spolupracovat s odvozem WAL (sekce 7).
 
 ### 3.5 Reprodukce
@@ -206,6 +211,7 @@ cd spikes/storage-bench
 KEEP=1 ./run.sh          # ponechá kontejner musubi-storage-bench-pg a data/
 SKIP_SQLITE=1 KEEP=1 ./run.sh   # jen PG část (SQLite výsledky zůstanou)
 SKIP_PG=1 ./run.sh       # jen SQLite, A/B přepínače a acceptmix (pg.md a backup.md zůstanou)
+ACCEPTMIX_ONLY=1 ./run.sh   # jen acceptmix: SQLite (3 režimy) a PG
 # rychlý smoke test:
 TENANTS=20 EVENTS=500 LARGE=3000 CONC=4 COLD=200 QUERIES=50 MIXED_SECS=2 ./run.sh
 ```
@@ -217,9 +223,9 @@ Postup `run.sh`:
 3. Spustí `storage-bench pg load size read mixed outbox connect`.
 4. Změří zálohu a obnovu.
 5. Změří velikost se zstd v surové vrstvě (`size_zstd.py`) a A/B přepínače (MEMSTATUS, strategie checkpointu).
-6. Spustí `storage-bench sqlite acceptmix` (přijetí zápisu během příjmu, sekce 4.5).
+6. Spustí `storage-bench sqlite acceptmix` a `pg acceptmix` (přijetí zápisu během příjmu stejného tenanta, sekce 4.5.1).
 
-Surové výsledky: `results/sqlite.md`, `results/pg.md`, `results/backup.md`, `results/size-zstd.md`, `results/ab-*.md`, `results/acceptmix.md`, `results/env.md` a logy `results/run.log` (celý běh) a `results/run-rerun.log` (opakovaný SQLite běh, viz kapitola 4).
+Surové výsledky: `results/sqlite.md`, `results/pg.md`, `results/backup.md`, `results/size-zstd.md`, `results/ab-*.md`, `results/acceptmix.md`, `results/env.md` a logy `results/run.log` (celý běh) a `results/run-rerun.log` (opakovaný SQLite běh) a `results/run-acceptmix.log` (acceptmix na obou stranách), viz kapitola 4.
 
 `run.sh` odmítne neprázdný `BENCH_DATA` bez vlastní značky `.storage-bench-data`, odstraní zastavený kontejner se stejným jménem a při ukončení (i chybou) uklidí kontejner a data, pokud není `KEEP=1`. Release build má `panic = "abort"`: pád kteréhokoli vlákna, včetně checkpointeru, ukončí celý běh.
 
@@ -236,7 +242,7 @@ Celá sada se vejde do RAM. Čtení proto probíhá s teplou page cache, kromě 
 
 ## 4. Výsledky
 
-Latence jsou v ms. Po opravě checkpointeru (10 ms čekání, back-off, outbox bez resetu) byla znovu spuštěna celá SQLite část: `sqlite load size`, `sqlite read mixed outbox coldopen`, `size_zstd.py`, A/B přepínače a nový `sqlite acceptmix` (`SKIP_PG=1 ./run.sh`, log `results/run-rerun.log`). PG a záloha se změnou nemají co dělat a pocházejí z předchozího celého běhu (`results/run.log`); stejný stroj, stejný počet kontejnerů v pozadí. Tučně je hodnota, která nesplní cíl 10 ms tam, kde se cíl vztahuje. U řádků s n < 100 je p99 rovno maximu, ne stabilnímu percentilu.
+Latence jsou v ms. Po opravě checkpointeru (10 ms čekání, back-off, outbox bez resetu) byla znovu spuštěna celá SQLite část: `sqlite load size`, `sqlite read mixed outbox coldopen`, `size_zstd.py`, A/B přepínače a nový `sqlite acceptmix` (`SKIP_PG=1 ./run.sh`, log `results/run-rerun.log`). PG a záloha se změnou nemají co dělat a pocházejí z předchozího celého běhu (`results/run.log`); stejný stroj, stejný počet kontejnerů v pozadí. Sekce 4.5.1 (`acceptmix`: SQLite ve třech variantách a PG) běžela znovu samostatně 3× (`ACCEPTMIX_ONLY=1 ./run.sh`, log `results/run-acceptmix.log`); nic jiného se nespouštělo. Tučně je hodnota, která nesplní cíl 10 ms tam, kde se cíl vztahuje. U řádků s n < 100 je p99 rovno maximu, ne stabilnímu percentilu.
 
 ### 4.1 Příjem (ingest)
 
@@ -357,21 +363,74 @@ Možné cesty pro SQLite (žádná nebyla měřena):
 
 #### 4.5.1 Přijetí zápisu během příjmu stejného tenanta (`acceptmix`)
 
-Velký tenant (300 000 výskytů) přijímá import po stránkách 250 (verze 0–3, 1 189 stránek). Současně přichází ~50 mutací/s na stejného tenanta s `synchronous=FULL`. Obojí jde přes jediného zapisovatele tenanta: mutace čeká, než doběhne rozpracovaná stránka (včetně případného `TRUNCATE`). Měří se čas od zařazení mutace do commitu. Druhý průchod přidává čtenáře, který opakovaně drží snapshot 1,5 s s pauzou 0,2 s (export, dlouhý dotaz).
+Velký tenant přijímá import po stránkách 250: tři verze (0–2), 1 189 měřených stránek. Současně přichází ~50 mutací/s na stejného tenanta. Měří se čas od zařazení mutace do commitu s plnou trvanlivostí (`synchronous=FULL` u SQLite, `synchronous_commit=on` u PG). Každá varianta má dva průchody: bez čtenáře a s čtenářem, který opakovaně drží snapshot 1,5 s s pauzou 0,2 s (export, dlouhý dotaz).
 
-| Průchod | Přijetí p50 / p99 / max | Stránka příjmu p50 / p99 / max | Položek/s | Max WAL | `TRUNCATE` |
-|---|---|---|---|---|---|
-| Bez čtenáře | 12,5 / **104,9** / 134,7 (n = 1 056) | 8,9 / 98,6 / 122,7 | 13 667 | 109 MB | 83×, 9 busy, max 113 ms |
-| Dlouhý čtenář | 9,4 / **242,3** / 337,3 (n = 892) | 9,9 / 24,0 / 275,7 | 15 485 | **2 979 MB** | 139×, 138 busy, max 57 ms |
+Varianty:
 
-Ve vývojových bězích (izolovaně, necommitováno) vyšlo přijetí p99 21–27 ms bez čtenáře a 132–174 ms s dlouhým čtenářem, max WAL ~1 GB.
+- **SQLite `same`** (dosavadní stav): mutace i stránka importu jdou přes jediného zapisovatele tenanta. Mutace čeká, než doběhne rozpracovaná stránka včetně případného `TRUNCATE`.
+- **SQLite A – `split`, samostatný soubor outboxu:**
+  - Mutace a outbox jsou v druhém souboru na tenanta (`tNNNNN-outbox.db`) s vlastním zámkem zapisovatele a vlastním WAL. Přijetí tedy nečeká na transakci importu.
+  - Rev entity a záznam do žurnálu `changes` v hlavním souboru promítá zapisovatel importu až před další stránkou. Dělá to v jedné transakci spolu s vodoznakem `meta.projected` (id poslední promítnuté mutace).
+  - Checkpointer ze sekce 3.4 obsluhuje oba soubory.
+- **SQLite B – `chunked`, kratší transakce importu:** stránka 250 je rozdělená na 10 transakcí po 25 položkách a čekající mutace se zapíšou mezi nimi.
+- **PG:** přijetí má vlastní spojení vedle spojení importu a se zapisovatelem importu se potká jen na zámcích řádků (`tenants.seq`, překrývající se entity).
+  - Zkratka v benchmarku: `seq` přijetí běží v disjunktním rozsahu, aby nečekalo na zámek řádku `tenants` přes celou stránku. Skutečný návrh potřebuje kurzor bezpečný vůči pořadí commitů.
 
-- **Cíl 10 ms SQLite v tomto scénáři nesplní.** Přijetí má p99 nejméně tak velké jako chvost stránky příjmu, protože na ni čeká. Bez čtenáře tvoří chvost `TRUNCATE` a stránky s velkým commitem.
-- **Dlouhý čtenář už zapisovač nehladoví.** Stránka příjmu má p99 24 ms; dřív čekal každý commit nad 64 MB 100 ms. 138 ze 139 resetů je busy, ale stojí nejvýš 10 ms a další pokus přijde až po back-offu.
-- **Chvost přijetí s dlouhým čtenářem (242 ms) a ojedinělé stránky ~275 ms** nejsou `TRUNCATE` (max 57 ms) ani pojistka `wal_autocheckpoint` (vypnutá nic nezměnila). Pravděpodobně jde o zápis dirty stránek a fsync WAL, který roste do GB. **(neověřeno)**
-- **WAL s nepřetržitým cyklem dlouhých čtenářů neomezí nic.** Checkpoint nesmí přepsat stránky, které čtenář vidí, a reset WAL potřebuje okamžik bez čtenáře. Dlouhá čtení (export, záloha) musí jít přes backup API / `VACUUM INTO` nebo mít omezenou délku transakce.
-- **Možné cesty (neměřeno):** kratší transakce příjmu, když čekají mutace (např. stránka rozdělená po 50 položkách nebo časový řez 5 ms), a přesun `TRUNCATE` mimo cestu, na které čeká mutace.
-- **PG jsme v tomto scénáři neměřili.** Tam jde přijetí a příjem téhož tenanta v oddělených transakcích a čekají na sebe jen na zámcích řádků. **(neověřeno)**
+Spuštěno 3× (`ACCEPTMIX_ONLY=1 ./run.sh`, `results/acceptmix.md` a `results/run-acceptmix.log`, běhy 1–3). Ostatní části benchmarku se změnou nesouvisí a znovu neběžely.
+
+Přijetí p99 v ms, po bězích 1 / 2 / 3:
+
+| Varianta | Bez čtenáře | Dlouhý čtenář |
+|---|---|---|
+| SQLite `same` | **204,8 / 280,7 / 372,7** | **316,2 / 264,3 / 280,8** |
+| SQLite A `split` | **10,9** / 7,7 / **16,1** | **53,5 / 83,3 / 62,1** |
+| SQLite B `chunked` | **172,9 / 78,8 / 76,2** | **613,0 / 206,4 / 218,5** |
+| PG | **25,8 / 21,7 / 37,2** | **22,6** / **10,8** / **10,8** (import zpomalen na 4,6 tis. položek/s, viz níže) |
+
+Přijetí p50 je 9,5–13,9 ms u `same`, 1,3–3,1 ms u A, 4,2–6,6 ms u B a 2,0–4,3 ms u PG.
+
+Import (stránka 250) a WAL:
+
+| Varianta | Stránka p99 bez čtenáře / s čtenářem | Položek/s bez / s čtenářem | Max WAL bez / s čtenářem |
+|---|---|---|---|
+| SQLite `same` | 191–228 / 30–46 | 11,2–12,1 tis. / 14,2–15,5 tis. | 108–145 MB / **4,8–6,0 GB** |
+| SQLite A `split` | 139–146 / 23–41 | 15,3–15,4 tis. / 15,5–17,0 tis. | 109 MB / **6,0 GB** |
+| SQLite B `chunked` | 122–143 / 214–350 | 9,4–10,5 tis. / 9,0–11,4 tis. | 102–103 MB / **3,4–7,2 GB** |
+| PG | 23–29 / 22 (běh 1), 194–209 (běhy 2, 3) | 26,1–28,6 tis. / 26,9 tis. (běh 1), 4,6 tis. (běhy 2, 3) | – |
+
+Max WAL u A se týká hlavního souboru.
+
+**Co z toho plyne:**
+
+- **Cíl 10 ms nesplní žádná varianta spolehlivě.** Bez A je to u SQLite o řád mimo, A je těsně kolem hranice, PG je 2–4× nad.
+- **A (samostatný soubor outboxu) problém z velké části řeší.**
+  - Bez čtenáře je p99 7,7–16,1 ms, tedy 20× méně než `same`; cíl splnil 1 ze 3 běhů.
+  - Zbytek chvostu je pravděpodobně fsync souboru outboxu v souběhu s `TRUNCATE` a zápisem hlavního souboru na stejném disku (btrfs, sdílený stroj). **(neověřeno)**
+  - S dlouhým čtenářem je p99 54–83 ms. Hlavní WAL přitom roste na 6 GB a disk je zahlcený zápisem. **(neověřeno)**
+  - Import s A je o ~30 % rychlejší než `same`: zapisovatel importu nestřídá stránky s fsync mutací.
+- **B (kratší transakce importu) nepomáhá.** p99 76–173 ms bez čtenáře, 206–613 ms s čtenářem.
+  - Mutace sice nečeká na celou stránku, ale chvost netvoří délka transakce. Tvoří ho `TRUNCATE` a fsync po commitu. Těch je s menšími transakcemi víc (118–123 resetů proti 81–83).
+  - Import je o ~15 % pomalejší.
+- **PG cíl v tomto scénáři také nesplní.**
+  - Bez čtenáře je p99 22–37 ms. Pravděpodobné příčiny **(neověřeno)**:
+    - commit přijetí musí fsyncnout sdílený WAL včetně předchozích záznamů importu;
+    - přijetí čeká na zámky řádků, které drží rozpracovaná stránka.
+  - S dlouhým čtenářem vyšlo p99 10,8 ms v bězích 2 a 3, ale import v nich zpomalil 6× (4,6 tis. položek/s, stránka p99 ~200 ms). Přijetí tedy soupeřilo s výrazně menší zátěží. V běhu 1 import nezpomalil a přijetí mělo p99 22,6 ms.
+  - Proč držený snapshot v bězích 2 a 3 import zpomalil a v běhu 1 ne, jsme nerozebrali. Možná příčina je, že snapshot brání úklidu (HOT pruning) mrtvých verzí řádků přepisovaných importem. **(neověřeno)**
+- **WAL s nepřetržitým cyklem dlouhých čtenářů u SQLite neomezí nic.** Ve všech variantách narostl na 3,4–7,2 GB, protože každý `TRUNCATE` je busy. Checkpoint nesmí přepsat stránky, které čtenář vidí, a reset WAL potřebuje okamžik bez čtenáře. Dlouhá čtení (export, záloha) musí jít přes backup API / `VACUUM INTO` nebo mít omezenou délku transakce. To je i podmínka pro chvost přijetí s A.
+
+**Atomicita u varianty A.**
+
+- Přijetí mutace a její promítnutí do položek a žurnálu jsou dva commity ve dvou souborech. Nejsou jedna atomická transakce.
+- `ATTACH` a transakce přes oba soubory atomicitu nevrátí: v režimu WAL je commit atomický jen v rámci každého souboru zvlášť. Při pádu mezi nimi se jeden soubor commitne a druhý ne.
+- Zdrojem pravdy proto musí být soubor outboxu:
+  - mutace je přijatá, jakmile je commitnutá tam;
+  - projekce do hlavního souboru se dělá až potom, idempotentně a s vodoznakem (`meta.projected`) commitnutým ve stejné transakci jako projekce;
+  - po pádu se promítnou mutace s id nad vodoznakem.
+- Důsledky:
+  - Čtení položek může krátce zaostávat za přijatou mutací. Klient, který potřebuje „read-your-writes“, musí číst i nepromítnuté mutace z outboxu nebo počkat na vodoznak.
+  - Kontrola základní revize (`base rev`) při přijetí se dělá proti hlavnímu souboru. Musí zahrnout i nepromítnuté mutace téže entity, jinak dvě rychle po sobě jdoucí mutace projdou se stejnou bází. Benchmark tuto kontrolu zjednodušuje (zkratka v kódu).
+  - Záloha musí vzít nejdřív hlavní soubor a potom outbox. Outbox nesmí být starší než vodoznak v hlavním souboru; rozdíl pak dorovná replay.
 
 ### 4.6 Velikost na disku
 
@@ -453,9 +512,9 @@ SQLite se zálohoval v klidu, po checkpointu, bez souběžného zápisu. Za prov
 | Čtení p99 < 10 ms pod zátěží zápisu | ✅ 3,7 ms | ⚠️ 11,2 ms (předchozí běh 8,1 ms) |
 | Přijetí zápisu p99 < 10 ms, 1 zapisovatel | ✅ 1,7 ms | ✅ 8,1 ms (předchozí běh 3,3 ms) |
 | Přijetí zápisu p99 < 10 ms, 16 tenantů současně | ⚠️ 2,9 ms (mezi běhy 2,9–12,2 ms) | ✅ 3,0 ms (mezi běhy 3,0–7,8 ms) |
-| Přijetí zápisu p99 < 10 ms během importu stejného tenanta | ❌ 105 ms bez čtenáře, 242 ms s dlouhým čtenářem (sekce 4.5.1) | neměřeno |
+| Přijetí zápisu p99 < 10 ms během importu stejného tenanta | ❌ jeden zapisovatel 205–373 ms; ⚠️ s outboxem v samostatném souboru (A) 7,7–16,1 ms bez čtenáře, ❌ 54–83 ms s dlouhým čtenářem; ❌ kratší transakce (B) 76–173 ms (sekce 4.5.1) | ❌ 22–37 ms bez čtenáře; 11–23 ms s dlouhým čtenářem |
 | Režie inkrementálního syncu < 20 ms | ✅ p99 4,0 ms | ✅ p99 2,7 ms (+ síť) |
-| Velikost WAL omezená | ⚠️ max 184 MB s vlastním checkpointerem (bez něj 1,8–3,1 GB); s nepřetržitým cyklem dlouhých čtenářů až 3 GB | – (sdílený WAL, `max_wal_size`) |
+| Velikost WAL omezená | ⚠️ max 184 MB s vlastním checkpointerem (bez něj 1,8–3,1 GB); s nepřetržitým cyklem dlouhých čtenářů 3–7 GB | – (sdílený WAL, `max_wal_size`) |
 
 ⚠️ = výsledek kolísá kolem hranice cíle mezi běhy.
 
@@ -468,14 +527,26 @@ SQLite se zálohoval v klidu, po checkpointu, bez souběžného zápisu. Za prov
 - Pod souběhem tenantů s velkými stránkami má vyšší propustnost příjmu.
 - Zálohuje a obnovuje rychleji.
 
-PG je výkonově lepší ve čtyřech bodech:
+PG je výkonově lepší ve třech bodech:
 
 - **trvanlivé přijetí zápisu pod souběhem**: díky group commitu má stabilní rezervu (p99 3,0–7,8 ms). SQLite kolísá mezi běhy 2,9–12,2 ms.
-- **přijetí zápisu na tenantovi, který právě importuje**: SQLite má jediného zapisovatele na tenanta, mutace čeká na rozpracovanou stránku a reset WAL. p99 105 ms bez čtenáře, 242 ms s dlouhým čtenářem; **cíl 10 ms nesplněn** (sekce 4.5.1). PG jsme tu neměřili.
 - **sólo příjem velkého tenanta**: 1,5–1,7× vyšší propustnost a o řád užší chvost (stránka 250: p99 ~10–17 ms proti **~80–290 ms** mezi běhy). Chvost SQLite je cena za omezený WAL: `TRUNCATE` zapíše WAL do databáze a fsyncne (max 216–355 ms). Kapitola 5.1 pro příjem cíl nemá, poskytovatel je pomalejší.
-- **WAL bez vlastního kódu**: SQLite potřebuje explicitní checkpointer. Bez něj WAL roste na jednotky GB, s ním zůstává do ~180 MB za cenu výše uvedeného chvostu. Nepřetržitý cyklus dlouhých čtenářů ho nechá narůst na GB i s checkpointerem.
+- **WAL bez vlastního kódu**: SQLite potřebuje explicitní checkpointer. Bez něj WAL roste na jednotky GB, s ním zůstává do ~180 MB za cenu výše uvedeného chvostu. Nepřetržitý cyklus dlouhých čtenářů ho nechá narůst na 3–7 GB i s checkpointerem.
 
-Ani jeden bod nemění odhad z kapitoly 4.3: výkon nerozhoduje, rozhoduje provoz. Body 1, 2 a 4 jsou ale riziko na straně SQLite, které musí fáze 1 vyřešit, ne jen zdokumentovat.
+**Přijetí zápisu během importu stejného tenanta PG nezvýhodňuje** (sekce 4.5.1). Cíl p99 < 10 ms tu na tomto HW spolehlivě nesplní žádná varianta:
+
+- SQLite s jedním zapisovatelem na tenanta je o řád mimo (205–373 ms).
+- SQLite s outboxem v samostatném souboru (A) je bez dlouhého čtenáře nejblíž cíli (7,7–16,1 ms, PG 22–37 ms).
+- S dlouhým čtenářem je A horší než PG (54–83 ms proti 11–23 ms).
+- Kratší transakce importu (B) nepomáhají.
+
+Pro volbu backendu to znamená:
+
+- Bez varianty A by tento bod rozhodl proti SQLite.
+- S variantou A a omezenou délkou čtecích transakcí je SQLite na tom stejně nebo lépe než PG.
+- Cíl 10 ms pro tento scénář na sdíleném disku bez PLP nesplní ani jeden backend. Buď ho pro přijetí během importu téhož tenanta uvolnit (např. na p99 < 20 ms), nebo ho ověřit na cílovém HW. **(neověřeno)**
+
+Ani jeden bod nemění odhad z kapitoly 4.3: výkon nerozhoduje, rozhoduje provoz. Body 1 a 3 jsou ale riziko na straně SQLite, které musí fáze 1 vyřešit, ne jen zdokumentovat.
 
 **Doporučení:**
 
@@ -484,13 +555,14 @@ Ani jeden bod nemění odhad z kapitoly 4.3: výkon nerozhoduje, rozhoduje provo
    - build s `SQLITE_DEFAULT_MEMSTATUS=0` (4× propustnost souběžného čtení);
    - `busy_timeout` jako první pragma a zapisovací transakce `BEGIN IMMEDIATE`;
    - vlastní checkpointer: `PASSIVE` na pozadí, `TRUNCATE` v zapisovači po stránce příjmu nad prahem (zde 64 MB) s čekáním na čtenáře nejvýš 10 ms a back-offem po neúspěchu (1 s nebo +32 MB), `journal_size_limit` a vysoký `wal_autocheckpoint` jako pojistka. Přijetí mutace reset nevolá. Práh nastavit podle priority disku proti chvostu příjmu (sekce 3.4). Monitorovat max WAL, délku `TRUNCATE` a počet neúspěšných resetů na tenanta;
-   - omezit délku čtecích transakcí; dlouhá čtení (export, záloha) přes backup API / `VACUUM INTO`, jinak WAL roste na GB;
+   - mutace a outbox v **samostatném souboru na tenanta** (vlastní zámek zapisovatele a WAL, `synchronous=FULL`), jinak přijetí během importu téhož tenanta čeká na stránku a reset WAL (p99 205–373 ms místo 7,7–16,1 ms, sekce 4.5.1). Zdrojem pravdy je soubor outboxu. Promítnutí do položek a žurnálu dělá zapisovatel tenanta idempotentně, s vodoznakem ve stejné transakci, a po pádu ho přehraje. `ATTACH` s transakcí přes oba soubory atomicitu v režimu WAL nedává. Kontrola základní revize musí zahrnout nepromítnuté mutace;
+   - omezit délku čtecích transakcí; dlouhá čtení (export, záloha) přes backup API / `VACUUM INTO`, jinak WAL roste na GB (3–7 GB v testu) a chvost přijetí i s outboxem v samostatném souboru stoupne na 54–83 ms;
    - zápis stránky jako jedna transakce s `synchronous=NORMAL` a mutace s `FULL`;
    - čtecí a zapisovací spojení zvlášť.
 3. **Vyřešit přijetí zápisu pod souběhem dřív, než se to stane problémem:**
    - změřit dávkování nebo sdílený accept log s group commitem ve fázi 1;
    - do té doby počítat s p99 ~3–12 ms při 16 souběžných tenantech na uzel na tomto HW, tedy občas nad cílem;
-   - přijetí během importu stejného tenanta (p99 105–242 ms): ve fázi 1 zkrátit transakce příjmu, když čekají mutace (menší stránky nebo časový řez), dostat `TRUNCATE` z cesty mutace a změřit znovu, včetně PG;
+   - přijetí během importu stejného tenanta: s outboxem v samostatném souboru p99 7,7–16,1 ms, tedy kolem hranice. Zbytek chvostu je pravděpodobně souběh fsync obou souborů na jednom disku **(neověřeno)**. Ověřit na disku s PLP a ext4/XFS; kratší transakce importu (B) nepomohly;
    - sólo chvost importu (p99 ~80–290 ms) zmírnit vyšším prahem WAL (256 MB: p99 77 ms) nebo dávkovým vkládáním;
    - změřit na ext4/XFS a na serverovém disku s PLP.
 4. **API rozsahu stránkovat** (limit výskytů, kurzor) a nabídnout variantu bez payloadu. Bez toho cíl 10 ms nesplní žádný backend u hustých kalendářů.
@@ -506,15 +578,15 @@ Ani jeden bod nemění odhad z kapitoly 4.3: výkon nerozhoduje, rozhoduje provo
 | HA | žádná; obnova tenanta na jiný uzel = stažení souboru (+ přehrání WAL); tenant je vázán na uzel, potřeba směrování | synchronní replika, failover (Patroni, spravované služby) |
 | Migrace schématu | N souborů; líně při otevření (p99 ~11 ms na první požadavek) nebo na pozadí; ~21 s sekvenčně na 10 000 tenantů | jedna transakce; `ADD COLUMN` bez defaultu je okamžitý, velké `ALTER` zamykají sdílenou tabulku |
 | Izolace tenantů | soubor = izolace; export / smazání = práce se souborem | hluční sousedé ve sdíleném WAL a buffer poolu (chvost příjmu p99 174–335 ms pod souběhem); RLS |
-| Bloat a WAL | WAL se sám neresetuje, dokud ho drží čtenáři nebo nepřetržitý zapisovatel (měřeno: 1,8–3,1 GB jen s `PASSIVE`). Omezí ho jen vlastní politika s `TRUNCATE` (měřeno: max 51–184 MB; s nepřetržitým cyklem dlouhých čtenářů až 3 GB); `VACUUM` per soubor podle potřeby | MVCC bloat po masivních upsertech, autovacuum ladění (v testu nesledováno) |
+| Bloat a WAL | WAL se sám neresetuje, dokud ho drží čtenáři nebo nepřetržitý zapisovatel (měřeno: 1,8–3,1 GB jen s `PASSIVE`). Omezí ho jen vlastní politika s `TRUNCATE` (měřeno: max 51–184 MB; s nepřetržitým cyklem dlouhých čtenářů 3–7 GB); `VACUUM` per soubor podle potřeby | MVCC bloat po masivních upsertech, autovacuum ladění (v testu nesledováno) |
 | Spojení | otevření < 1 ms, žádný pool | nové spojení ~3,9 ms, nutný pool (PgBouncer / deadpool) |
 | Self-host | jeden binární soubor | další služba k provozu a aktualizaci |
 
 ## 8. Otevřená rizika a co spike neměřil
 
-- **Šum a jediný běh.** Na stroji běželo 14 dalších kontejnerů a ~17–23 GB RAM bylo obsazeno. Čísla jsou z jednoho běhu na variantu, bez opakování a intervalů spolehlivosti. Chvosty (p99, max) jsou nejméně stabilní část. Srovnání běhů ukazuje, jak velký šum je: outbox SQLite při 16 tenantech p99 2,9–12,2 ms, čtení PG pod zápisem 11,2 proti 8,1 ms, sólo příjem velkého tenanta SQLite p99 83–285 ms, max zápisu v mixu 574–801 ms, přijetí během importu p99 21–105 ms bez čtenáře. Řádky s n < 100 (sólo stránka 2500, n = 49) jsou označené a jejich p99 je maximum.
+- **Šum a jediný běh.** Na stroji běželo 14 dalších kontejnerů a ~17–23 GB RAM bylo obsazeno. Čísla jsou z jednoho běhu na variantu, bez opakování a intervalů spolehlivosti. Chvosty (p99, max) jsou nejméně stabilní část. Srovnání běhů ukazuje, jak velký šum je: outbox SQLite při 16 tenantech p99 2,9–12,2 ms, čtení PG pod zápisem 11,2 proti 8,1 ms, sólo příjem velkého tenanta SQLite p99 83–285 ms, max zápisu v mixu 574–801 ms, přijetí během importu (jeden zapisovatel) p99 21–373 ms bez čtenáře. Jen `acceptmix` (sekce 4.5.1) běžel 3× a uvádí rozsah všech tří běhů; u PG s dlouhým čtenářem se v nich import lišil 6× (26,9 proti 4,6 tis. položek/s). Řádky s n < 100 (sólo stránka 2500, n = 49) jsou označené a jejich p99 je maximum.
 - **ext4/XFS neměřeno.** Bez root práv nešlo vytvořit jiný souborový systém. Vše běželo na btrfs nodatacow. Rozdíl v ceně fsync ovlivní hlavně outbox pod souběhem a reset WAL. **(neověřeno)**
-- **Checkpointer a dlouzí čtenáři.** Po opravě (10 ms čekání, back-off, přijetí bez resetu) narazilo v mixu na čtenáře 42 z 321 pokusů o `TRUNCATE`. S čtenářem, který drží snapshot 1,5 s v nepřetržitém cyklu, zapisovač nehladoví (stránka p99 24 ms), ale WAL narostl na 3 GB a přijetí mutací na stejném tenantovi má p99 242 ms (sekce 4.5.1). Příčinu chvostu 240–340 ms (při `TRUNCATE` max 57 ms) jsme nerozebrali **(neověřeno)**. Chování při stovkách tenantů na uzlu jsme neměřili.
+- **Checkpointer a dlouzí čtenáři.** Po opravě (10 ms čekání, back-off, přijetí bez resetu) narazilo v mixu na čtenáře 42 z 321 pokusů o `TRUNCATE`. S čtenářem, který drží snapshot 1,5 s v nepřetržitém cyklu, zapisovač nehladoví (stránka p99 23–46 ms), ale WAL narostl na 3–7 GB a přijetí mutací na stejném tenantovi má p99 264–316 ms s jedním zapisovatelem a 54–83 ms s outboxem v samostatném souboru (sekce 4.5.1). Příčinu chvostu jsme nerozebrali **(neověřeno)**. Chování při stovkách tenantů na uzlu jsme neměřili.
 - **Férovost dotazů.** PG platí v mixu round-trip navíc za `head_seq` (sekce 4.4). SQLite skládá `IN (…)` do textu dotazu, takže cache připravených dotazů částečně netrefuje (sekce 4.2). Ani jedno jsme neopravovali, aby čísla zůstala srovnatelná. Vliv odhadujeme na desetiny ms. **(neověřeno)**
 - **Teplá cache.** Celá sada se vejde do RAM. Chování při datech větších než RAM (reálný uzel s tisíci tenanty) jsme neměřili. **(neověřeno)**
 - **Síť pro PG.** Měřeno přes localhost. V datacentru přidá každý round-trip ~0,1–0,5 ms **(neověřeno)**. Pipelined příjem má 3 round-tripy na stránku, dotaz 1.

@@ -64,7 +64,7 @@ fn main() {
     let (backend, phases) = match args.split_first() {
         Some((b, p)) if !p.is_empty() => (b.as_str(), p),
         _ => {
-            eprintln!("usage: storage-bench sqlite|pg <load|read|mixed|outbox|size|coldopen|connect> (sqlite also: ingest-large|acceptmix)...");
+            eprintln!("usage: storage-bench sqlite|pg <load|read|mixed|outbox|size|coldopen|connect> (both: acceptmix; sqlite also: ingest-large)...");
             std::process::exit(2);
         }
     };
@@ -457,76 +457,142 @@ fn sqlite_mixed(cfg: &Cfg, dir: &Path) {
     }
 }
 
-/// Outbox accept on the tenant that is being ingested, through the tenant's single writer (actor): accepts are
-/// queued and run before the next ingest page. Large tenant, page 250, background checkpointer, ~50 accepts/s.
-/// Pass 2 adds a reader that holds a snapshot for 1.5 s, 0.2 s apart. Accept latency = enqueue -> commit.
+/// Outbox accept on the tenant that is being ingested. Large tenant, page 250, background checkpointer, ~50 accepts/s.
+/// Pass 2 of each mode adds a reader that holds a snapshot for 1.5 s, 0.2 s apart. Accept latency = enqueue -> commit.
+/// Modes:
+/// - `same`: accepts go through the tenant's single writer (actor), queued and run before the next ingest page;
+/// - `split` (mitigation A): outbox + mutations in a separate file with its own writer thread; the tenant writer
+///   projects entity rev + journal before its next page;
+/// - `chunked` (mitigation B): like `same`, but every page is applied as 10 transactions of 25 items and queued
+///   accepts run between them.
 fn sqlite_acceptmix(cfg: &Cfg, dir: &Path) {
     const T: u64 = 300_000;
+    const CHUNK: usize = 25;
     // Initial load, then two full update rounds: ~3x the large-tenant ingest, long enough for several reader cycles.
     let pages: Vec<Page> = (0..3).flat_map(|v| gen_many(&[T], cfg.large, 250, v).pop().unwrap()).collect();
     let pre = pages.len() / 30; // untimed: entities that the accepts mutate
-    for long_reader in [false, true] {
-        let p = sqlite::path(dir, T);
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", p.display()));
-        }
-        let mut w = sqlite::Writer::new(sqlite::create(&p).unwrap()).unwrap();
-        let mut ne = 0;
-        for pg in &pages[..pre] {
-            ne += w.apply_page(pg).unwrap();
-        }
-        let ck = sqlite::Checkpointer::start(vec![p.clone()], 1);
-        let done = AtomicBool::new(false);
-        let (tx, rx) = std::sync::mpsc::channel::<Instant>();
-        let (mut alat, mut ilat) = (vec![], vec![]);
-        let t0 = Instant::now();
-        std::thread::scope(|s| {
-            let done = &done;
-            s.spawn(move || {
-                // owns tx: the writer's final drain ends when this thread exits
-                while !done.load(Ordering::Relaxed) {
-                    tx.send(Instant::now()).unwrap();
-                    std::thread::sleep(Duration::from_millis(20));
+    let n: usize = pages[pre..].iter().map(|p| p.items.len()).sum();
+    for mode in ["same", "split", "chunked"] {
+        // One unit = one ingest page = the transactions it is applied in.
+        let units: Vec<Vec<Page>> = pages[pre..]
+            .iter()
+            .map(|p| match mode {
+                // shortcut: every chunk sets the page's cursor; in production only the last one would advance it.
+                "chunked" => p.items.chunks(CHUNK).map(|c| Page { coll: p.coll, cursor: p.cursor.clone(), items: c.to_vec() }).collect(),
+                _ => vec![p.clone()],
+            })
+            .collect();
+        for long_reader in [false, true] {
+            let p = sqlite::path(dir, T);
+            let op = sqlite::outbox_path(dir, T);
+            for f in [&p, &op] {
+                for suffix in ["", "-wal", "-shm"] {
+                    let _ = std::fs::remove_file(format!("{}{suffix}", f.display()));
                 }
-            });
-            if long_reader {
-                let p = &p;
+            }
+            let mut w = sqlite::Writer::new(sqlite::create(&p).unwrap()).unwrap();
+            let mut ne = 0;
+            for pg in &pages[..pre] {
+                ne += w.apply_page(pg).unwrap();
+            }
+            let ent = move |k: i64| 1 + k * 7 % ne as i64;
+            let idem = |k: i64| format!("idem-mix-{}-{mode}-{long_reader}-{k}", std::process::id());
+            let mut files = vec![p.clone()];
+            if mode == "split" {
+                drop(sqlite::OutboxWriter::new(&op, &p).unwrap()); // create before the checkpointer samples it
+                files.push(op.clone());
+            }
+            let ck = sqlite::Checkpointer::start(files, 1);
+            let done = AtomicBool::new(false);
+            let (tx, rx) = std::sync::mpsc::channel::<Instant>();
+            let (ptx, prx) = std::sync::mpsc::channel::<(i64, i64)>(); // split: accepted (mutation id, entity) to project
+            let (mut alat, mut ilat) = (vec![], vec![]);
+            let t0 = Instant::now();
+            std::thread::scope(|s| {
+                let done = &done;
                 s.spawn(move || {
-                    let c = sqlite::open(&p).unwrap();
+                    // owns tx: the final drain ends when this thread exits
                     while !done.load(Ordering::Relaxed) {
-                        c.execute_batch("BEGIN").unwrap();
-                        let _: i64 = c.query_row("SELECT count(*) FROM changes", [], |r| r.get(0)).unwrap(); // takes the snapshot
-                        std::thread::sleep(Duration::from_millis(1500));
-                        c.execute_batch("COMMIT").unwrap();
-                        std::thread::sleep(Duration::from_millis(200));
+                        tx.send(Instant::now()).unwrap();
+                        std::thread::sleep(Duration::from_millis(20));
                     }
                 });
-            }
-            let mut k = 0i64;
-            let mut accept = |w: &mut sqlite::Writer, enq: Instant, alat: &mut Vec<f64>| {
-                w.accept_mutation(1 + k * 7 % ne as i64, &format!("idem-mix-{}-{long_reader}-{k}", std::process::id()), r#"{"title":"renamed"}"#)
-                    .unwrap();
-                alat.push(ms(enq));
-                k += 1;
-            };
-            for pg in &pages[pre..] {
-                while let Ok(enq) = rx.try_recv() {
-                    accept(&mut w, enq, &mut alat);
+                if long_reader {
+                    let p = &p;
+                    s.spawn(move || {
+                        let c = sqlite::open(p).unwrap();
+                        while !done.load(Ordering::Relaxed) {
+                            c.execute_batch("BEGIN").unwrap();
+                            let _: i64 = c.query_row("SELECT count(*) FROM changes", [], |r| r.get(0)).unwrap(); // takes the snapshot
+                            std::thread::sleep(Duration::from_millis(1500));
+                            c.execute_batch("COMMIT").unwrap();
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                    });
                 }
-                let st = Instant::now();
-                w.apply_page(pg).unwrap();
-                ilat.push(ms(st));
+                if mode == "split" {
+                    let (p, op) = (&p, &op);
+                    let acc = s.spawn(move || {
+                        let mut ow = sqlite::OutboxWriter::new(op, p).unwrap();
+                        let mut l = vec![];
+                        for (k, enq) in rx.iter().enumerate() {
+                            let k = k as i64;
+                            let mid = ow.accept(ent(k), &idem(k), r#"{"title":"renamed"}"#).unwrap();
+                            l.push(ms(enq));
+                            ptx.send((mid, ent(k))).unwrap();
+                        }
+                        l
+                    });
+                    let project = |w: &mut sqlite::Writer, m: Vec<(i64, i64)>| if !m.is_empty() { w.project(&m).unwrap() };
+                    for unit in &units {
+                        project(&mut w, prx.try_iter().collect());
+                        let st = Instant::now();
+                        w.apply_page(&unit[0]).unwrap();
+                        ilat.push(ms(st));
+                    }
+                    done.store(true, Ordering::Relaxed);
+                    alat = acc.join().unwrap();
+                    project(&mut w, prx.try_iter().collect());
+                } else {
+                    let mut k = 0i64;
+                    let mut accept = |w: &mut sqlite::Writer, enq: Instant, alat: &mut Vec<f64>| {
+                        w.accept_mutation(ent(k), &idem(k), r#"{"title":"renamed"}"#).unwrap();
+                        alat.push(ms(enq));
+                        k += 1;
+                    };
+                    for unit in &units {
+                        let st = Instant::now();
+                        for txn in unit {
+                            while let Ok(enq) = rx.try_recv() {
+                                accept(&mut w, enq, &mut alat);
+                            }
+                            w.apply_page(txn).unwrap();
+                        }
+                        ilat.push(ms(st));
+                    }
+                    done.store(true, Ordering::Relaxed);
+                    while let Ok(enq) = rx.recv() {
+                        accept(&mut w, enq, &mut alat);
+                    }
+                }
+            });
+            if mode == "split" {
+                let (acc, proj): (i64, i64) = (
+                    rusqlite::Connection::open(&op).unwrap().query_row("SELECT count(*) FROM mutations", [], |r| r.get(0)).unwrap(),
+                    w.c.query_row("SELECT v FROM meta WHERE k='projected'", [], |r| r.get(0)).unwrap(),
+                );
+                assert_eq!(acc, proj, "every accepted mutation is projected (ids are 1..n)");
             }
-            done.store(true, Ordering::Relaxed);
-            while let Ok(enq) = rx.recv() {
-                accept(&mut w, enq, &mut alat);
-            }
-        });
-        let wall = t0.elapsed().as_secs_f64();
-        let tag = if long_reader { "long reader (1.5 s snapshot)" } else { "no reader" };
-        let n: usize = pages[pre..].iter().map(|p| p.items.len()).sum();
-        row("sqlite", &format!("acceptmix accept during ingest, {tag}"), &mut alat, &format!("enqueue->commit, synchronous=FULL, same writer as ingest; {}", ck.summary()));
-        row("sqlite", &format!("acceptmix ingest page=250, {tag}"), &mut ilat, &format!("{:.0} items/s incl. accepts", n as f64 / wall));
+            let wall = t0.elapsed().as_secs_f64();
+            let tag = if long_reader { "long reader (1.5 s snapshot)" } else { "no reader" };
+            let how = match mode {
+                "same" => "same writer as ingest",
+                "split" => "separate outbox file and writer, projected by the ingest writer",
+                _ => "same writer, ingest page split into 25-item txns",
+            };
+            row("sqlite", &format!("acceptmix[{mode}] accept during ingest, {tag}"), &mut alat, &format!("enqueue->commit, synchronous=FULL, {how}; {}", ck.summary()));
+            row("sqlite", &format!("acceptmix[{mode}] ingest page=250, {tag}"), &mut ilat, &format!("{:.0} items/s incl. accepts", n as f64 / wall));
+        }
     }
 }
 
@@ -751,6 +817,7 @@ async fn pg_phase(cfg: &Cfg, ph: &str) {
             row(b, "range regular month 20 coll, 8 reader connections", &mut lat, &format!("{qps:.0} queries/s"));
         }
         "mixed" => pg_mixed(cfg).await,
+        "acceptmix" => pg_acceptmix(cfg).await,
         "outbox" => {
             let ents = pg_entity_ids(url, 5).await;
             let mut w = pg::Writer::new(pg::connect(url, false).await.unwrap()).await.unwrap();
@@ -855,6 +922,88 @@ async fn pg_ingest(url: &str, tenants: &[u64], pages: Arc<Vec<Vec<Page>>>, conc:
         lat.extend(h.await.unwrap());
     }
     (lat, t0.elapsed().as_secs_f64())
+}
+
+/// PG counterpart of `sqlite_acceptmix` (mode `same` scenario): the same pages and ~50 accepts/s on one tenant, but
+/// accept runs on its own connection (synchronous_commit=on) next to the ingest connection (off), so it waits only on
+/// row locks the ingest transaction holds (tenants.seq, overlapping entities). Pass 2: a REPEATABLE READ snapshot
+/// held 1.5 s, 0.2 s apart. Each pass uses a fresh tenant id.
+async fn pg_acceptmix(cfg: &Cfg) {
+    const T: u64 = 300_000;
+    let url = cfg.pg_url.clone();
+    let pages: Arc<Vec<Page>> = Arc::new((0..3).flat_map(|v| gen_many(&[T], cfg.large, 250, v).pop().unwrap()).collect());
+    let pre = pages.len() / 30;
+    let n: usize = pages[pre..].iter().map(|p| p.items.len()).sum();
+    let c = pg::connect(&url, false).await.unwrap();
+    c.batch_execute(pg::SCHEMA).await.unwrap();
+    for (i, long_reader) in [false, true].into_iter().enumerate() {
+        let t = (T + i as u64) as i64;
+        c.execute("DELETE FROM tenants WHERE id=$1", &[&t]).await.unwrap();
+        for tbl in ["collections", "raw", "items", "entities", "placements", "occurrences", "changes", "mutations", "outbox"] {
+            c.execute(&format!("DELETE FROM {tbl} WHERE tenant_id=$1"), &[&t]).await.unwrap();
+        }
+        pg::create_tenant(&c, t).await.unwrap();
+        let mut w = pg::Writer::new(pg::connect(&url, true).await.unwrap()).await.unwrap();
+        w.use_tenant(t).await.unwrap();
+        for p in &pages[..pre] {
+            w.apply_page(p).await.unwrap();
+        }
+        let ents = pg_entity_ids(&url, t).await;
+        let mut a = pg::Writer::new(pg::connect(&url, false).await.unwrap()).await.unwrap();
+        a.use_tenant(t).await.unwrap();
+        // shortcut: disjoint seq range instead of one per-tenant allocator; a real design needs a commit-order-safe cursor.
+        a.seq += 1 << 40;
+        let done = Arc::new(AtomicBool::new(false));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Instant>();
+        let d = done.clone();
+        let generator = tokio::spawn(async move {
+            while !d.load(Ordering::Relaxed) {
+                tx.send(Instant::now()).unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let pid = std::process::id();
+        let acc = tokio::spawn(async move {
+            let mut l = vec![];
+            let mut k = 0usize;
+            while let Some(enq) = rx.recv().await {
+                a.accept_mutation(ents[k * 7 % ents.len()], &format!("idem-mix-{pid}-{t}-{k}"), r#"{"title":"renamed"}"#).await.unwrap();
+                l.push(ms(enq));
+                k += 1;
+            }
+            l
+        });
+        let reader = long_reader.then(|| {
+            let (url, d) = (url.clone(), done.clone());
+            tokio::spawn(async move {
+                let r = pg::connect(&url, false).await.unwrap();
+                while !d.load(Ordering::Relaxed) {
+                    r.batch_execute("BEGIN ISOLATION LEVEL REPEATABLE READ").await.unwrap();
+                    r.query_one("SELECT count(*) FROM changes WHERE tenant_id=$1", &[&t]).await.unwrap(); // takes the snapshot
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    r.batch_execute("COMMIT").await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            })
+        });
+        let t0 = Instant::now();
+        let mut ilat = vec![];
+        for p in &pages[pre..] {
+            let st = Instant::now();
+            w.apply_page(p).await.unwrap();
+            ilat.push(ms(st));
+        }
+        done.store(true, Ordering::Relaxed);
+        generator.await.unwrap();
+        let mut alat = acc.await.unwrap();
+        let wall = t0.elapsed().as_secs_f64();
+        if let Some(r) = reader {
+            r.await.unwrap();
+        }
+        let tag = if long_reader { "long reader (1.5 s snapshot)" } else { "no reader" };
+        row("pg", &format!("acceptmix accept during ingest, {tag}"), &mut alat, "enqueue->commit, synchronous_commit=on, own connection next to the ingest one");
+        row("pg", &format!("acceptmix ingest page=250, {tag}"), &mut ilat, &format!("{:.0} items/s incl. accepts, synchronous_commit=off", n as f64 / wall));
+    }
 }
 
 async fn pg_mixed(cfg: &Cfg) {

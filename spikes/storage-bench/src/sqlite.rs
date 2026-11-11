@@ -384,6 +384,71 @@ impl Writer {
         self.c.execute_batch("PRAGMA synchronous=NORMAL")?;
         res
     }
+
+    /// Projection of mutations accepted into the separate outbox file (`OutboxWriter`): entity rev + journal, one
+    /// transaction, with the projected watermark in `meta`. After a crash, mutations with id > watermark are projected
+    /// again from the outbox file, which is the source of truth (the two files commit separately).
+    pub fn project(&mut self, muts: &[(i64, i64)]) -> rusqlite::Result<()> {
+        let tx = self.c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for &(_, entity_id) in muts {
+            self.seq += 1;
+            tx.prepare_cached("UPDATE entities SET rev=rev+1, seq=? WHERE id=?")?.execute(params![self.seq, entity_id])?;
+            tx.prepare_cached(
+                "INSERT INTO changes(entity_id, seq, op) VALUES (?,?,2) ON CONFLICT(entity_id) DO UPDATE SET seq=excluded.seq, op=2",
+            )?
+            .execute(params![entity_id, self.seq])?;
+        }
+        tx.prepare_cached("UPDATE meta SET v=? WHERE k='seq'")?.execute([self.seq])?;
+        if let Some(&(mid, _)) = muts.last() {
+            tx.prepare_cached("INSERT OR REPLACE INTO meta VALUES ('projected', ?)")?.execute([mid])?;
+        }
+        tx.commit()
+    }
+}
+
+/// Outbox and mutations in their own file per tenant (own write lock and WAL, `synchronous=FULL`), so accepting a
+/// mutation does not wait for the tenant's ingest transaction or its WAL reset. Placements and base rev are read from
+/// the tenant file through a read connection; entity rev + journal follow later via `Writer::project`.
+pub struct OutboxWriter {
+    c: Connection,
+    main: Connection,
+}
+
+pub fn outbox_path(dir: &Path, tenant: u64) -> PathBuf {
+    dir.join(format!("t{tenant:05}-outbox.db"))
+}
+
+impl OutboxWriter {
+    pub fn new(outbox: &Path, main: &Path) -> rusqlite::Result<Self> {
+        let c = open(outbox)?;
+        c.execute_batch(
+            "PRAGMA synchronous=FULL;
+             CREATE TABLE IF NOT EXISTS mutations(
+               id INTEGER PRIMARY KEY, entity_id INTEGER NOT NULL, base_rev INTEGER NOT NULL, patch TEXT NOT NULL,
+               idem_key TEXT NOT NULL UNIQUE);
+             CREATE TABLE IF NOT EXISTS outbox(
+               id INTEGER PRIMARY KEY, placement_id INTEGER NOT NULL, mutation_id INTEGER NOT NULL,
+               state INTEGER NOT NULL, payload TEXT NOT NULL);",
+        )?;
+        Ok(OutboxWriter { c, main: open(main)? })
+    }
+
+    /// Same rows as `Writer::accept_mutation` minus entity rev + journal. Returns the mutation id.
+    pub fn accept(&mut self, entity_id: i64, idem: &str, patch: &str) -> rusqlite::Result<i64> {
+        // shortcut: base rev from the tenant file may lag unprojected mutations; a real accept tracks pending revs.
+        let base: i64 = self.main.prepare_cached("SELECT rev FROM entities WHERE id=?")?.query_row([entity_id], |r| r.get(0))?;
+        let pls: Vec<i64> =
+            self.main.prepare_cached("SELECT id FROM placements WHERE entity_id=?")?.query_map([entity_id], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        let tx = self.c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.prepare_cached("INSERT INTO mutations(entity_id, base_rev, patch, idem_key) VALUES (?,?,?,?)")?
+            .execute(params![entity_id, base, patch, idem])?;
+        let mid = tx.last_insert_rowid();
+        for pid in pls {
+            tx.prepare_cached("INSERT INTO outbox(placement_id, mutation_id, state, payload) VALUES (?,?,0,?)")?.execute(params![pid, mid, patch])?;
+        }
+        tx.commit()?;
+        Ok(mid)
+    }
 }
 
 /// Range query across collections; dedups an entity placed in several of them.

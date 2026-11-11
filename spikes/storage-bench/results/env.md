@@ -1,8 +1,8 @@
 # Environment
-st 11. listopadu 2026, 15:09:42 UTC
+st 11. listopadu 2026, 15:36:57 UTC
 CPU(s):                                  20
 Model name:                              Intel(R) Core(TM) Ultra 7 265K
-CPU(s) scaling MHz:                      70%
+CPU(s) scaling MHz:                      48%
 CPU max MHz:                             6500,0000
                total        used        free      shared  buff/cache   available
 Mem:              62          17          32           1          14          44

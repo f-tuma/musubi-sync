@@ -70,7 +70,7 @@ pub async fn create_tenant(c: &Client, tenant: i64) -> Res<()> {
 pub struct Writer {
     pub c: Client,
     tenant: i64,
-    seq: i64,
+    pub seq: i64,
     next_id: i64,
     st: HashMap<&'static str, Statement>,
 }
