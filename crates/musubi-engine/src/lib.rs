@@ -145,6 +145,8 @@ struct Inner<S: Storage, C> {
     // shortcut: in-process only; two engine processes on one control store could
     // run two jobs of one collection at once. Upgrade to a lease per collection then.
     locks: Mutex<HashMap<CollectionId, Arc<tokio::sync::Mutex<()>>>>,
+    // Same shortcut: held by discovery, and by removal while it marks the account.
+    account_locks: Mutex<HashMap<AccountId, Arc<tokio::sync::Mutex<()>>>>,
     accounts: Mutex<HashMap<AccountId, AccountRt>>,
     codec: PhantomData<fn() -> C>,
 }
@@ -194,6 +196,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 config,
                 writers: Default::default(),
                 locks: Default::default(),
+                account_locks: Default::default(),
                 accounts: Default::default(),
                 codec: PhantomData,
             }),
@@ -258,19 +261,23 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let Some(rec) = self.account(account).await? else {
             return Ok(());
         };
-        self.ctl(move |c| c.set_account_state(account, AccountState::Removing))
+        {
+            // A running discovery finishes first; later ones see `Removing`.
+            let _lock = self.account_lock(account).lock_owned().await;
+            self.ctl(move |c| c.set_account_state(account, AccountState::Removing))
+                .await?;
+            // The resume point; due after this call normally finished and deleted it.
+            let due = after(self.now(), self.inner.config.lease_for);
+            self.enqueue(JobSpec {
+                tenant: rec.tenant,
+                lane: Lane::Sync,
+                kind: JobKind::Discover { account },
+                priority: 10,
+                due,
+                dedup: Some(format!("discover:{account}")),
+            })
             .await?;
-        // The resume point; due after this call normally finished and deleted it.
-        let due = after(self.now(), self.inner.config.lease_for);
-        self.enqueue(JobSpec {
-            tenant: rec.tenant,
-            lane: Lane::Sync,
-            kind: JobKind::Discover { account },
-            priority: 10,
-            due,
-            dedup: Some(format!("discover:{account}")),
-        })
-        .await?;
+        }
         self.removal(&rec).await
     }
 

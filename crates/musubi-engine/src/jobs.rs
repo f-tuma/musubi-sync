@@ -80,8 +80,9 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// discovery job continues the removal, and other jobs of `ReauthRequired`,
     /// `Paused` and `Removing` accounts are dropped (no polling).
     ///
-    /// One job per collection runs at a time; a job finding its collection
-    /// busy comes back shortly instead of holding a lane slot.
+    /// One job per collection, and one discovery per account, runs at a time;
+    /// a job finding its lock busy comes back shortly instead of holding a
+    /// lane slot.
     async fn account_job(&self, job: &Job, account: AccountId, work: Work) -> Outcome {
         let rec = match self.account(account).await {
             Ok(Some(r)) => r,
@@ -111,19 +112,16 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 count: false,
             };
         }
-        let col = match &work {
-            Work::Discover => None,
-            Work::Sync(c) => Some(*c),
-            Work::Renew(ch) => Some(ch.collection),
+        let lock = match &work {
+            Work::Discover => self.account_lock(account),
+            Work::Sync(c) => self.lock(*c),
+            Work::Renew(ch) => self.lock(ch.collection),
         };
-        let _lock = match col.map(|c| self.lock(c).try_lock_owned()) {
-            Some(Err(_)) => {
-                return Outcome::Retry {
-                    due: after(self.now(), BUSY_WAIT),
-                    count: false,
-                };
-            }
-            guard => guard,
+        let Ok(_lock) = lock.try_lock_owned() else {
+            return Outcome::Retry {
+                due: after(self.now(), BUSY_WAIT),
+                count: false,
+            };
         };
         let res = match self.cx(account, false).await {
             Ok(cx) => match self.work(&rec, &cx, job, &work).await {
@@ -319,6 +317,12 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             }
             Err(e) => return Err(e.into()),
         };
+        // Under the account lock the state cannot become `Removing` meanwhile:
+        // `remove_account` waits for it.
+        let state = self.account(account).await?.map(|r| r.state);
+        if !matches!(state, Some(AccountState::Active | AccountState::Connecting)) {
+            return Ok(());
+        }
         let d = DiscoveryWrite {
             account,
             collections,
@@ -338,7 +342,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             };
             self.drop_collection(tenant, cx, col.id).await?;
         }
-        if rec.state == AccountState::Connecting {
+        if state == Some(AccountState::Connecting) {
             self.ctl(move |c| c.set_account_state(account, AccountState::Active))
                 .await?;
         }
@@ -866,6 +870,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
 
     pub(crate) fn lock(&self, id: CollectionId) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.inner.locks.lock().unwrap_or_else(|e| e.into_inner());
+        locks.entry(id).or_default().clone()
+    }
+
+    pub(crate) fn account_lock(&self, id: AccountId) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self
+            .inner
+            .account_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         locks.entry(id).or_default().clone()
     }
 }

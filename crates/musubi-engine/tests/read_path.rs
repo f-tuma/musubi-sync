@@ -984,3 +984,85 @@ async fn unauthorized_twice_in_a_row_requires_sign_in() {
     h.engine.run_until_idle().await.unwrap();
     assert_eq!(h.state(), Some(AccountState::ReauthRequired));
 }
+
+#[tokio::test]
+async fn removal_during_a_discovery_leaves_nothing_behind() {
+    let h = H::new();
+    h.fake.hold(Op::Discover);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().discover == 1).await;
+
+    // The discovery waits on the provider while the account is removed.
+    let engine = h.engine.clone();
+    let remove = tokio::spawn(async move { engine.remove_account(ACCOUNT).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_ne!(h.state(), Some(AccountState::Removing), "removal waits");
+    h.fake.release(Op::Discover);
+    remove.await.unwrap().unwrap();
+    run.await.unwrap().unwrap();
+
+    assert_eq!(h.state(), None);
+    assert!(h.store().collections().unwrap().is_empty());
+    assert!(h.fake.channels().is_empty());
+    assert!(
+        h.control
+            .channels(TENANT, Some(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn channel_opened_while_the_account_is_removed_is_stopped() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake.hold(Op::Subscribe);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().subscribe == 1).await;
+
+    let engine = h.engine.clone();
+    let remove = tokio::spawn(async move { engine.remove_account(ACCOUNT).await });
+    until(|| h.state() == Some(AccountState::Removing)).await;
+    h.fake.release(Op::Subscribe);
+    remove.await.unwrap().unwrap();
+    run.await.unwrap().unwrap();
+
+    assert_eq!(h.state(), None);
+    assert!(h.fake.channels().is_empty());
+    assert!(
+        h.control
+            .channels(TENANT, Some(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(h.store().collections().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn channel_opened_while_the_account_is_paused_is_stopped() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake.hold(Op::Subscribe);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().subscribe == 1).await;
+
+    h.control
+        .set_account_state(ACCOUNT, AccountState::Paused)
+        .unwrap();
+    h.fake.release(Op::Subscribe);
+    run.await.unwrap().unwrap();
+
+    assert!(h.fake.channels().is_empty());
+    assert!(
+        h.control
+            .channels(TENANT, Some(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+}

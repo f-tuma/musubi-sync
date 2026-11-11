@@ -831,7 +831,7 @@ impl TenantStore for SqliteTenant {
             let mut st = c.prepare_cached(
                 "SELECT i.id, i.entity, i.validator, i.raw_hash, i.schema_version,
                         i.mapping_version, i.tombstone, e.indexed_until
-                 FROM items i JOIN entities e ON e.id = i.entity
+                 FROM items i LEFT JOIN entities e ON e.id = i.entity
                  WHERE i.collection = ?1 AND i.key = ?2",
             )?;
             let mut out = Vec::with_capacity(keys.len());

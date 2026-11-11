@@ -2,8 +2,8 @@
 //!
 //! [`FakeProvider`] is an in-memory [`Provider`] and [`PushSource`] with
 //! paging, resumable cursors and a delta log, scripted failures
-//! ([`FakeProvider::fail`]), a gate holding full reads
-//! ([`FakeProvider::hold_full_reads`]), notifications and call counters
+//! ([`FakeProvider::fail`]), gates holding full reads
+//! ([`FakeProvider::hold_full_reads`]) and other calls ([`FakeProvider::hold`]), notifications and call counters
 //! ([`FakeProvider::calls`]). Engine tests also drive it with
 //! [`FakeProvider::unlist_collection`], [`FakeProvider::hide_from_reads`] and
 //! [`FakeProvider::expire_cursors`], and use [`ManualClock`],
@@ -120,6 +120,8 @@ struct State {
     calls: Calls,
     /// While set, full-read pages wait for a permit.
     full_gate: Option<Arc<tokio::sync::Semaphore>>,
+    /// Held calls per op (see [`FakeProvider::hold`]).
+    gates: BTreeMap<Op, Arc<tokio::sync::Semaphore>>,
     version: u64,
     /// Delta cursors older than this are expired.
     oldest_cursor: u64,
@@ -220,6 +222,30 @@ impl FakeProvider {
     pub fn release_full_reads(&self) {
         if let Some(g) = self.lock().full_gate.take() {
             g.close();
+        }
+    }
+
+    /// Calls of `op` (`Discover` or `Subscribe`) from now on are counted, then
+    /// wait until [`FakeProvider::release`].
+    pub fn hold(&self, op: Op) {
+        self.lock()
+            .gates
+            .insert(op, Arc::new(tokio::sync::Semaphore::new(0)));
+    }
+
+    /// Lets held calls of `op` continue and stops holding new ones.
+    pub fn release(&self, op: Op) {
+        if let Some(g) = self.lock().gates.remove(&op) {
+            g.close();
+        }
+    }
+
+    /// Waits while `op` is held.
+    async fn gate(&self, op: Op) {
+        let gate = self.lock().gates.get(&op).cloned();
+        if let Some(g) = gate {
+            // Closed by `release`; no permit is ever added.
+            let _ = g.acquire().await;
         }
     }
 
@@ -616,6 +642,7 @@ impl Provider for FakeProvider {
 
     async fn discover(&self, _cx: &AccountCx) -> Result<Discovery, SyncError> {
         self.enter(Op::Discover)?;
+        self.gate(Op::Discover).await;
         let s = self.lock();
         Ok(Discovery {
             collections: s
@@ -706,6 +733,7 @@ impl PushSource for FakeProvider {
         _callback: &Uri,
     ) -> Result<Subscription, SyncError> {
         self.enter(Op::Subscribe)?;
+        self.gate(Op::Subscribe).await;
         let mut s = self.lock();
         s.next_channel += 1;
         let channel = ChannelId(format!("fake-channel-{}", s.next_channel));
