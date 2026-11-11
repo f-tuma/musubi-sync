@@ -1,0 +1,17 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3425620011456000\"",
+  "id": "1a2b3c4d5e6f7g8h9i0jklmnop",
+  "status": "confirmed",
+  "created": "2026-10-20T12:00:00.000Z",
+  "updated": "2026-10-20T12:00:00.000Z",
+  "summary": "Christmas",
+  "organizer": {"email": "anna@example.com", "self": true},
+  "start": {"date": "2026-12-24"},
+  "end": {"date": "2026-12-27"},
+  "transparency": "transparent",
+  "iCalUID": "1a2b3c4d5e6f7g8h9i0jklmnop@google.com",
+  "sequence": 0,
+  "reminders": {"useDefault": true},
+  "eventType": "default"
+}

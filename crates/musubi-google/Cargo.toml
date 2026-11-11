@@ -10,6 +10,22 @@ publish = false
 
 [dependencies]
 musubi-model.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+http.workspace = true
+jiff.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
+musubi-testkit.workspace = true
 
 [lints]
 workspace = true

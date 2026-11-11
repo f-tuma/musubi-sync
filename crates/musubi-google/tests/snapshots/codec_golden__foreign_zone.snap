@@ -1,0 +1,29 @@
+---
+source: crates/musubi-google/tests/codec_golden.rs
+expression: decode(stringify! (foreign_zone))
+---
+{
+  "uid": "f0r31gnz0n3e0v3nt000000000@google.com",
+  "title": "Flight JFK → LAX",
+  "start": "2026-11-20T09:00:00",
+  "timeZone": "America/New_York",
+  "duration": "PT6H30M",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "participants": {
+    "anna@example.com": {
+      "email": "anna@example.com",
+      "roles": {
+        "owner": true
+      },
+      "participationStatus": "needs-action",
+      "expectReply": false
+    }
+  },
+  "useDefaultAlerts": false,
+  "created": "2026-11-03T10:00:00Z",
+  "updated": "2026-11-03T10:00:00Z",
+  "sequence": 0
+}

@@ -348,7 +348,8 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
   - deset oznámení během 150 ms vyvolá jeden delta požadavek;
   - pronajatá úloha po restartu procesu znovu doběhne, žádná se neztratí ani nespustí dvakrát souběžně;
   - `ReauthRequired` přepne účet do stavu „vyžaduje přihlášení" a dotazování se zastaví;
-  - chybějící kalendář v discovery není smazání, pokud discovery není úplné.
+  - chybějící kalendář v discovery není smazání, pokud discovery není úplné;
+  - zrušený výskyt importované série (cizí iCalUID) se k předloze připojí podle `recurringEventId` a nezobrazí se jako živý (otevřená otázka 3).
 - **Závisí na:** K1, K2. Na K4 ne: engine i jeho testy pracují jen s traity.
 - **Souběžně:** K6 a dobíhající K3, K4.
 
@@ -454,6 +455,7 @@ Kroky:
 5. **T8:** `events.watch` s `expiration` nastavenou na teď + 30 dní a druhý požadavek bez `expiration`; zapsat vrácené `expiration`.
 6. Nechat běžet přes noc; zkontrolovat, že se watch kanál obnovil podle `expiration` a nic se neztratilo.
 7. Zaznamenat odpovědi (bez osobních dat) pro fixtures K3 a velikost surových těl pro rozhodnutí o kompresi.
+8. Ověřit předpoklady adaptéru K4: jaký stav vrací Google na prošlý nebo odmítnutý `pageToken` uloženého kurzoru (K4 čte 400 jako `CursorExpired`) a zda `originalStartTime` přichází i bez `timeZone` (K4 pak čte čas v Etc/UTC; korelace porovnává okamžiky).
 
 Výsledek se zapíše do `docs/research/phase1/live-google.md` a podle něj se upraví čísla v kapitole 5.1 návrhu.
 
@@ -506,3 +508,4 @@ Rozhodnuto (koordinátor, 11. 11. 2026): soubor outboxu se implementuje ve fázi
 
 1. **Stroj pro měření ext4/XFS a disku s PLP.** Bez něj zůstane toto měření otevřené i po fázi 1.
 2. **Testovací účet Google, projekt GCP a veřejná adresa pro webhook** pro K8.
+3. **Uid zrušeného výskytu importované série.** Google vrací zrušený výskyt jen jako skořápku s `recurringEventId` bez `iCalUID`. Adaptér K4 odvodí uid z id předlohy, což u série s cizím iCalUID (import) nesedí s uid předlohy. `musubi-model` se v K4 nemění; K5 rozhodne, zda vazbu na sérii ponese `Correlation`, nebo `RemoteObject`.

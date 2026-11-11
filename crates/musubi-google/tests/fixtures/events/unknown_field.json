@@ -1,0 +1,15 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3425621400000000\"",
+  "id": "unkn0wnf13ld0000000000000",
+  "status": "confirmed",
+  "created": "2026-11-04T10:00:00.000Z",
+  "updated": "2026-11-04T10:00:00.000Z",
+  "summary": "Event with a field Google added later",
+  "start": {"dateTime": "2026-11-13T08:00:00Z", "timeZone": "UTC"},
+  "end": {"dateTime": "2026-11-13T09:00:00Z", "timeZone": "UTC"},
+  "iCalUID": "unkn0wnf13ld0000000000000@google.com",
+  "sequence": 0,
+  "eventType": "default",
+  "futureFeature": {"mode": "hologram", "levels": [1, 2, 3], "note": "kept byte for byte"}
+}

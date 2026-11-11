@@ -1,0 +1,29 @@
+---
+source: crates/musubi-google/tests/codec_golden.rs
+expression: decode(stringify! (all_day))
+---
+{
+  "uid": "1a2b3c4d5e6f7g8h9i0jklmnop@google.com",
+  "title": "Christmas",
+  "start": "2026-12-24T00:00:00",
+  "timeZone": null,
+  "duration": "P3D",
+  "showWithoutTime": true,
+  "status": "confirmed",
+  "freeBusyStatus": "free",
+  "privacy": "public",
+  "participants": {
+    "anna@example.com": {
+      "email": "anna@example.com",
+      "roles": {
+        "owner": true
+      },
+      "participationStatus": "needs-action",
+      "expectReply": false
+    }
+  },
+  "useDefaultAlerts": true,
+  "created": "2026-10-20T12:00:00Z",
+  "updated": "2026-10-20T12:00:00Z",
+  "sequence": 0
+}

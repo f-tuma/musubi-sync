@@ -1,0 +1,27 @@
+{
+  "kind": "calendar#event",
+  "etag": "\"3425619862123000\"",
+  "id": "4u7k2o9qv1t3m5h8j0b6c2d4e6",
+  "status": "confirmed",
+  "htmlLink": "https://www.google.com/calendar/event?eid=NHU3azJvOXF2MXQzbTVoOGowYjZjMmQ0ZTYgYW5uYUBleGFtcGxlLmNvbQ",
+  "created": "2026-11-01T08:12:40.000Z",
+  "updated": "2026-11-02T09:44:31.061Z",
+  "summary": "Design review",
+  "description": "Walk through the sync engine proposal.",
+  "location": "Room 4.12",
+  "creator": {"email": "anna@example.com", "self": true},
+  "organizer": {"email": "anna@example.com", "displayName": "Anna Nováková", "self": true},
+  "start": {"dateTime": "2026-11-12T10:00:00+01:00", "timeZone": "Europe/Prague"},
+  "end": {"dateTime": "2026-11-12T11:30:00+01:00", "timeZone": "Europe/Prague"},
+  "iCalUID": "4u7k2o9qv1t3m5h8j0b6c2d4e6@google.com",
+  "sequence": 2,
+  "attendees": [
+    {"email": "anna@example.com", "displayName": "Anna Nováková", "organizer": true, "self": true, "responseStatus": "accepted"},
+    {"email": "boris@example.org", "responseStatus": "tentative"},
+    {"email": "cyril@example.org", "optional": true, "responseStatus": "needsAction"}
+  ],
+  "reminders": {"useDefault": false, "overrides": [{"method": "popup", "minutes": 10}, {"method": "email", "minutes": 1440}]},
+  "eventType": "default",
+  "transparency": "opaque",
+  "visibility": "private"
+}

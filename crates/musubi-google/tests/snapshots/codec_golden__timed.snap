@@ -1,0 +1,71 @@
+---
+source: crates/musubi-google/tests/codec_golden.rs
+expression: decode(stringify! (timed))
+---
+{
+  "uid": "4u7k2o9qv1t3m5h8j0b6c2d4e6@google.com",
+  "title": "Design review",
+  "description": "Walk through the sync engine proposal.",
+  "locations": {
+    "location": {
+      "name": "Room 4.12"
+    }
+  },
+  "start": "2026-11-12T10:00:00",
+  "timeZone": "Europe/Prague",
+  "duration": "PT1H30M",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "private",
+  "participants": {
+    "anna@example.com": {
+      "name": "Anna Nováková",
+      "email": "anna@example.com",
+      "roles": {
+        "owner": true,
+        "attendee": true
+      },
+      "participationStatus": "accepted",
+      "expectReply": false
+    },
+    "boris@example.org": {
+      "email": "boris@example.org",
+      "roles": {
+        "attendee": true
+      },
+      "participationStatus": "tentative",
+      "expectReply": false
+    },
+    "cyril@example.org": {
+      "email": "cyril@example.org",
+      "roles": {
+        "optional": true
+      },
+      "participationStatus": "needs-action",
+      "expectReply": false
+    }
+  },
+  "alerts": {
+    "1": {
+      "trigger": {
+        "@type": "OffsetTrigger",
+        "offset": "-PT10M",
+        "relativeTo": "start"
+      },
+      "action": "display"
+    },
+    "2": {
+      "trigger": {
+        "@type": "OffsetTrigger",
+        "offset": "-PT24H",
+        "relativeTo": "start"
+      },
+      "action": "email"
+    }
+  },
+  "useDefaultAlerts": false,
+  "created": "2026-11-01T08:12:40Z",
+  "updated": "2026-11-02T09:44:31.061Z",
+  "sequence": 2
+}
