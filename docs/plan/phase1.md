@@ -350,7 +350,7 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
   - `ReauthRequired` přepne účet do stavu „vyžaduje přihlášení" a dotazování se zastaví;
   - chybějící kalendář v discovery není smazání, pokud discovery není úplné;
   - zrušený výskyt importované série (cizí iCalUID) se k předloze připojí podle `recurringEventId` a nezobrazí se jako živý (otevřená otázka 3);
-  - `RecurrenceError::TooExpensive` z rozbalení výskytů (série se v tomto okně nedá rozbalit) engine zviditelní u položky a nikdy ji nebere jako prázdnou sérii: nesmaže kvůli ní výskyty z indexu (test se sérií `FREQ=MINUTELY` se starým DTSTART).
+  - `RecurrenceError::TooExpensive` z rozbalení výskytů (série se v tomto okně nedá rozbalit) engine zviditelní u položky a nikdy ji nebere jako prázdnou sérii: nesmaže kvůli ní výskyty z indexu (test se sérií `FREQ=MINUTELY` se starým DTSTART). Rozhodnuto (review PR #13): když se série při novém příjmu nedá rozbalit do celého horizontu, engine zkusí kratší horizonty (dosavadní `indexed_until` položky, pak konec okna) a uloží nejdelší, který projde; bez řádků zůstane, jen když neprojde žádný (test s úpravou série). „U položky" znamená `RangePage::unindexed` spolu se stavem indexu entity (`indexed_until`), které ukáže API z K6; žádný nový sloupec s chybou.
 - **Závisí na:** K1, K2. Na K4 ne: engine i jeho testy pracují jen s traity.
 - **Souběžně:** K6 a dobíhající K3, K4.
 

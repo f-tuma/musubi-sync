@@ -139,7 +139,9 @@ struct Inner<S: Storage, C> {
     clock: Arc<dyn Clock>,
     sink: CommitSink,
     config: Config,
-    writers: tokio::sync::Mutex<HashMap<TenantId, Arc<Writer<S::Tenant>>>>,
+    // shortcut: writer threads live as long as the engine; stop idle ones once
+    // tenants per process number in the thousands.
+    writers: Mutex<HashMap<TenantId, Arc<Writer<S::Tenant>>>>,
     // shortcut: in-process only; two engine processes on one control store could
     // run two jobs of one collection at once. Upgrade to a lease per collection then.
     locks: Mutex<HashMap<CollectionId, Arc<tokio::sync::Mutex<()>>>>,
@@ -147,11 +149,13 @@ struct Inner<S: Storage, C> {
     codec: PhantomData<fn() -> C>,
 }
 
-/// In-memory per-account state: request pacing and a rate-limit block.
+/// In-memory per-account state: request pacing, a rate-limit block and
+/// whether the last attempt ended `Unauthorized` despite a fresh token.
 #[derive(Clone)]
 struct AccountRt {
     limiter: Arc<dyn Limiter>,
     blocked_until: Option<Timestamp>,
+    unauthorized: bool,
 }
 
 /// Background scheduler started by [`Engine::start`]; stops when dropped.
@@ -244,15 +248,44 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         self.enqueue(spec).await
     }
 
-    /// Removes an account: stops its push channels at the provider (while its
-    /// tokens still exist), purges its collections and deletes it with its jobs.
+    /// Removes an account (plan 3.3): marks it `Removing`, purges its
+    /// collections, stops its push channels at the provider while its tokens
+    /// still exist, then deletes it with its tokens, jobs and channels.
+    ///
+    /// A process that dies midway continues the removal from the account's
+    /// `Discover` job, which a `Removing` account runs as the removal.
     pub async fn remove_account(&self, account: AccountId) -> Result<(), EngineError> {
         let Some(rec) = self.account(account).await? else {
             return Ok(());
         };
         self.ctl(move |c| c.set_account_state(account, AccountState::Removing))
             .await?;
-        let tenant = rec.tenant;
+        // The resume point; due after this call normally finished and deleted it.
+        let due = after(self.now(), self.inner.config.lease_for);
+        self.enqueue(JobSpec {
+            tenant: rec.tenant,
+            lane: Lane::Sync,
+            kind: JobKind::Discover { account },
+            priority: 10,
+            due,
+            dedup: Some(format!("discover:{account}")),
+        })
+        .await?;
+        self.removal(&rec).await
+    }
+
+    /// The steps of [`Engine::remove_account`] after the state change; each
+    /// one can run again.
+    pub(crate) async fn removal(&self, rec: &AccountRecord) -> Result<(), EngineError> {
+        let (tenant, account) = (rec.tenant, rec.id);
+        // Under the collection lock: a running job finishes first (including a
+        // channel it opens), and later ones find the collection gone.
+        let cols = self.collections(tenant).await?;
+        for col in cols.into_iter().filter(|c| c.account == account) {
+            let _lock = self.lock(col.id).lock_owned().await;
+            self.write(tenant, move |s| s.purge_collection(col.id))
+                .await?;
+        }
         let channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
         if !channels.is_empty() {
             match self.cx(account, false).await {
@@ -269,12 +302,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 }
             }
         }
-        let cols = self.collections(tenant).await?;
-        for col in cols.into_iter().filter(|c| c.account == account) {
-            self.write(tenant, move |s| s.purge_collection(col.id))
-                .await?;
+        match self.ctl(move |c| c.delete_account(account)).await {
+            Ok(()) | Err(EngineError::Store(StoreError::NotFound)) => {}
+            Err(e) => return Err(e),
         }
-        self.ctl(move |c| c.delete_account(account)).await?;
         self.inner
             .accounts
             .lock()
@@ -352,12 +383,26 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
 
     /// Runs one leased job while extending its lease, then completes or
     /// reschedules it. A lost lease abandons the job: another runner owns it.
+    /// A panicking job is recorded and retried like a failed one.
     async fn execute(&self, job: Job) {
         let (id, lease) = (job.id, job.lease);
-        let run = std::pin::pin!(self.run_job(&job));
+        let (engine, j) = (self.clone(), job.clone());
+        // A task of its own so a panic is caught; aborted with `execute`.
+        let mut run = AbortOnDrop(tokio::spawn(async move { engine.run_job(&j).await }));
         let beat = std::pin::pin!(self.heartbeat(&job));
-        let outcome = match futures_util::future::select(run, beat).await {
-            futures_util::future::Either::Left((o, _)) => o,
+        let outcome = match futures_util::future::select(&mut run.0, beat).await {
+            futures_util::future::Either::Left((Ok(o), _)) => o,
+            futures_util::future::Either::Left((Err(e), _)) => {
+                let reason = match e.try_into_panic() {
+                    Ok(p) => p
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| p.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".into()),
+                    Err(e) => e.to_string(),
+                };
+                self.panicked(&job, format!("job panicked: {reason}")).await
+            }
             futures_util::future::Either::Right(((), _)) => return,
         };
         let res = match outcome {
@@ -427,28 +472,52 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let writer = self.writer(tenant).await?;
         let res = writer.run(f).await;
         if matches!(res, Err(EngineError::Stopped)) {
-            // The thread died (a panic in the store); the next write starts a new one.
-            self.inner.writers.lock().await.remove(&tenant);
+            // The thread died (a panic in the store); the next write starts a
+            // new one, unless another caller already replaced it.
+            let mut writers = self.writers();
+            if writers
+                .get(&tenant)
+                .is_some_and(|w| Arc::ptr_eq(w, &writer))
+            {
+                writers.remove(&tenant);
+            }
         }
         res
     }
 
     async fn writer(&self, tenant: TenantId) -> Result<Arc<Writer<S::Tenant>>, EngineError> {
-        let mut writers = self.inner.writers.lock().await;
-        if let Some(w) = writers.get(&tenant) {
+        if let Some(w) = self.writers().get(&tenant) {
             return Ok(w.clone());
         }
+        // Opened without holding the map: other tenants' writes go on meanwhile.
         let storage = self.inner.storage.clone();
         let store = blocking(move || Ok(storage.open(tenant)?)).await?;
+        let mut writers = self.writers();
+        if let Some(w) = writers.get(&tenant) {
+            // Another caller won the race; this handle is dropped unused.
+            return Ok(w.clone());
+        }
         let w = Arc::new(
             Writer::spawn(tenant, store, self.inner.sink.clone()).map_err(StoreError::Io)?,
         );
         writers.insert(tenant, w.clone());
         Ok(w)
     }
+
+    fn writers(&self) -> std::sync::MutexGuard<'_, HashMap<TenantId, Arc<Writer<S::Tenant>>>> {
+        self.inner.writers.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 /// Runs blocking work on the blocking pool; a panic there resumes here.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 async fn blocking<R: Send + 'static>(
     f: impl FnOnce() -> Result<R, EngineError> + Send + 'static,
 ) -> Result<R, EngineError> {

@@ -23,6 +23,9 @@ use serde_json::Value;
 pub(crate) struct Index {
     /// Occurrences starting before this are indexed (`SeriesSpan::indexed_until`).
     pub horizon: Timestamp,
+    /// Last horizon tried when a series cannot be expanded up to `horizon`
+    /// (the window read's end), after the series' previous horizon.
+    pub fallback: Timestamp,
     /// Most rows one series may produce in one expansion.
     pub limit: usize,
 }
@@ -50,13 +53,18 @@ pub(crate) fn prepare<C: Codec<Event>>(
         if same {
             unchanged.push(obj.key);
         } else {
-            upserts.push(item_write::<C>(obj, index));
+            let previous = known.get(&obj.key).and_then(|s| s.indexed_until);
+            upserts.push(item_write::<C>(obj, index, previous));
         }
     }
     (upserts, unchanged)
 }
 
-fn item_write<C: Codec<Event>>(obj: RemoteObject, index: Index) -> ItemWrite {
+fn item_write<C: Codec<Event>>(
+    obj: RemoteObject,
+    index: Index,
+    previous: Option<Timestamp>,
+) -> ItemWrite {
     let decoded = match C::decode(&obj.raw) {
         Decoded::Canonical(ev) => serde_json::value::to_raw_value(&ev)
             .map(|json| (ev, json))
@@ -66,7 +74,7 @@ fn item_write<C: Codec<Event>>(obj: RemoteObject, index: Index) -> ItemWrite {
     let (canonical, correlation, occurrences) = match decoded {
         Ok((ev, json)) => {
             let corr = correlation(&obj, &ev);
-            let occ = occurrences(&obj.key, &ev, corr.recurrence_id, index);
+            let occ = occurrences(&obj.key, &ev, corr.recurrence_id, index, previous);
             (Some(json), Some(corr), occ)
         }
         Err(reason) => {
@@ -129,14 +137,17 @@ fn event_zone(key: &RemoteKey, ev: &CalendarEvent) -> Option<TimeZone> {
 ///
 /// A cancelled item has none: a cancelled exception stays a live item whose
 /// correlation hides the master's occurrence. A series that cannot be expanded
-/// (e.g. [`RecurrenceError::TooExpensive`]) gets no rows and `indexed_until`
-/// at its first occurrence, so `range` reports it in `unindexed` instead of
-/// showing it as empty.
+/// up to the horizon (e.g. [`RecurrenceError::TooExpensive`]) is indexed up to
+/// the largest shorter horizon that works: its `previous` one, then the
+/// window read's end. Only when none works does it get no rows and
+/// `indexed_until` at its first occurrence. Either way `range` reports it in
+/// `unindexed` past its horizon instead of showing it as empty.
 fn occurrences(
     key: &RemoteKey,
     ev: &CalendarEvent,
     rid: Option<Timestamp>,
     index: Index,
+    previous: Option<Timestamp>,
 ) -> Occurrences {
     if ev.status == EventStatus::Cancelled {
         return Occurrences::default();
@@ -163,28 +174,39 @@ fn occurrences(
             return Occurrences::default();
         }
     };
-    match expand_rows(ev, zone, Timestamp::MIN, index.horizon, index.limit) {
-        // shortcut: `last` stays unknown (None), so ended series are re-expanded by
-        // every index extension; compute it from COUNT/UNTIL if that shows in profiles.
-        Ok(rows) => Occurrences {
-            rows,
-            series: Some(SeriesSpan {
-                first,
-                last: None,
-                indexed_until: index.horizon,
-            }),
-        },
-        Err(e) => {
-            tracing::warn!(key = %key.0, error = %e, "series not expandable; reported as unindexed");
-            Occurrences {
-                rows: Vec::new(),
-                series: Some(SeriesSpan {
-                    first,
-                    last: None,
-                    indexed_until: first,
-                }),
+    let mut horizons = vec![index.horizon];
+    horizons.extend(previous);
+    horizons.push(index.fallback);
+    horizons.retain(|&h| h > first && h <= index.horizon);
+    horizons.sort_unstable_by(|a, b| b.cmp(a));
+    horizons.dedup();
+    for until in horizons {
+        match expand_rows(ev, zone.clone(), Timestamp::MIN, until, index.limit) {
+            // shortcut: `last` stays unknown (None), so ended series are re-expanded by
+            // every index extension; compute it from COUNT/UNTIL if that shows in profiles.
+            Ok(rows) => {
+                return Occurrences {
+                    rows,
+                    series: Some(SeriesSpan {
+                        first,
+                        last: None,
+                        indexed_until: until,
+                    }),
+                };
+            }
+            Err(e) => {
+                tracing::warn!(key = %key.0, error = %e, %until, "series not expandable up to the horizon");
             }
         }
+    }
+    tracing::warn!(key = %key.0, "series not expandable; reported as unindexed");
+    Occurrences {
+        rows: Vec::new(),
+        series: Some(SeriesSpan {
+            first,
+            last: None,
+            indexed_until: first,
+        }),
     }
 }
 
@@ -301,6 +323,7 @@ mod tests {
 
     const INDEX: Index = Index {
         horizon: Timestamp::constant(1_900_000_000, 0),
+        fallback: Timestamp::constant(1_800_000_000, 0),
         limit: 50_000,
     };
 
@@ -312,7 +335,7 @@ mod tests {
             "recurrenceId": "2026-03-02T09:00:00", "recurrenceIdTimeZone": "Europe/Prague",
             "status": "cancelled"
         }));
-        let w = item_write::<Json>(obj("m1_20260302", &e, Some("m1")), INDEX);
+        let w = item_write::<Json>(obj("m1_20260302", &e, Some("m1")), INDEX, None);
         let c = w.correlation.unwrap();
         assert_eq!(c.uid, "m1");
         assert_eq!(
@@ -322,7 +345,7 @@ mod tests {
         assert!(w.occurrences.rows.is_empty() && w.occurrences.series.is_none());
 
         // Without a master the item is its own series, whatever its uid.
-        let w = item_write::<Json>(obj("solo", &e, None), INDEX);
+        let w = item_write::<Json>(obj("solo", &e, None), INDEX, None);
         assert_eq!(w.correlation.unwrap().uid, "solo");
     }
 
@@ -337,7 +360,7 @@ mod tests {
             expand_rows(&e, zone, Timestamp::MIN, INDEX.horizon, INDEX.limit),
             Err(RecurrenceError::TooExpensive)
         );
-        let w = item_write::<Json>(obj("k", &e, None), INDEX);
+        let w = item_write::<Json>(obj("k", &e, None), INDEX, None);
         let first: Timestamp = "2000-01-01T00:00:00Z".parse().unwrap();
         assert!(w.occurrences.rows.is_empty());
         assert_eq!(
@@ -360,7 +383,7 @@ mod tests {
                 "2026-03-10T09:00:00": {}
             }
         }));
-        let w = item_write::<Json>(obj("m", &e, None), INDEX);
+        let w = item_write::<Json>(obj("m", &e, None), INDEX, None);
         let starts: Vec<String> = w
             .occurrences
             .rows
@@ -397,6 +420,7 @@ mod tests {
             schema_version: Event::SCHEMA_VERSION,
             mapping_version: 1,
             tombstone: false,
+            indexed_until: None,
         };
         let (up, same) = prepare::<Json>(vec![o.clone()], vec![known.clone()], INDEX);
         assert!(up.is_empty());

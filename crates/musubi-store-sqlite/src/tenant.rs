@@ -829,26 +829,35 @@ impl TenantStore for SqliteTenant {
     ) -> Result<Vec<ItemState>, StoreError> {
         Ok(self.shared.read(|c| {
             let mut st = c.prepare_cached(
-                "SELECT id, entity, validator, raw_hash, schema_version, mapping_version, tombstone
-                 FROM items WHERE collection = ?1 AND key = ?2",
+                "SELECT i.id, i.entity, i.validator, i.raw_hash, i.schema_version,
+                        i.mapping_version, i.tombstone, e.indexed_until
+                 FROM items i JOIN entities e ON e.id = i.entity
+                 WHERE i.collection = ?1 AND i.key = ?2",
             )?;
             let mut out = Vec::with_capacity(keys.len());
             for k in keys {
                 let s = st
                     .query_row(params![col.to_bytes(), k.0], |r| {
-                        Ok(ItemState {
-                            key: k.clone(),
-                            item: ItemId::from_bytes(r.get(0)?),
-                            entity: EntityId::from_bytes(r.get(1)?),
-                            validator: Validator(r.get(2)?),
-                            raw_hash: RawHash(r.get(3)?),
-                            schema_version: r.get(4)?,
-                            mapping_version: r.get(5)?,
-                            tombstone: r.get(6)?,
-                        })
+                        Ok((
+                            ItemState {
+                                key: k.clone(),
+                                item: ItemId::from_bytes(r.get(0)?),
+                                entity: EntityId::from_bytes(r.get(1)?),
+                                validator: Validator(r.get(2)?),
+                                raw_hash: RawHash(r.get(3)?),
+                                schema_version: r.get(4)?,
+                                mapping_version: r.get(5)?,
+                                tombstone: r.get(6)?,
+                                indexed_until: None,
+                            },
+                            r.get::<_, Option<i64>>(7)?,
+                        ))
                     })
                     .optional()?;
-                out.extend(s);
+                if let Some((mut s, until)) = s {
+                    s.indexed_until = opt_ts(until)?;
+                    out.push(s);
+                }
             }
             Ok(out)
         })?)

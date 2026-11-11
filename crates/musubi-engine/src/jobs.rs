@@ -43,6 +43,8 @@ const EXTEND_BATCH: u32 = 200;
 const REFRESH_EARLY: Duration = Duration::from_secs(60);
 /// Wait after `RateLimited` without `Retry-After`.
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
+/// Wait for a job whose collection another job is working on.
+const BUSY_WAIT: Duration = Duration::from_secs(1);
 
 impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     pub(crate) async fn run_job(&self, job: &Job) -> Outcome {
@@ -66,15 +68,20 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     Err(e) => self.retry(job, e),
                 };
             }
-            // Pruning and checkpoints belong to a later checkpoint.
+            // shortcut: a no-op; pruning and WAL checkpoints come with the
+            // maintenance checkpoint, before tenants accumulate tombstones.
             JobKind::Maintain => return Outcome::Done,
         };
         self.account_job(job, account, work).await
     }
 
     /// The account state machine gates every account job: only `Active`
-    /// accounts sync, a `Connecting` one only discovers, and `ReauthRequired`,
-    /// `Paused` and `Removing` drop their jobs (no polling).
+    /// accounts sync, a `Connecting` one only discovers, a `Removing` one's
+    /// discovery job continues the removal, and other jobs of `ReauthRequired`,
+    /// `Paused` and `Removing` accounts are dropped (no polling).
+    ///
+    /// One job per collection runs at a time; a job finding its collection
+    /// busy comes back shortly instead of holding a lane slot.
     async fn account_job(&self, job: &Job, account: AccountId, work: Work) -> Outcome {
         let rec = match self.account(account).await {
             Ok(Some(r)) => r,
@@ -84,6 +91,13 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let runnable = match rec.state {
             AccountState::Active => true,
             AccountState::Connecting => matches!(work, Work::Discover),
+            // A removal cut short by a crash (plan 3.3).
+            AccountState::Removing if matches!(work, Work::Discover) => {
+                return match self.removal(&rec).await {
+                    Ok(()) => Outcome::Done,
+                    Err(e) => self.retry(job, e),
+                };
+            }
             _ => false,
         };
         if !runnable {
@@ -97,6 +111,20 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 count: false,
             };
         }
+        let col = match &work {
+            Work::Discover => None,
+            Work::Sync(c) => Some(*c),
+            Work::Renew(ch) => Some(ch.collection),
+        };
+        let _lock = match col.map(|c| self.lock(c).try_lock_owned()) {
+            Some(Err(_)) => {
+                return Outcome::Retry {
+                    due: after(self.now(), BUSY_WAIT),
+                    count: false,
+                };
+            }
+            guard => guard,
+        };
         let res = match self.cx(account, false).await {
             Ok(cx) => match self.work(&rec, &cx, job, &work).await {
                 // The access token was revoked early: refresh once and run again.
@@ -111,7 +139,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             Err(e) => Err(e),
         };
         match res {
-            Ok(()) => Outcome::Done,
+            Ok(()) => {
+                self.with_rt(account, |rt| rt.unauthorized = false);
+                Outcome::Done
+            }
             Err(e) => self.failed(job, &rec, &work, e).await,
         }
     }
@@ -136,7 +167,17 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             _ => None,
         };
         match e {
+            // `Unauthorized` right after a refresh may be a provider hiccup:
+            // one counted retry before the user is asked to sign in again.
+            EngineError::Sync(SyncError::Unauthorized)
+                if !self.with_rt(rec.id, |rt| std::mem::replace(&mut rt.unauthorized, true)) =>
+            {
+                self.record_error(rec.tenant, col, e.to_string(), false)
+                    .await;
+                self.retry(job, e)
+            }
             EngineError::Sync(SyncError::ReauthRequired | SyncError::Unauthorized) => {
+                self.with_rt(rec.id, |rt| rt.unauthorized = false);
                 tracing::warn!(account = %rec.id, "account requires sign-in");
                 let id = rec.id;
                 match self
@@ -166,6 +207,18 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 self.retry(job, e)
             }
         }
+    }
+
+    /// A job that panicked: recorded on its collection and retried with
+    /// backoff like any failure.
+    pub(crate) async fn panicked(&self, job: &Job, message: String) -> Outcome {
+        let col = match &job.spec.kind {
+            JobKind::Sync { collection, .. } => Some(*collection),
+            _ => None,
+        };
+        self.record_error(job.spec.tenant, col, message.clone(), false)
+            .await;
+        self.retry(job, message)
     }
 
     fn retry(&self, job: &Job, e: impl std::fmt::Display) -> Outcome {
@@ -250,6 +303,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 self.inner.provider.descriptor().limits.requests_per_minute,
             )),
             blocked_until: None,
+            unauthorized: false,
         });
         f(rt)
     }
@@ -278,6 +332,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             .filter(|c| c.account == account)
             .collect();
         for col in cols.iter().filter(|c| c.gone) {
+            // A job still on it: the next discovery drops it.
+            let Ok(_lock) = self.lock(col.id).try_lock_owned() else {
+                continue;
+            };
             self.drop_collection(tenant, cx, col.id).await?;
         }
         if rec.state == AccountState::Connecting {
@@ -356,7 +414,6 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         lane: Lane,
     ) -> Result<(), EngineError> {
         let tenant = rec.tenant;
-        let _lock = self.lock(id).lock_owned().await;
         let Some(col) = self.collection(tenant, id).await? else {
             return Ok(());
         };
@@ -447,6 +504,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 
     /// Reads pages until the provider's last one; one transaction per page.
+    ///
+    /// shortcut: no pipelining, the next page is requested only after the
+    /// previous one committed; overlap fetch and commit once full reads of
+    /// large calendars are measured too slow.
     async fn read_pass(
         &self,
         tenant: TenantId,
@@ -491,8 +552,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             last,
         } = page;
         let c = &self.inner.config;
+        let now = self.now();
         let index = ingest::Index {
-            horizon: after(self.now(), c.index_forward),
+            horizon: after(now, c.index_forward),
+            fallback: after(now, c.window_forward),
             limit: c.index_row_limit,
         };
         let storage = self.inner.storage.clone();
@@ -630,14 +693,16 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         }
         match push.subscribe(cx, &col.remote.remote, callback).await {
             Ok(sub) => {
-                self.put_channel(ChannelRecord {
-                    tenant,
-                    account,
-                    collection: id,
-                    sub,
-                })
-                .await?;
-                Ok(true)
+                self.put_channel(
+                    cx,
+                    ChannelRecord {
+                        tenant,
+                        account,
+                        collection: id,
+                        sub,
+                    },
+                )
+                .await
             }
             Err(e) => {
                 tracing::warn!(collection = %id, error = %e, "push channel not opened; polling");
@@ -646,8 +711,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         }
     }
 
-    /// Stores a channel and schedules its renewal at two thirds of its life.
-    async fn put_channel(&self, ch: ChannelRecord) -> Result<(), EngineError> {
+    /// Stores a new channel and schedules its renewal at two thirds of its
+    /// life. Returns false, after stopping it, if the account is no longer
+    /// syncing (a removal that started while it was being opened).
+    async fn put_channel(&self, cx: &AccountCx, ch: ChannelRecord) -> Result<bool, EngineError> {
+        let state = self.account(ch.account).await?.map(|r| r.state);
+        if !matches!(state, Some(AccountState::Active | AccountState::Connecting)) {
+            self.drop_channel(cx, &ch).await?;
+            return Ok(false);
+        }
         let now = self.now();
         let left = (ch.sub.expiration.as_second() - now.as_second()).max(0);
         let renew = Timestamp::from_second(now.as_second() + (left * 2 / 3).max(60))
@@ -664,7 +736,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         };
         // The renewal job names the channel, so the channel row goes first.
         self.ctl(move |c| c.put_channel(&ch)).await?;
-        self.enqueue(job).await
+        self.enqueue(job).await?;
+        Ok(true)
     }
 
     /// Replaces a channel before it expires, then stops the old one.
@@ -675,12 +748,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             && !col.gone
         {
             let sub = push.subscribe(cx, &col.remote.remote, callback).await?;
-            self.put_channel(ChannelRecord {
-                tenant: old.tenant,
-                account: old.account,
-                collection: old.collection,
-                sub,
-            })
+            self.put_channel(
+                cx,
+                ChannelRecord {
+                    tenant: old.tenant,
+                    account: old.account,
+                    collection: old.collection,
+                    sub,
+                },
+            )
             .await?;
         }
         self.drop_channel(cx, old).await
@@ -788,7 +864,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             .find(|c| c.id == id))
     }
 
-    fn lock(&self, id: CollectionId) -> Arc<tokio::sync::Mutex<()>> {
+    pub(crate) fn lock(&self, id: CollectionId) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.inner.locks.lock().unwrap_or_else(|e| e.into_inner());
         locks.entry(id).or_default().clone()
     }

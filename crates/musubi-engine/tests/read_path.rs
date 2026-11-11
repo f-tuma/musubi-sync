@@ -10,13 +10,14 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use musubi_engine::{CommitSink, Config, Engine};
 use musubi_model::capability::ProviderId;
-use musubi_model::control::{AccountRecord, AccountState, AccountTokens};
+use musubi_model::control::{AccountRecord, AccountState, AccountTokens, JobKind, Lane};
 use musubi_model::journal::{ChangeOp, ChangeTarget};
 use musubi_model::provider::{Access, RemoteCollection};
 use musubi_model::store::{CollectionState, Coverage, RangePage, RangeQuery};
 use musubi_model::{
-    AccountId, CalendarEvent, Change, CollectionId, CollectionRef, ControlStore, EntityId,
-    EntityKind, RemoteKey, Seq, Storage, SyncError, TenantId, TenantStore, TimeWindow, TokenVault,
+    AccountId, CalendarEvent, Change, Codec, CollectionId, CollectionRef, ControlStore, Decoded,
+    EntityId, EntityKind, Event, Raw, RemoteKey, Seq, Storage, StoreError, SyncError, TenantId,
+    TenantStore, TimeWindow, TokenVault,
 };
 use musubi_store_sqlite::{SqliteControl, SqliteStorage};
 use musubi_testkit::{
@@ -122,7 +123,15 @@ impl H {
         tune(&mut config);
         let commits = Arc::new(Mutex::new(Vec::new()));
         let mut h = Self {
-            engine: engine_for(&storage, &control, &vault, &clock, &fake, &commits, &config),
+            engine: engine_for(
+                &storage,
+                &control,
+                vault.clone(),
+                &clock,
+                &fake,
+                &commits,
+                &config,
+            ),
             storage,
             control,
             vault,
@@ -138,10 +147,18 @@ impl H {
 
     /// A new engine over the same stores, as after a process restart.
     fn restart(&self) -> TestEngine {
+        self.engine_with(self.vault.clone())
+    }
+
+    /// A new engine over the same stores with another codec or vault.
+    fn engine_with<C: Codec<Event> + 'static>(
+        &self,
+        vault: Arc<dyn TokenVault>,
+    ) -> Engine<SqliteStorage, C> {
         engine_for(
             &self.storage,
             &self.control,
-            &self.vault,
+            vault,
             &self.clock,
             &self.fake,
             &self.commits,
@@ -246,15 +263,15 @@ impl H {
     }
 }
 
-fn engine_for(
+fn engine_for<C: Codec<Event> + 'static>(
     storage: &Arc<SqliteStorage>,
     control: &Arc<SqliteControl>,
-    vault: &Arc<MemoryVault>,
+    vault: Arc<dyn TokenVault>,
     clock: &ManualClock,
     fake: &FakeProvider,
     commits: &Arc<Mutex<Vec<Seq>>>,
     config: &Config,
-) -> TestEngine {
+) -> Engine<SqliteStorage, C> {
     let commits = commits.clone();
     let sink: CommitSink = Arc::new(move |tenant, head| {
         assert_eq!(tenant, TENANT);
@@ -264,7 +281,7 @@ fn engine_for(
         storage.clone(),
         Arc::new(fake.clone()),
         control.clone(),
-        vault.clone(),
+        vault,
         Arc::new(clock.clone()),
         sink,
         config.clone(),
@@ -763,4 +780,207 @@ async fn failed_index_extension_keeps_indexed_occurrences() {
     assert_eq!(horizon_of(&h, entity), old);
     let page = h.range(old, old + SignedDuration::from_hours(24 * 30));
     assert!(page.unindexed.iter().any(|s| s.entity == entity));
+
+    // An edit re-expands the series: the new horizon is too expensive, so it
+    // falls back to the previous one and keeps the indexed occurrences.
+    h.put("cal1", "odd", "v2", &odd, None);
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(
+        h.store()
+            .items_by_remote(h.col("cal1"), &[RemoteKey("odd".into())])
+            .unwrap()[0]
+            .validator
+            .0,
+        "v2"
+    );
+    assert!(around(&h).occurrences.iter().any(|o| o.entity == entity));
+    assert_eq!(horizon_of(&h, entity), old);
+}
+
+/// Decodes like [`CanonicalCodec`] but panics on the event with uid "boom".
+struct PanickingCodec;
+
+impl Codec<Event> for PanickingCodec {
+    const MAPPING_VERSION: u32 = 1;
+
+    fn decode(raw: &Raw) -> Decoded<CalendarEvent> {
+        let d = CanonicalCodec::decode(raw);
+        if let Decoded::Canonical(ev) = &d
+            && ev.uid == "boom"
+        {
+            panic!("codec bug");
+        }
+        d
+    }
+}
+
+/// A vault like syncd's: the tokens live in the control store and go with
+/// the account.
+struct AccountVault {
+    control: Arc<SqliteControl>,
+    inner: Arc<MemoryVault>,
+}
+
+impl TokenVault for AccountVault {
+    fn load(&self, account: AccountId) -> Result<Option<AccountTokens>, StoreError> {
+        if self.control.account(account)?.is_none() {
+            return Ok(None);
+        }
+        self.inner.load(account)
+    }
+
+    fn store(&self, account: AccountId, t: &AccountTokens) -> Result<(), StoreError> {
+        self.inner.store(account, t)
+    }
+}
+
+impl H {
+    fn account_vault(&self) -> Arc<dyn TokenVault> {
+        Arc::new(AccountVault {
+            control: self.control.clone(),
+            inner: self.vault.clone(),
+        })
+    }
+
+    fn state(&self) -> Option<AccountState> {
+        self.control.account(ACCOUNT).unwrap().map(|a| a.state)
+    }
+}
+
+#[tokio::test]
+async fn busy_collection_neither_blocks_the_lane_nor_runs_twice() {
+    let h = H::with(|c| {
+        c.sync_concurrency = 2;
+        c.tick = Duration::from_millis(10);
+    });
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    let ch = h.control.channels(TENANT, Some(ACCOUNT)).unwrap().remove(0);
+    let before = h.fake.calls();
+    let full_before = h.collection("cal1").unwrap().status.full_read_at;
+
+    // The safety poll finds its cursor expired and holds a full read.
+    h.fake.expire_cursors();
+    h.fake.hold_full_reads();
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    let running = h.engine.start();
+    until(|| h.fake.calls().full_reads == before.full_reads + 1).await;
+
+    // A push for the same collection takes the second slot of the lane and
+    // gives it back: discovery still runs.
+    h.engine.on_push(&ch).await.unwrap();
+    h.advance(Duration::from_secs(1));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    h.engine.connect(ACCOUNT).await.unwrap();
+    until(|| h.fake.calls().discover == before.discover + 1).await;
+
+    h.fake.release_full_reads();
+    until(|| h.collection("cal1").unwrap().status.full_read_at > full_before).await;
+    drop(running);
+    assert_eq!(
+        h.fake.calls().max_open_reads,
+        1,
+        "one collection read twice at once"
+    );
+}
+
+#[tokio::test]
+async fn panicking_job_is_recorded_and_retried_with_backoff() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    let start = h.clock_now() + SignedDuration::from_hours(24);
+    h.put("cal1", "boom", "v1", &single("boom", start), None);
+    let engine = h.engine_with::<PanickingCodec>(h.vault.clone());
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+
+    let err = h.collection("cal1").unwrap().status.error.unwrap();
+    assert!(
+        err.message.contains("codec bug") && !err.permanent,
+        "{err:?}"
+    );
+    // Back after the first backoff step, with the attempt counted.
+    let (now, lease) = (h.clock_now(), Duration::from_secs(60));
+    let early = h
+        .control
+        .lease_due(Lane::Sync, now + SignedDuration::from_secs(9), 10, lease)
+        .unwrap();
+    assert!(early.is_empty());
+    let jobs = h
+        .control
+        .lease_due(Lane::Sync, now + SignedDuration::from_secs(11), 10, lease)
+        .unwrap();
+    let job = jobs
+        .iter()
+        .find(|j| matches!(j.spec.kind, JobKind::Sync { .. }))
+        .unwrap();
+    assert_eq!(job.attempts, 1);
+}
+
+#[tokio::test]
+async fn removing_an_account_stops_its_channels_before_its_tokens_go() {
+    let h = H::new();
+    h.fake.add_collection(meta("cal2"));
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    assert_eq!(h.fake.channels().len(), 2);
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap();
+    assert_eq!(h.fake.calls().unsubscribe, 2);
+    assert!(h.fake.channels().is_empty());
+    assert_eq!(h.state(), None);
+    assert!(
+        h.control
+            .channels(TENANT, Some(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(h.store().collections().unwrap().is_empty());
+
+    // Nothing of the account runs any more.
+    let calls = h.fake.calls();
+    h.advance(h.config.rediscover_every * 2);
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls(), calls);
+}
+
+#[tokio::test]
+async fn removal_cut_short_continues_after_a_restart() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    // The process died right after marking the account.
+    h.control
+        .set_account_state(ACCOUNT, AccountState::Removing)
+        .unwrap();
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    h.advance(h.config.rediscover_every + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.state(), None);
+    assert_eq!(h.fake.calls().unsubscribe, 1);
+    assert!(h.fake.channels().is_empty());
+    assert!(h.store().collections().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unauthorized_twice_in_a_row_requires_sign_in() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    // Each attempt refreshes the token and tries again once.
+    for _ in 0..4 {
+        h.fake.fail(Op::Page, SyncError::Unauthorized);
+    }
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.state(), Some(AccountState::Active));
+    assert!(h.collection("cal1").unwrap().status.error.is_some());
+
+    h.advance(Duration::from_secs(11));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.state(), Some(AccountState::ReauthRequired));
 }

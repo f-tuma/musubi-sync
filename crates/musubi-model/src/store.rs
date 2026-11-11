@@ -572,6 +572,9 @@ pub struct ItemState {
     pub mapping_version: u32,
     /// Tombstoned.
     pub tombstone: bool,
+    /// Index horizon of its entity if that is a series ([`SeriesSpan::indexed_until`]):
+    /// a re-expansion that fails falls back to it instead of dropping indexed rows.
+    pub indexed_until: Option<Timestamp>,
 }
 
 /// Storage metrics.

@@ -109,6 +109,8 @@ pub struct Calls {
     pub subscribe: u32,
     /// `unsubscribe` calls.
     pub unsubscribe: u32,
+    /// Most `changes` streams open at the same time on one collection.
+    pub max_open_reads: u32,
 }
 
 #[derive(Debug, Default)]
@@ -124,6 +126,8 @@ struct State {
     collections: BTreeMap<CollectionRef, FakeCollection>,
     channels: BTreeMap<ChannelId, CollectionRef>,
     next_channel: u64,
+    /// `changes` streams not yet dropped, per collection.
+    open_reads: BTreeMap<CollectionRef, u32>,
 }
 
 /// In-memory provider. Cheap to clone; clones share state.
@@ -513,6 +517,14 @@ struct Pages {
     held: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
+impl Drop for Pages {
+    fn drop(&mut self) {
+        if let Some(n) = self.provider.lock().open_reads.get_mut(&self.col) {
+            *n -= 1;
+        }
+    }
+}
+
 impl Stream for Pages {
     type Item = Result<ChangePage, SyncError>;
 
@@ -640,6 +652,10 @@ impl Provider for FakeProvider {
             Ok(Pos::Delta { after: None, .. }) | Err(_) => s.calls.deltas += 1,
             Ok(_) => {}
         }
+        let open = s.open_reads.entry(col.clone()).or_default();
+        *open += 1;
+        let open = *open;
+        s.calls.max_open_reads = s.calls.max_open_reads.max(open);
         drop(s);
         let size = hint.page_size.map_or(self.page_size, NonZeroU32::get) as usize;
         Box::pin(Pages {
