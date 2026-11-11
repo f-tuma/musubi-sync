@@ -1,0 +1,14 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Sabre//Sabre VObject 4.5.4//EN
+UID:2b1f4ac8-9c3d-4e5f-a6b7-c8d9e0f1a2b3
+FN:Carol Nextcloud
+N:Nextcloud;Carol;;;
+ADR;TYPE=WORK:;;Hauptstraße 1;Berlin;;10115;Deutschland
+EMAIL;TYPE=HOME:carol@example.de
+TEL;TYPE="HOME,VOICE":+49 30 1234567
+CATEGORIES:Kollegen
+X-SOCIALPROFILE;TYPE=mastodon:https://mastodon.example/@carol
+X-MANAGERSNAME:Dave
+REV;VALUE=DATE-AND-OR-TIME:20261104T101010Z
+END:VCARD

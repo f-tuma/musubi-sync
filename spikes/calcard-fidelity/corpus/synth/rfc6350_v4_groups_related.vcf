@@ -1,0 +1,21 @@
+BEGIN:VCARD
+VERSION:4.0
+KIND:group
+FN:The Doe family
+MEMBER:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af
+MEMBER:urn:uuid:b8767877-b4a1-4c70-9acc-505d3819e519
+UID:urn:uuid:4fbe8971-0bc3-424c-9c26-36c3e1eff6b1
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Jane Doe
+UID:urn:uuid:03a0e51f-d1aa-4385-8a53-e29025acd8af
+RELATED;TYPE=friend:urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+RELATED;TYPE=contact;VALUE=text:Please contact my assistant Jane Doe for any
+  inquiries.
+CLIENTPIDMAP:1;urn:uuid:3df403f4-5924-4bb7-b077-3c711d9eb34b
+EMAIL;PID=1.1:jdoe@example.com
+work.TEL;TYPE=voice:+1-555-555-5555
+work.X-ABLABEL:Office
+X-SOCIALPROFILE;TYPE=twitter:https://twitter.com/janedoe
+END:VCARD

@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:2.1
+N;LANGUAGE=cs;CHARSET=utf-8:Dvořáková;Jana
+FN;CHARSET=utf-8:Jana Dvořáková
+ORG;CHARSET=utf-8:Contoso
+TEL;WORK;VOICE:+420 222 111 000
+ADR;WORK;ENCODING=QUOTED-PRINTABLE;CHARSET=utf-8:;;Vinohradsk=C3=A1 1=0D=0A=
+Budova B;Praha;;120 00;=C4=8Cesk=C3=A1 republika
+EMAIL;PREF;INTERNET:jana@contoso.example
+X-MS-OL-DEFAULT-POSTAL-ADDRESS:2
+X-MS-OL-DESIGN;CHARSET=utf-8:<card xmlns="http://schemas.microsoft.com/office/outlook/12/electronicbusinesscards" ver="1.0" layout="left" bgcolor="ffffff"></card>
+REV:20261105T120000Z
+END:VCARD

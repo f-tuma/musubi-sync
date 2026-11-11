@@ -1,0 +1,64 @@
+file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	patch_dtstart	patch_tel	js_lost
+_src_handlers_event_create_oauth_refresh_integration_test_ts_aaa546f7ccb6.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+_src_sync_adapters_provider_event_writes_integration_test_ts_884d0278b757.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_handlers_event_capabilities_integration_test_ts_138c85bc46b8.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_handlers_event_capabilities_integration_test_ts_44dce692465e.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_handlers_event_resolution_integration_test_ts_2b1553520f06.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_adapters_caldav_exdates_test_ts_51334af40f45.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
+apps_api_src_sync_adapters_caldav_organizer_fixture_ts_271dcd5b3525.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+apps_api_src_sync_adapters_caldav_rdate_test_ts_fdd64fc3fe3e.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_adapters_caldav_test_ts_690c2d75eb96.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_adapters_caldav_test_ts_72a557f52957.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_adapters_caldav_test_ts_806aafd80b34.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+apps_api_src_sync_adapters_caldav_test_ts_8837d39eedb1.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_adapters_provider_event_state_test_ts_5993a4b61d65.ics	true	1	0	0	L1	0	0	true	true	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_behavior_dav_response_driver_ts_b2a7d42d1757.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
+apps_api_src_sync_behavior_dav_response_json_392131c46b7c.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
+apps_api_src_sync_behavior_dav_response_json_40484f765fe9.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
+apps_api_src_sync_behavior_event_delivery_json_50e1e30f2912.ics	true	1	0	0	L0	0	0	true	true	-	-	-	0
+apps_api_src_sync_behavior_event_delivery_json_e91a5e05f150.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+apps_api_src_sync_caldav_access_integration_test_ts_cc7cd0498ce7.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+apps_api_src_sync_caldav_discovery_test_ts_17d0b71af10d.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
+apps_api_src_sync_caldav_discovery_test_ts_215efae54e34.ics	true	1	0	0	L0	0	0	true	true	-	-	-	0
+apps_api_src_sync_caldav_discovery_test_ts_64cffa57ab77.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
+apps_api_src_sync_caldav_discovery_test_ts_985736913cee.ics	true	1	0	0	L3	0	1	true	true	-	-	-	0
+apps_api_src_sync_caldav_discovery_test_ts_eb8c0a4ae02e.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
+apps_api_src_sync_caldav_sync_token_integration_test_ts_fbafd3fa94a0.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+apps_api_src_sync_codec_parity_test_ts_120fcc985f40.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+apps_api_src_sync_codec_parity_test_ts_6282767b7231.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_pinned_transport_integration_test_ts_712b5444128c.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_pinned_transport_integration_test_ts_c1d28840ff8f.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+apps_api_src_sync_provider_budget_integration_test_ts_ada892a49ffb.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_api_src_sync_task_write_test_ts_8ffab90825a3.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_client_lib_ics_test_ts_080f4921e64c.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+apps_web_e2e_month_read_spec_ts_67a73b3cd223.ics	true	1	0	0	L0	0	0	true	true	-	-	-	0
+apps_web_e2e_month_read_spec_ts_e1daff51ce27.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+apps_web_src_api_resources_test_ts_0df241e96809.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
+packages_provider_caldav_src_index_test_ts_7e707443bb71.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_233bd39c90d4.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_271006c8f671.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_3617c34a5071.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_5e57ca970b94.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_751d52544596.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_7eb1ff445e77.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_8708da52134d.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_99249587ce03.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_c52530601680.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_cb37e50a843d.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_cfa93d5b7696.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_create_json_dc58893e3c67.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+packages_sync_runtime_src_behavior_caldav_delete_json_196d2da9c9b9.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_delete_json_6bd864e42549.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_delete_json_6e9e44ba1ee4.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_delete_json_b6b66e4e3865.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_delete_json_bbc9d6b1cc13.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_delete_json_bc99a617b706.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+packages_sync_runtime_src_behavior_caldav_delete_json_f59e572392e0.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+ps_api_src_sync_adapters_caldav_radicale_integration_test_ts_389c026a5bcc.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+ps_api_src_sync_adapters_caldav_radicale_integration_test_ts_60feeede4f1a.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+ps_api_src_sync_adapters_caldav_radicale_integration_test_ts_91de17f940f1.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
+ps_api_src_sync_event_compatibility_fixture_manifest_test_ts_23651757cec2.ics	true	1	0	0	L0	0	0	true	true	-	-	-	0
+ps_api_src_sync_event_compatibility_fixture_manifest_test_ts_d411e8c19396.ics	true	1	0	0	L1	0	0	true	true	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+s_api_src_sync_caldav_discovery_material_integration_test_ts_10f4615bc994.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
+s_api_src_sync_caldav_discovery_material_integration_test_ts_219b7037709d.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+src_sync_adapters_caldav_alarms_radicale_integration_test_ts_c7e48186a43e.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0

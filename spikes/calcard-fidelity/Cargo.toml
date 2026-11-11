@@ -1,0 +1,15 @@
+[package]
+name = "calcard-fidelity"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Phase 0 spike: calcard parse/round-trip/patch/conversion fidelity and throughput"
+
+[dependencies]
+calcard = "=0.3.14"
+chrono-tz = "0.10"
+serde_json = "1"
+
+[profile.release]
+debug = 1

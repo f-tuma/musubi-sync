@@ -1,0 +1,58 @@
+== musubi: 63 files (0 non-UTF-8, read lossy), 63 objects
+parse ok             63/63 (100.0 %)   InvalidLine warnings 0   errors 0
+round-trip L0 byte-identical 29/63 (46.0 %)
+           L1 same logical lines (fold/EOL only) 32/63 (50.8 %)
+           L2 same lines, different order 0/63 (0.0 %)
+           L3 lines changed 2/63 (3.2 %)
+input logical lines not reproduced verbatim 2/792 (0.3 %)
+X- property lines verbatim 29/29 (100.0 %)   X- params verbatim 4/4 (100.0 %)
+grouped vCard lines verbatim n/a   VTIMEZONE blocks verbatim 2/3 (66.7 %)
+property order kept 62/63 (98.4 %)   idempotent (rt(rt)==rt) 63/63 (100.0 %)   AST(rt)==AST(in) 63/63 (100.0 %)
+patch Dtstart  n=43: AST route: rest byte-equal to input 42/43 (97.7 %), rest equal to calcard rt 43/43 (100.0 %)
+               raw-splice whole line ok 43/43 (100.0 %) (target name/params respelled 0/43 (0.0 %)); raw-splice value-only ok 43/43 (100.0 %)
+patch Summary  n=49: AST route: rest byte-equal to input 48/49 (98.0 %), rest equal to calcard rt 49/49 (100.0 %)
+               raw-splice whole line ok 49/49 (100.0 %) (target name/params respelled 0/49 (0.0 %)); raw-splice value-only ok 49/49 (100.0 %)
+JSCalendar+raw-props objs=63 converted+back 63/63 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 6/793 (0.8 %), properties gone 0/793 (0.0 %)
+                     properties gone: 
+JSCalendar-raw-props objs=63 converted+back 63/63 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 152/793 (19.2 %), properties gone 142/793 (17.9 %)
+                     properties gone: DTENDx46 DESCRIPTIONx24 X-UNKNOWNx10 BEGINx8 ENDx8 X-PRIVATEx7 DTSTARTx5 TZIDx3 TZOFFSETFROMx3 TZOFFSETTOx3 X-PRESERVEx3 RRULEx2
+
+-- round-trip: lost input lines by property (count, first example)
+     2  RRULE                        RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU
+
+-- JSCalendar+raw-props: calcard-rt lines lost after conversion and back (count, first example)
+     4  ATTENDEE                     ATTENDEE;CN=Self;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT:mailto:self@example.test
+     2  EXDATE                       EXDATE;VALUE=DATE:20260329,20260330
+
+-- JSCalendar-raw-props: calcard-rt lines lost after conversion and back (count, first example)
+    46  DTEND                        DTEND:20261109T100000Z
+    24  DESCRIPTION                  DESCRIPTION:keep alarm
+    10  X-UNKNOWN                    X-UNKNOWN:keep
+     8  BEGIN                        BEGIN:VTIMEZONE
+     8  DTSTART                      DTSTART:19701025T030000
+     8  END                          END:STANDARD
+     7  X-PRIVATE                    X-PRIVATE;LANGUAGE=cs:Keep foldedextension
+     4  ATTENDEE                     ATTENDEE;CN=Self;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT:mailto:self@example.test
+     3  TZID                         TZID:Europe/Prague
+     3  TZOFFSETFROM                 TZOFFSETFROM:+0200
+     3  TZOFFSETTO                   TZOFFSETTO:+0100
+     3  X-PRESERVE                   X-PRESERVE:private extension
+     2  EXDATE                       EXDATE;VALUE=DATE:20260329,20260330
+     2  RRULE                        RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+     2  SUMMARY                      SUMMARY:A B
+     2  UID                          UID:hidden
+     2  X-CALENDAR                   X-CALENDAR:keep
+     2  X-PROVIDER-PRIVATE           X-PROVIDER-PRIVATE:keep
+     1  <![CDATA[END                 <![CDATA[END:VCALENDAR
+     1  ACTION                       ACTION:AUDIO
+     1  COMPLETED                    COMPLETED:20260202T120000Z
+     1  DTSTAMP                      DTSTAMP:20261026T120000Z
+     1  DUE                          DUE;TZID=UTC:20261012T143000
+     1  DURATION                     DURATION:PT5M
+     1  LOCATION                     LOCATION;X-KEEP=YES:Room
+     1  REPEAT                       REPEAT:3
+     1  X-EXTRA                      X-EXTRA:keep
+     1  X-PRIVATE-PROPERTY           X-PRIVATE-PROPERTY:keep
+     1  X-PRIVATE-VENDOR             X-PRIVATE-VENDOR:retain
+     1  X-PROVIDER                   X-PROVIDER:keep
+     1  X-RETAINED                   X-RETAINED:bytes

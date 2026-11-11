@@ -1,0 +1,178 @@
+== calcard-ical: 998 files (5 non-UTF-8, read lossy), 1288 objects
+parse ok             987/998 (98.9 %)   InvalidLine warnings 21   errors 0
+round-trip L0 byte-identical 71/987 (7.2 %)
+           L1 same logical lines (fold/EOL only) 384/987 (38.9 %)
+           L2 same lines, different order 4/987 (0.4 %)
+           L3 lines changed 528/987 (53.5 %)
+input logical lines not reproduced verbatim 8527/138371 (6.2 %)
+X- property lines verbatim 7630/7808 (97.7 %)   X- params verbatim 108/124 (87.1 %)
+grouped vCard lines verbatim 2/8 (25.0 %)   VTIMEZONE blocks verbatim 523/932 (56.1 %)
+property order kept 951/987 (96.4 %)   idempotent (rt(rt)==rt) 987/987 (100.0 %)   AST(rt)==AST(in) 987/987 (100.0 %)
+patch Dtstart  n=760: AST route: rest byte-equal to input 350/760 (46.1 %), rest equal to calcard rt 760/760 (100.0 %)
+               raw-splice whole line ok 747/760 (98.3 %) (target name/params respelled 0/760 (0.0 %)); raw-splice value-only ok 747/760 (98.3 %)
+patch Summary  n=778: AST route: rest byte-equal to input 365/778 (46.9 %), rest equal to calcard rt 778/778 (100.0 %)
+               raw-splice whole line ok 765/778 (98.3 %) (target name/params respelled 29/778 (3.7 %)); raw-splice value-only ok 762/778 (97.9 %)
+  raw-splice not ok x3: refused: 0 raw objects vs 1 parsed
+  raw-splice not ok x2: refused: 2 raw objects vs 1 parsed
+  raw-splice not ok x2: refused: 24 raw objects vs 22 parsed
+  raw-splice not ok x2: refused: name mismatch raw= ast=CATEGORIES
+  raw-splice not ok x2: refused: name mismatch raw=010000000A9E90330A8A0F547903AAFDBDD6A0D26 ast=ATTENDEE
+  raw-splice not ok x2: refused: name mismatch raw=6 BOUW VAN ENDOCRIENE SECRETIEKLIEREN EN AANPASSING AAN HUN FU ast=nctie
+  raw-splice not ok x1: refused: name mismatch raw=91307046514149 ast=X-APPLE-RADIUS
+  raw-splice not ok x1: refused: name mismatch raw=>","Æ?" ast=ATTENDEE
+  raw-splice not ok x2: refused: name mismatch raw=DEAR TEAM, ast=Dear Team
+  raw-splice not ok x2: refused: name mismatch raw=ORGANIZER="MAILTO ast=ORGANIZER
+  raw-splice not ok x2: refused: name mismatch raw=SUMMARY=TESTEVENT ast=SUMMARY
+  raw-splice not ok x1: refused: raw line without entry: ROOM 4350
+  raw-splice not ok x4: refused: raw line without entry: X
+  raw-splice not ok x3: value-only refused: encoded value (ENCODING/CHARSET param)
+JSCalendar+raw-props objs=1288 converted+back 1288/1288 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 4891/138348 (3.5 %), properties gone 712/138348 (0.5 %)
+                     properties gone: LOCATIONx211 METHODx146 EXDATEx122 DTSTARTx45 CATEGORIESx32 RDATEx32 DTENDx30 TRIGGERx19 ACTIONx10 ATTENDEEx9 CLASSx7 STATUSx7
+JSCalendar-raw-props objs=1288 converted+back 1288/1288 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 59415/138348 (42.9 %), properties gone 55363/138348 (40.0 %)
+                     properties gone: DTENDx6919 BEGINx5243 ENDx5243 DTSTARTx4383 TZOFFSETFROMx4257 TZOFFSETTOx4254 TZNAMEx4078 RDATEx3850 LAST-MODIFIEDx2637 RRULEx2101 TZIDx932 X-MICROSOFT-CDO-BUSYSTATUSx701
+
+-- round-trip: lost input lines by property (count, first example)
+  2049  TZOFFSETFROM                 TZOFFSETFROM:+002946
+  1975  TZOFFSETTO                   TZOFFSETTO:+000000
+  1961  RRULE                        RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
+   530  DTSTART                      DTSTART;TZID=Customized Time Zone:20200825T103500
+   504  DTEND                        DTEND;TZID=Customized Time Zone:20200825T115000
+   222  DESCRIPTION                  DESCRIPTION:Sunday - Partly cloudy with a 20 percent chance of snow showers. Highs in the lower to mid 40s.\n<
+   178  ORGANIZER                    ORGANIZER;CN=Person 1:mailto:person1@example.com
+   158  URL                          URL:geo:40.443,-79.945;u=10
+   154  ATTENDEE                     ATTENDEE;ROLE=REQ-PARTICIPANT;CN=Person 1:mailto:person1@example.com
+   154  X-ALT-DESC                   X-ALT-DESC;FMTTYPE=text/html:<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2//EN">\n<html>\n<head>\n<meta name="Ge
+   148  DTSTAMP                      DTSTAMP;VALUE=DATE:20120214T224612
+   118  X                            X
+    90  SUMMARY                      SUMMARY:Recurring weekly meeting from June 1 - Aug 14 (except July 6, July 13, July 20, Aug 3)
+    43  TRIGGER                      TRIGGER:P0D
+    27  EXDATE                       EXDATE;TZID=Pacific Standard Time:20200721T120000,20200723T120000,20200728T120000,20200813T120000,20200825T120
+    22  END                          END:VCALENDARD
+    14  CATEGORIES                   CATEGORIES:cat1  ,  cat2,   cat3
+    11  LOCATION                     LOCATION;CHARSET=utf-8:Stockholm, Sweden
+    10  CONFERENCE                   CONFERENCE;X-JMAP-ID=loc1;VALUE=URI;FEATURE=PHONE,MODERATOR;LABEL=Moderator dial-in:tel:+123451
+    10  CREATED                      CREATED:19980309T13000
+    10  DURATION                     DURATION:-PT1W1D2H3M4S
+    10  RECURRENCE-ID                RECURRENCE-ID;TZID=W. Europe Standard Time:20260130T110000
+    10  X-APPLE-STRUCTURED-LOCATION  X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-TITLE=Kriftel: geo:50.083558\,8.4693855
+     8  GEO                          GEO:33.56;-111.90
+     8  RDATE                        RDATE;VALUE=PERIOD;TZID=Europe/Berlin:20240913T120000/PT2H
+     6  IMAGE                        IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:http://example.com/images/party.png
+     6  RELATED-TO                   RELATED-TO;RELTYPE=X-Unknown1;RELTYPE=X-Unknown2:foo
+     6  RESOURCES                    RESOURCES;ALTREP="//)";LANGUAGE="a";b=:
+     5  COMMENT                      COMMENT:Sorry, I cannot change this meeting time
+     4  PRODID                       PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.0//EN
+     3  ATTACH                       ATTACH;ENCODING=BASE64;FMTTYPE=text/plain;VALUE=BINARY:dGV4dA==
+     3  CONTACT                      CONTACT;LANGUAGE="b";b="a":b
+     3  METHOD                       METHOD:PUBLISH
+     3  X-TRUMBA-CUSTOMFIELD         X-TRUMBA-CUSTOMFIELD;NAME="Topics";ID=22995;TYPE=CustomAsset:Administrative\,Anesthesia\,Biochemistry\,Biomedi
+     2                               3.110\n\nSponsored by the MGH Clinical Research Program and the Partners Human Research Committee\n\nElizabeth
+     2  ACTION                       ACTION:~!@#$%^&*()_+}{:"<>?/.,
+     2  CATEGORY                     CATEGORY:Project Report, XYZ, Weekly Meeting
+     2  CLASS                        CLASS:PUBLIC
+     2  DUE                          DUE;VALUE=DATE-TIME;TZID=Europe/Berlin:20130812T140000
+     2  TZNAME                       TZNAME;LANGUAGE="b":b
+     2  UID                          UID:956630271
+     2  VERSION                      VERSION:2.0
+     2  X-LIC-NOTE                   X-LIC-NOTE: #C1. Rescheduled by #I1\ and updated by #I2
+     1                    BEGIN                        BEGIN:VCALENDAR
+     1   SEE YOU THEN!               We look forward to the meeting on Monday. Please bring your questions so we can discuss them together. See you
+     1  &NBSP                        &nbsp; And a non-breaking space.
+     1  +1 646 931 3860,,XXXXXXXXX#,,,,*XXXXXXX# US +1 646 931 3860,,XXXXXXXXX#,,,,*XXXXXXX# US
+     1  +1 669 444 9171,,XXXXXXXXX#,,,,*XXXXXXX# US +1 669 444 9171,,XXXXXXXXX#,,,,*XXXXXXX# US
+     1  010000000A9E90330A8A0F547903AAFDBDD6A0D26 010000000A9E90330A8A0F547903AAFDBDD6A0D26
+     1  6 BOUW VAN ENDOCRIENE SECRETIEKLIEREN EN AANPASSING AAN HUN FU \n\n+\n\n1.6 Bouw van endocriene secretieklieren en aanpassing aan hun fu
+     1  91307046514149               X-APPLE-RADIUS=49.91307046514149
+     1  >","Æ?"                      >","Æ?";SENT-BY="x";CN="a";DIR="k";a=://'
+     1  A                            a;b="b":
+     1  BEGIN                        BEGIN:Vcalendar
+     1  C                            c;b="c":
+     1  CALSCALE                     CALSCALE;a="c","c";b="c","b":b
+     1  COMPLETED                    COMPLETED;VALUE=DATE-TIME;TZID=Europe/Monaco:20130716T105745
+     1  DEAR TEAM,                   Dear Team,
+     1  DISABLED DUE TO WORDWRAPPING DIFFERENCES Disabled due to wordwrapping differences
+     1  EN AUTHNRITY FINDNT          EN authnrity fiNDNT
+
+-- JSCalendar+raw-props: calcard-rt lines lost after conversion and back (count, first example)
+  1584  URL                          URL;VALUE=URI:http://www.worklessparty.org/
+   768  ATTENDEE                     ATTENDEE;CN=tentative@example.com;CUTYPE=INDIVIDUAL;EMAIL=tentative@example.com;PARTSTAT=TENTATIVE;ROLE=REQ-PA
+   321  DTSTART                      DTSTART;TZID=Europe/Berlin;VALUE=DATE:20180702
+   286  DTEND                        DTEND;TZID=Europe/Berlin;VALUE=DATE:20180811
+   257  ATTACH                       ATTACH;VALUE=URI:Pop
+   220  DTSTAMP                      DTSTAMP:20220901T215400
+   216  TRIGGER                      TRIGGER;VALUE=DURATION:-P1D
+   211  LOCATION                     LOCATION:South San Francisco\, CA
+   174  EXDATE                       EXDATE;TZID=Europe/Budapest:20201221T072000
+   147  METHOD                       METHOD:PUBLISH
+   101  RECURRENCE-ID                RECURRENCE-ID;RANGE=THISANDFUTURE:20180327T130000Z
+    84  RDATE                        RDATE;VALUE=PERIOD:19970101T180000Z/19970102T070000Z
+    78  CREATED                      CREATED;VALUE=DATE-TIME:20130714T092804Z
+    66  ORGANIZER                    ORGANIZER;SCHEDULE-AGENT=CLIENT:mailto:tentative@example.com
+    59  CATEGORIES                   CATEGORIES:cat1
+    45  BEGIN                        BEGIN:MYCOMP
+    45  END                          END:MYCOMP
+    29  RRULE                        RRULE:FREQ=WEEKLY;UNTIL=20221201T020000;BYDAY=TU
+    13  X-WR-CALNAME                 X-WR-CALNAME;VALUE=TEXT:Example
+    12  X-WR-TIMEZONE                X-WR-TIMEZONE;VALUE=TEXT:US/Pacific
+    11  ACTION                       ACTION:EMAIL
+    11  CONFERENCE                   CONFERENCE;X-JMAP-ID=loc1;FEATURE=PHONE,MODERATOR;LABEL="Moderator dial-in";VALUE=URI:tel:+123451
+     8  CLASS                        CLASS:
+     8  LAST-MODIFIED                LAST-MODIFIED;VALUE=DATE-TIME:20130714T092804Z
+     8  STATUS                       STATUS:CONFIRMED
+     7  SEQUENCE                     SEQUENCE:3
+     6  A                            a:
+     6  C                            c;b=c:
+     6  DURATION                     DURATION:PT0S
+     6  X-TRUMBA-CUSTOMFIELD         X-TRUMBA-CUSTOMFIELD;NAME="Event Type";ID=21;TYPE=number:Harvard Medical School
+     6  X-WR-RELCALID                X-WR-RELCALID;VALUE=TEXT:0BDD9936-22D1-11D7-B452-0050E4C50C66
+     5  FREEBUSY                     FREEBUSY;VALUE=PERIOD:19971015T050000Z/PT8H30M,19971015T160000Z/PT5H30M,19971015T223000Z/PT6H30M
+     5  IMAGE                        IMAGE;VALUE=URI:https://example.com/a.png
+     5  SUMMARY                      SUMMARY:Bastille Day Party This option indicates that xauth should attempt to break any authority file locks b
+     5  UID                          UID:calsrv.example.com-873970198738777@example.com
+     4  B                            b:
+     4  LINK                         LINK;LINKREL=SOURCE;LABEL=Venue;VALUE=URI:https://example.com/events
+     4  RELATED-TO                   RELATED-TO;RELTYPE=STARTTOFINISH;VALUE=URI:https://example.com/caldav/user/jb/cal/19960401-080045-4000F192713.
+     4  X-APPLE-STRUCTURED-LOCATION  X-APPLE-STRUCTURED-LOCATION;X-ADDRESS="Röadstar 16\n12764 Happyville\nDenmark";X-APPLE-MAPKIT-HANDLE="CAESARoS
+     4  X-JMAP-TRANSLATION           X-JMAP-TRANSLATION;LANGUAGE=de;X-JMAP-PROP=title:Titel
+
+-- JSCalendar-raw-props: calcard-rt lines lost after conversion and back (count, first example)
+  6920  DTEND                        DTEND;TZID=America/Vancouver:20090309T170000
+  5303  BEGIN                        BEGIN:VTIMEZONE
+  5303  END                          END:DAYLIGHT
+  5025  DTSTART                      DTSTART:20070311T020000
+  4257  TZOFFSETFROM                 TZOFFSETFROM:-0800
+  4254  TZOFFSETTO                   TZOFFSETTO:-0700
+  4078  TZNAME                       TZNAME:PDT
+  3867  RDATE                        RDATE:19750223T020000
+  2637  LAST-MODIFIED                LAST-MODIFIED:20200903T032927Z
+  2127  RRULE                        RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3
+  1618  URL                          URL;VALUE=URI:http://www.worklessparty.org/
+   932  TZID                         TZID:America/Vancouver
+   864  ATTENDEE                     ATTENDEE;CN=tentative@example.com;CUTYPE=INDIVIDUAL;EMAIL=tentative@example.com;PARTSTAT=TENTATIVE;ROLE=REQ-PA
+   701  X-MICROSOFT-CDO-BUSYSTATUS   X-MICROSOFT-CDO-BUSYSTATUS:BUSY
+   600  X-ZIMBRA-TZ-ALIAS            X-ZIMBRA-TZ-ALIAS:(GMT-12.00) International Date Line West
+   589  DESCRIPTION                  DESCRIPTION:Title\nfirst Row\nsecond Row
+   540  X-MICROSOFT-CDO-IMPORTANCE   X-MICROSOFT-CDO-IMPORTANCE:1
+   486  X-MICROSOFT-DISALLOW-COUNTER X-MICROSOFT-DISALLOW-COUNTER:FALSE
+   459  X-ZIMBRA-TZ-MATCH-SCORE      X-ZIMBRA-TZ-MATCH-SCORE:100
+   434  DTSTAMP                      DTSTAMP:202103206T200210Z
+   428  X-MICROSOFT-CDO-ALLDAYEVENT  X-MICROSOFT-CDO-ALLDAYEVENT:FALSE
+   341  X-MOZILLA-RECUR-DEFAULT-INTERVAL X-MOZILLA-RECUR-DEFAULT-INTERVAL:1
+   339  CALSCALE                     CALSCALE:GREGORIAN
+   315  UID                          UID:uid5@host1.com
+   311  ACTION                       ACTION:AUDIO
+   297  X-MOZILLA-ALARM-DEFAULT-LENGTH X-MOZILLA-ALARM-DEFAULT-LENGTH:15
+   288  ATTACH                       ATTACH;FMTTYPE=audio/basic:http://host.com/pub/audio-files/ssbanner.aud
+   281  X-ALT-DESC                   X-ALT-DESC;FMTTYPE=text/html:<html><head></head><body><p>Toller <strong class="text-bold">Termin</strong> für<
+   266  X-MICROSOFT-CDO-INTENDEDSTATUS X-MICROSOFT-CDO-INTENDEDSTATUS:BUSY
+   259  X-MICROSOFT-CDO-INSTTYPE     X-MICROSOFT-CDO-INSTTYPE:0
+   258  X-MICROSOFT-CDO-APPT-SEQUENCE X-MICROSOFT-CDO-APPT-SEQUENCE:0
+   236  TRIGGER                      TRIGGER;VALUE=DURATION:-P1D
+   230  X-WR-ALARMUID                X-WR-ALARMUID:06071073-A112-40CA-83AA-C05F54736B36
+   229  X-MS-OLK-CONFTYPE            X-MS-OLK-CONFTYPE:0
+   208  EXDATE                       EXDATE;TZID=Europe/Budapest:20201221T072000
+   204  X-MOZ-GENERATION             X-MOZ-GENERATION:2
+   201  LOCATION                     LOCATION:
+   193  X-MS-OLK-ALLOWEXTERNCHECK    X-MS-OLK-ALLOWEXTERNCHECK:TRUE
+   175  X-LIC-LOCATION               X-LIC-LOCATION:America/Denver
+   163  FREEBUSY                     FREEBUSY;FBTYPE=BUSY:20140416T151500Z/20140416T190000Z

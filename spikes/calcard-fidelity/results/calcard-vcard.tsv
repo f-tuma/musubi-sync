@@ -1,0 +1,245 @@
+file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	patch_dtstart	patch_tel	js_lost
+001.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	10
+002.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	9
+003.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	10
+004.vcf	true	3	0	0	L3	1	1	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	14
+005.vcf	true	5	0	0	L3	14	14	true	true	-	-	-	25
+006.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	9
+007.vcf	true	1	0	0	L3	7	7	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	8
+008.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	10
+009.vcf	true	10	0	0	L3	20	15	true	true	-	-	ast_coll_in=19 ast_coll_rt=0 raw=ok raw_value=ok	24
+010.vcf	true	1	0	0	L3	5	4	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=refused: entry count mismatch raw=10 ast=9 raw_value=	4
+011.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	2
+012.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	1
+013.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	3
+014.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	0
+015.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	2
+016.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	0
+017.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	3
+018.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	2
+019.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	0
+020.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	3
+021.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	2
+022.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	1
+023.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	2
+024.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	2
+025.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	1
+026.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	1
+027.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	0
+028.vcf	true	1	0	0	L3	0	1	true	true	-	-	-	0
+029.vcf	true	6	0	0	L3	46	27	true	true	-	-	ast_coll_in=45 ast_coll_rt=0 raw=ok raw_value=ok	28
+030.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	5
+031.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
+032.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	12
+033.vcf	true	1	0	0	L3	13	13	true	true	-	-	ast_coll_in=12 ast_coll_rt=0 raw=ok raw_value=ok	19
+034.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	16
+035.vcf	true	1	0	0	L3	16	16	true	true	-	-	ast_coll_in=15 ast_coll_rt=0 raw=ok raw_value=ok	21
+036.vcf	true	1	0	0	L3	13	11	true	true	-	-	ast_coll_in=12 ast_coll_rt=0 raw=refused: entry count mismatch raw=27 ast=25 raw_value=	15
+037.vcf	true	1	0	0	L3	14	14	true	true	-	-	ast_coll_in=13 ast_coll_rt=0 raw=ok raw_value=ok	40
+038.vcf	true	3	0	0	L1	0	0	true	true	-	-	-	6
+039.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	18
+040.vcf	true	1	0	0	L3	10	10	true	true	-	-	ast_coll_in=10 ast_coll_rt=0 raw=ok raw_value=ok	58
+041.vcf	true	1	0	0	L3	14	12	true	true	-	-	ast_coll_in=13 ast_coll_rt=0 raw=refused: entry count mismatch raw=22 ast=20 raw_value=	16
+042.vcf	true	1	0	0	L3	19	14	true	true	-	-	ast_coll_in=18 ast_coll_rt=0 raw=refused: entry count mismatch raw=35 ast=30 raw_value=	20
+043.vcf	true	2	0	0	L3	4	4	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	12
+044.vcf	true	1	0	0	L3	8	8	true	true	-	-	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	12
+045.vcf	true	1	0	0	L3	10	10	true	true	-	-	ast_coll_in=10 ast_coll_rt=0 raw=ok raw_value=ok	21
+046.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	6
+047.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	22
+048.vcf	true	1	0	0	L3	14	14	true	true	-	-	ast_coll_in=13 ast_coll_rt=0 raw=ok raw_value=ok	25
+049.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	13
+050.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	2
+051.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
+052.vcf	true	1	0	0	L3	1	2	true	false	-	-	-	1
+053.vcf	true	1	0	0	L3	4	5	true	false	-	-	-	4
+054.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	2
+055.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	1
+056.vcf	true	1	0	0	L3	2	4	true	false	-	-	-	7
+057.vcf	true	1	0	0	L3	9	10	true	false	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	7
+058.vcf	true	1	0	0	L3	12	13	true	false	-	-	ast_coll_in=11 ast_coll_rt=0 raw=ok raw_value=ok	12
+059.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	10
+060.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	10
+061.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	8
+062.vcf	true	1	0	0	L3	11	11	true	true	-	-	-	13
+063.vcf	true	3	0	0	L3	2	3	true	false	-	-	-	2
+064.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	6
+065.vcf	true	1	0	0	L3	6	2	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=refused: entry count mismatch raw=25 ast=21 raw_value=	11
+066.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	23
+067.vcf	true	1	0	0	L3	11	11	true	true	-	-	ast_coll_in=10 ast_coll_rt=0 raw=refused: name mismatch raw=VALUE ast=other.value raw_value=	11
+068.vcf	true	1	0	0	L3	2	3	true	false	-	-	-	0
+069.vcf	true	1	0	0	L3	3	4	true	false	-	-	-	1
+070.vcf	true	1	0	0	L3	3	4	true	false	-	-	-	1
+071.vcf	true	1	0	0	L3	4	5	true	false	-	-	-	2
+072.vcf	true	1	0	0	L3	5	6	true	false	-	-	-	3
+073.vcf	true	1	0	0	L3	0	1	true	false	-	-	-	1
+074.vcf	true	1	0	0	L3	6	7	true	false	-	-	-	6
+075.vcf	true	1	0	0	L3	0	1	true	false	-	-	-	2
+076.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	1
+077.vcf	true	1	0	0	L3	3	3	true	true	-	-	-	8
+078.vcf	true	2	0	0	L3	2	2	true	true	-	-	-	2
+079.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	1
+080.vcf	true	2	0	0	L3	2	2	true	true	-	-	-	2
+081.vcf	true	2	0	0	L3	2	2	true	true	-	-	-	2
+082.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	2
+083.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	2
+084.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	3
+085.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	2
+086.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	2
+087.vcf	true	2	0	0	L1	0	0	true	true	-	-	-	2
+088.vcf	true	2	0	0	L1	0	0	true	true	-	-	-	2
+089.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	3
+090.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	3
+091.vcf	true	1	0	0	L3	12	8	true	true	-	-	ast_coll_in=11 ast_coll_rt=0 raw=refused: entry count mismatch raw=19 ast=15 raw_value=	10
+092.vcf	true	1000	0	0	L1	0	0	true	true	-	-	-	1000
+093.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	1
+094.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	1
+095.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	8
+096.vcf	true	1	0	0	L1	0	0	true	true	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	6
+097.vcf	true	1	0	0	L3	11	9	true	true	-	-	ast_coll_in=10 ast_coll_rt=0 raw=refused: entry count mismatch raw=21 ast=19 raw_value=	13
+098.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	1
+099.vcf	true	1	0	0	L3	3	3	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	8
+100.vcf	true	1	0	0	L3	5	5	true	true	-	-	-	3
+101.vcf	true	1	0	0	L3	5	5	true	true	-	-	-	3
+102.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	5
+103.vcf	true	1	0	0	L3	38	16	true	true	-	-	ast_coll_in=37 ast_coll_rt=0 raw=refused: entry count mismatch raw=51 ast=29 raw_value=	21
+104.vcf	true	2	0	0	L3	5	5	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	21
+105.vcf	true	2	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	32
+106.vcf	true	2	0	0	L3	8	8	true	true	-	-	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	10
+107.vcf	true	2	0	0	L3	8	8	true	true	-	-	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	10
+108.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	1
+109.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	1
+110.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
+111.vcf	true	1	0	0	L3	7	7	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	8
+112.vcf	true	1	0	0	L3	7	7	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	8
+113.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	6
+114.vcf	true	1	0	0	L3	7	7	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	8
+115.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	5
+116.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	1
+117.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	1
+118.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	5
+119.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	1
+120.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	1
+121.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
+122.vcf	true	1	0	0	L3	3	3	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	6
+123.vcf	true	1	0	0	L3	3	3	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	6
+124.vcf	true	5	0	0	L3	13	13	true	true	-	-	ast_coll_in=12 ast_coll_rt=0 raw=ok raw_value=ok	24
+125.vcf	true	5	0	0	L3	13	13	true	true	-	-	ast_coll_in=12 ast_coll_rt=0 raw=ok raw_value=ok	24
+126.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	1
+127.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	1
+128.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	1
+129.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
+130.vcf	false	0	12	0	-	-	-	-	-	-	-	-	-
+131.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	8
+132.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	6
+133.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	6
+134.vcf	true	1	0	0	L3	7	7	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	6
+135.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	15
+136.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	15
+137.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	7
+138.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	6
+139.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	6
+140.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	6
+141.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	6
+142.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	8
+143.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	8
+144.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	5
+145.vcf	true	1	0	0	L3	5	5	true	true	-	-	-	5
+146.vcf	true	1	0	0	L3	5	5	true	true	-	-	-	5
+147.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	4
+148.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
+149.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	6
+150.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	6
+151.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	6
+152.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	5
+153.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	5
+154.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	15
+155.vcf	true	1	0	0	L3	8	8	true	true	-	-	-	9
+156.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	4
+157.vcf	true	1	0	0	L3	8	8	true	true	-	-	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	15
+158.vcf	true	1	0	0	L3	0	1	true	false	-	-	-	0
+159.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	4
+160.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	3
+161.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	3
+162.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	3
+163.vcf	true	1	0	0	L3	3	4	true	false	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	4
+164.vcf	true	1	0	0	L3	2	3	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	3
+165.vcf	true	1	0	0	L3	3	4	true	false	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	4
+166.vcf	true	1	0	0	L3	2	3	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	3
+167.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	5
+168.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	2
+169.vcf	true	1	0	0	L3	2	3	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	2
+170.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	1
+171.vcf	true	1	0	0	L3	2	3	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	2
+172.vcf	true	1	0	0	L3	2	3	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	2
+173.vcf	true	1	0	0	L3	2	3	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	2
+174.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	1
+175.vcf	true	1	0	0	L0	0	0	true	true	-	-	-	1
+176.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	3
+177.vcf	true	1	0	0	L3	0	1	true	false	-	-	-	0
+178.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	3
+179.vcf	true	1	0	0	L3	0	1	true	false	-	-	-	1
+180.vcf	true	1	0	0	L3	0	1	true	false	-	-	-	1
+181.vcf	true	1	0	0	L3	2	3	true	false	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	2
+182.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	4
+183.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	2
+184.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	2
+185.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	7
+186.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	4
+187.vcf	true	1	0	0	L3	3	3	true	true	-	-	-	1
+188.vcf	true	1	0	0	L3	19	9	true	true	-	-	ast_coll_in=18 ast_coll_rt=0 raw=refused: entry count mismatch raw=20 ast=10 raw_value=	7
+189.vcf	true	1	0	0	L3	9	3	true	true	-	-	ast_coll_in=9 ast_coll_rt=0 raw=refused: entry count mismatch raw=16 ast=10 raw_value=	8
+190.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	5
+191.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	7
+192.vcf	true	1	0	0	L3	5	5	true	true	-	-	-	5
+193.vcf	true	1	0	0	L3	24	9	true	true	-	-	ast_coll_in=23 ast_coll_rt=0 raw=refused: entry count mismatch raw=29 ast=14 raw_value=	12
+194.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	7
+195.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
+196.vcf	true	1	0	0	L3	15	11	true	true	-	-	ast_coll_in=14 ast_coll_rt=0 raw=refused: entry count mismatch raw=25 ast=21 raw_value=	15
+197.vcf	true	2	0	0	L3	6	7	true	false	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	15
+198.vcf	true	4	0	0	L3	4	4	true	true	-	-	-	8
+199.vcf	true	2	0	0	L3	2	2	true	true	-	-	-	4
+200.vcf	true	1	0	0	L3	12	12	true	true	-	-	ast_coll_in=11 ast_coll_rt=0 raw=ok raw_value=ok	30
+201.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	21
+202.vcf	true	1	0	0	L1	0	0	true	true	-	-	-	4
+203.vcf	true	1	0	0	L3	8	8	true	true	-	-	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	16
+204.vcf	true	1	0	0	L3	4	4	true	true	-	-	-	7
+205.vcf	true	1	0	0	L3	3	3	true	true	-	-	-	4
+206.vcf	true	1	0	0	L3	2	2	true	true	-	-	-	2
+207.vcf	true	1	0	0	L3	3	3	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	10
+208.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	15
+209.vcf	true	7	0	0	L1	0	0	true	true	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	23
+210.vcf	true	1	0	0	L1	0	0	true	true	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	3
+211.vcf	true	1	0	0	L3	6	5	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=refused: entry count mismatch raw=14 ast=13 raw_value=	9
+212.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	21
+213.vcf	true	1	0	0	L3	4	4	true	true	-	-	-	5
+214.vcf	true	2	1	0	L3	5	4	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	12
+215.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	16
+216.vcf	true	1	0	0	L3	18	18	true	true	-	-	ast_coll_in=17 ast_coll_rt=0 raw=ok raw_value=ok	23
+217.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	5
+218.vcf	true	1	0	0	L3	23	23	true	true	-	-	ast_coll_in=22 ast_coll_rt=0 raw=ok raw_value=ok	41
+219.vcf	true	2	0	0	L3	3	3	true	true	-	-	-	5
+220.vcf	true	1	0	0	L3	11	11	true	true	-	-	ast_coll_in=10 ast_coll_rt=0 raw=ok raw_value=ok	16
+221.vcf	true	1	0	0	L3	3	3	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	5
+222.vcf	true	1	0	0	L3	3	3	true	true	-	-	-	4
+223.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	15
+224.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	10
+225.vcf	true	1	0	0	L3	4	4	true	true	-	-	-	5
+226.vcf	true	1	0	0	L3	4	4	true	true	-	-	-	5
+227.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	2
+228.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	1
+229.vcf	true	1	0	0	L3	4	4	true	true	-	-	-	3
+230.vcf	true	1	0	0	L3	4	4	true	true	-	-	-	3
+231.vcf	true	1	0	0	L3	5	4	true	true	-	-	-	4
+232.vcf	true	1	0	0	L3	3	2	true	true	-	-	-	3
+233.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	2
+234.vcf	true	1	0	0	L3	12	9	true	true	-	-	ast_coll_in=11 ast_coll_rt=0 raw=refused: entry count mismatch raw=21 ast=18 raw_value=	12
+235.vcf	true	1	0	0	L3	12	9	true	true	-	-	ast_coll_in=11 ast_coll_rt=0 raw=refused: entry count mismatch raw=19 ast=16 raw_value=	12
+236.vcf	true	1	0	0	L3	419	7	true	true	-	-	ast_coll_in=418 ast_coll_rt=0 raw=refused: entry count mismatch raw=427 ast=15 raw_value=	12
+237.vcf	true	1	0	0	L3	1	1	true	true	-	-	-	1
+238.vcf	true	2	0	0	L3	4	4	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	20
+239.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	6
+240.vcf	true	1	0	0	L3	5	5	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	8
+241.vcf	true	1	0	0	L3	14	14	true	true	-	-	ast_coll_in=13 ast_coll_rt=0 raw=ok raw_value=ok	25
+242.vcf	true	1	0	0	L3	7	7	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	8
+243.vcf	true	1	0	0	L3	7	5	true	true	-	-	ast_coll_in=7 ast_coll_rt=0 raw=refused: entry count mismatch raw=15 ast=13 raw_value=	9
+rfc.vcf	true	9	0	0	L3	27	27	true	true	-	-	ast_coll_in=26 ast_coll_rt=0 raw=ok raw_value=ok	54
