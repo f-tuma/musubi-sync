@@ -52,6 +52,9 @@ jobs:
       # K1: only an optimized build writes fast enough to reach the WAL hard
       # limit and exercise the TRUNCATE path; the test asserts it in release.
       - run: cargo test -p musubi-store-sqlite --release --locked --test import -- --nocapture
+      # K7 (6.3): 20 SIGKILLs of the whole musubi-syncd binary. `crash-points` is an
+      # off-by-default feature that only this test target requires.
+      - run: cargo test -p musubi-syncd --features crash-points --release --locked --test crash -- --nocapture
 
   deny:
     runs-on: ubuntu-24.04
@@ -66,14 +69,21 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
-      # STUB until K7: the `bench` binary of musubi-testkit does not exist yet.
-      # K7 replaces this step with:
-      #   cargo run -p musubi-testkit --bin bench --release --locked -- --smoke
-      - run: echo "bench-smoke is a stub until checkpoint K7 adds the bench binary"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # `bench` runs the musubi-syncd binary next to it.
+      - run: cargo build --release --locked -p musubi-syncd -p musubi-testkit --bins
+      - run: target/release/bench --smoke
+      # B8 and B9 are crate benches: musubi-testkit may not depend on google or recurrence.
+      - run: cargo bench --locked -p musubi-google -p musubi-recurrence --benches
+        env:
+          MUSUBI_BENCH_SMOKE: "1"
 
   nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
@@ -82,7 +92,17 @@ jobs:
       - run: cargo test -p musubi-store-sqlite --release --locked --test crash
         env:
           MUSUBI_CRASH_ROUNDS: "1000"
-      # STUB: the whole-binary crash tests and full benchmarks are added by K7.
+      # K7 (6.3): 1000 SIGKILLs of the whole binary (50 runs of 20); a failing run prints its seed.
+      - run: cargo test -p musubi-syncd --features crash-points --release --locked --test crash -- --nocapture
+        env:
+          MUSUBI_SYNCD_CRASH_RUNS: "50"
+      # K7 (6.5): full-scale benchmarks against their budgets.
+      - if: ${{ !cancelled() }}
+        run: cargo build --release --locked -p musubi-syncd -p musubi-testkit --bins
+      - if: ${{ !cancelled() }}
+        run: target/release/bench
+      - if: ${{ !cancelled() }}
+        run: cargo bench --locked -p musubi-google -p musubi-recurrence --benches
       # The recurrence fuzz harness (K2) is the `fuzz-recurrence` job.
 
   fuzz-recurrence:

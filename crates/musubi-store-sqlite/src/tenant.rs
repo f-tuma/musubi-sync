@@ -446,7 +446,11 @@ fn apply_page(c: &Connection, p: &PageWrite) -> Result<Seq> {
         st.active,
         st.complete
     ])?;
-    j.flush(c, now)
+    let seq = j.flush(c, now)?;
+    // Everything of the page is written but not committed.
+    #[cfg(feature = "crash-points")]
+    crate::crash::point("apply-page", true);
+    Ok(seq)
 }
 
 fn collection_state(r: &Row<'_>) -> rusqlite::Result<Result<CollectionState>> {

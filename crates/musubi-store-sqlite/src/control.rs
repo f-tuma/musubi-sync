@@ -77,6 +77,30 @@ impl SqliteControl {
         })
     }
 
+    /// Releases every job lease; returns how many were held. For a node
+    /// starting on its own data directory: leases left by a killed run would
+    /// otherwise hold their jobs for the rest of `lease_for`. Jobs that share a
+    /// dedup key merge into the oldest, keeping the earliest `due`.
+    pub fn release_leases(&self) -> Result<usize, StoreError> {
+        self.write(|c| {
+            c.execute(
+                "UPDATE jobs SET due = (SELECT min(due) FROM jobs k
+                   WHERE k.tenant = jobs.tenant AND k.dedup = jobs.dedup)
+                 WHERE dedup IS NOT NULL",
+                [],
+            )?;
+            c.execute(
+                "DELETE FROM jobs WHERE dedup IS NOT NULL AND EXISTS (SELECT 1 FROM jobs k
+                   WHERE k.tenant = jobs.tenant AND k.dedup = jobs.dedup AND k.id < jobs.id)",
+                [],
+            )?;
+            Ok(c.execute(
+                "UPDATE jobs SET lease = NULL, lease_until = NULL WHERE lease IS NOT NULL",
+                [],
+            )?)
+        })
+    }
+
     fn read<T>(&self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T, StoreError> {
         let mut c = lock(&self.reader);
         let tx = c.transaction().map_err(crate::Error::from)?;

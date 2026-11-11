@@ -264,6 +264,30 @@ fn expired_lease_absorbs_and_reschedule_merges_duplicates() {
 }
 
 #[test]
+fn release_leases_frees_jobs_and_merges_duplicates() {
+    let (_d, c) = open();
+    let sync = JobKind::Sync {
+        account: A1,
+        collection: CollectionId::from_u128(5),
+    };
+    let now = jiff::Timestamp::now();
+    let a = c.enqueue(&job(sync.clone(), 0, 5, Some("k"))).unwrap();
+    let plain = c.enqueue(&job(JobKind::Maintain, 0, 6, None)).unwrap();
+    assert_eq!(c.lease_due(Lane::Sync, now, 10, LEASE).unwrap().len(), 2);
+    // Enqueued while `a` is leased: a second row with the same key.
+    let dup = c.enqueue(&job(sync, 0, 2, Some("k"))).unwrap();
+    assert_ne!(dup, a);
+
+    assert_eq!(c.release_leases().unwrap(), 2);
+    let free = c.lease_due(Lane::Sync, now, 10, LEASE).unwrap();
+    let mut got: Vec<_> = free.iter().map(|j| (j.id, j.spec.due)).collect();
+    got.sort();
+    assert_eq!(got, [(a, t(2)), (plain, t(6))]);
+    assert_eq!(c.release_leases().unwrap(), 2);
+    assert_eq!(c.release_leases().unwrap(), 0);
+}
+
+#[test]
 fn lease_order_expiry_and_lease_lost() {
     let (_d, c) = open();
     let low = c.enqueue(&job(JobKind::Maintain, 0, 0, None)).unwrap();

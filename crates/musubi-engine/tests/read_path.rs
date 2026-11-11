@@ -489,6 +489,73 @@ async fn ten_notifications_within_150_ms_cost_one_delta() {
 }
 
 #[tokio::test]
+async fn change_before_the_channel_opened_arrives_without_a_notification() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake.hold(Op::Subscribe);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().subscribe == 1).await;
+    // The full read is over and the channel does not exist yet: Google
+    // sends nothing for this one.
+    h.put_at("b", 2);
+    h.fake.release(Op::Subscribe);
+    run.await.unwrap().unwrap();
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a"]);
+
+    let deltas = h.fake.calls().deltas;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().deltas, deltas + 1);
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
+async fn catch_up_reads_what_changed_while_the_node_was_down() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    // The notification for this one went to a dead node.
+    h.put_at("b", 2);
+
+    let engine = h.restart();
+    assert_eq!(engine.catch_up().await.unwrap(), 1, "one channel");
+    let deltas = h.fake.calls().deltas;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().deltas, deltas + 1);
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
+async fn full_read_cut_off_after_its_end_still_schedules_the_collection() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake.hold(Op::Subscribe);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    // The full read has ended and committed; the process dies in its
+    // `synced`, before a channel or the next poll exists.
+    until(|| h.fake.calls().subscribe == 1).await;
+    run.abort();
+    let _ = run.await;
+    h.fake.release(Op::Subscribe);
+
+    let engine = h.restart();
+    h.advance(h.config.lease_for + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.control.channels(TENANT, Some(ACCOUNT)).unwrap().len(), 1);
+    h.put_at("b", 2);
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
 async fn leased_job_runs_again_after_restart_and_never_twice_at_once() {
     let h = H::new();
     for k in ["a", "b", "c"] {

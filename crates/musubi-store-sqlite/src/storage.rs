@@ -35,6 +35,14 @@ use crate::{BUSY_TIMEOUT, Error, Result, connect};
 
 const WAL_SOFT: u64 = 8 << 20;
 const WAL_HARD: u64 = 64 << 20;
+
+fn wal_hard() -> u64 {
+    #[cfg(feature = "crash-points")]
+    if let Some(v) = crate::crash::wal_hard() {
+        return v;
+    }
+    WAL_HARD
+}
 const CKPT_WAIT: Duration = Duration::from_millis(10);
 const RESET_BACKOFF: Duration = Duration::from_secs(1);
 const RESET_BACKOFF_GROWTH: u64 = 32 << 20;
@@ -178,7 +186,7 @@ impl Inner {
                 // Over the hard limit the writer resets the WAL; a PASSIVE here
                 // would hold the checkpoint lock and make that reset fail.
                 let since = last.entry(t).or_insert_with(Instant::now);
-                let throttle = !(WAL_SOFT..WAL_HARD).contains(&size);
+                let throttle = !(WAL_SOFT..wal_hard()).contains(&size);
                 if throttle && since.elapsed() < Duration::from_secs(1) {
                     continue;
                 }
@@ -518,7 +526,7 @@ impl Shared {
         let r = f(&tx)?;
         tx.commit()?;
         let size = self.wal_size();
-        if size >= WAL_HARD && (Instant::now() >= w.next_reset.0 || size >= w.next_reset.1) {
+        if size >= wal_hard() && (Instant::now() >= w.next_reset.0 || size >= w.next_reset.1) {
             // The page is committed; a failed reset only delays the next one.
             if let Err(e) = self.truncate(&mut w, size) {
                 tracing::warn!(error = %e.0, dir = %self.dir.display(), "WAL reset failed");
@@ -541,6 +549,9 @@ impl Shared {
                 drain.let_reads_in();
                 // Readers outside the gate (a backup) get the same bounded wait.
                 w.conn.busy_timeout(CKPT_WAIT)?;
+                // Non-blocking: the harness's kill lands around the checkpoint.
+                #[cfg(feature = "crash-points")]
+                crate::crash::point("truncate", false);
                 let r = w
                     .conn
                     .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0));

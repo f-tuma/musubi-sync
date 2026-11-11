@@ -219,6 +219,9 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
     private_new_file(Path::new(dest)).map_err(io)?;
     conn.execute("VACUUM INTO ?1", [dest])
         .map_err(|e| ApiError::internal(&e))?;
+    // `control.db` copied, the tenants not yet.
+    #[cfg(feature = "crash-points")]
+    musubi_store_sqlite::crash::point("backup", true);
 
     let mut n = 0;
     for t in tenant_dirs(&app.data_dir.join("tenants")).map_err(|e| ApiError::internal(&e))? {

@@ -58,6 +58,7 @@ fn run() -> Result<(), String> {
 
 async fn serve(c: Config) -> Result<(), String> {
     let app = App::open(&c)?;
+    app.engine().catch_up().await.map_err(|e| e.to_string())?;
     // The scheduler runs until this handle drops at shutdown.
     let _engine = app.engine().start();
     let listener = tokio::net::TcpListener::bind(c.listen)

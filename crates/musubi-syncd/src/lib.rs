@@ -118,6 +118,12 @@ impl App {
         admin::set_mode(&c.data_dir, 0o700).map_err(data)?;
         let lock = lock_data_dir(&c.data_dir)?;
         let control = Arc::new(SqliteControl::open(&c.data_dir.join("control.db")).map_err(err)?);
+        // The lock makes this the only node on the directory: leases left by a
+        // killed run would hold their jobs for the rest of their term.
+        let released = control.release_leases().map_err(err)?;
+        if released > 0 {
+            tracing::info!(released, "released job leases of a previous run");
+        }
         let storage = Arc::new(SqliteStorage::new(&c.data_dir, OPEN_TENANTS).map_err(err)?);
         let url = |name: &str, v: &str| Url::parse(v).map_err(|e| format!("{name}: {e}"));
         let g = &c.google;
@@ -153,7 +159,12 @@ impl App {
                 sealer: sealer.clone(),
             }),
             clock,
-            Arc::new(move |tenant, head| sink.notify(tenant, head)),
+            Arc::new(move |tenant, head| {
+                // Committed, not yet announced on `/v1/stream`.
+                #[cfg(feature = "crash-points")]
+                musubi_store_sqlite::crash::point("commit-sse", true);
+                sink.notify(tenant, head)
+            }),
             musubi_engine::Config {
                 callback: Some(callback.as_str().parse().map_err(err)?),
                 ..Default::default()

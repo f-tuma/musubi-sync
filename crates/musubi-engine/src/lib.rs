@@ -352,6 +352,19 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         }
     }
 
+    /// Queues a delta of every collection with a push channel. Call once at
+    /// startup: notifications sent while the node was down are lost (Google
+    /// does not retry them). Returns how many were queued.
+    pub async fn catch_up(&self) -> Result<usize, EngineError> {
+        let channels = self.ctl(|c| c.channels_expiring(Timestamp::MAX)).await?;
+        let now = self.now();
+        for ch in &channels {
+            self.enqueue(Self::push_job(ch.tenant, ch.account, ch.collection, now))
+                .await?;
+        }
+        Ok(channels.len())
+    }
+
     /// Starts the scheduler: each lane leases due jobs up to its concurrency.
     pub fn start(&self) -> Running {
         let c = &self.inner.config;

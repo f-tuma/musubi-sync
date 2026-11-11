@@ -2,6 +2,8 @@
 //! HTTP helpers and store fixtures (as in musubi-store-sqlite's tests).
 #![allow(dead_code)]
 
+pub mod whole;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
