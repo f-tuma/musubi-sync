@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::ops::Bound;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
@@ -186,53 +187,46 @@ impl FakeProvider {
                 };
                 Ok((page, pos))
             }
-            Pos::Full { snapshot, offset } => {
-                let upserts: Vec<_> = c
-                    .objects
-                    .values()
-                    .skip(offset)
-                    .take(size)
-                    .map(|o| o.object.clone())
-                    .collect();
-                let next = offset + upserts.len();
-                let last = next >= c.objects.len();
+            Pos::Full { snapshot, after } => {
+                // Keyset paging: keys inserted behind `after` during the read are
+                // newer than `snapshot`, so the following delta delivers them.
+                let mut rest = c.objects.range(past(&after)).map(|(_, o)| &o.object);
+                let upserts: Vec<_> = rest.by_ref().take(size).cloned().collect();
+                let last = rest.next().is_none();
                 let pos = if last {
                     Pos::Delta {
                         since: snapshot,
                         until: snapshot,
-                        offset: 0,
+                        after: None,
                     }
                 } else {
                     Pos::Full {
                         snapshot,
-                        offset: next,
+                        after: upserts.last().map(|o| o.key.clone()),
                     }
                 };
+                let cursor = Some(pos.encode());
                 Ok((
                     ChangePage {
                         pass: Pass::Full,
                         upserts,
                         removals: Vec::new(),
-                        cursor: Some(pos.encode()),
+                        cursor,
                         last,
                     },
                     pos,
                 ))
             }
-            Pos::Window { window, offset } => {
-                let hits: Vec<_> = c
+            Pos::Window { window, after } => {
+                let mut rest = c
                     .objects
-                    .values()
+                    .range(past(&after))
+                    .map(|(_, o)| o)
                     .filter(|o| o.span.is_some_and(|(a, b)| window.overlaps(a, b)))
-                    .collect();
-                let upserts: Vec<_> = hits
-                    .iter()
-                    .skip(offset)
-                    .take(size)
-                    .map(|o| o.object.clone())
-                    .collect();
-                let next = offset + upserts.len();
-                let last = next >= hits.len();
+                    .map(|o| &o.object);
+                let upserts: Vec<_> = rest.by_ref().take(size).cloned().collect();
+                let last = rest.next().is_none();
+                let after = upserts.last().map(|o| o.key.clone()).or(after);
                 let page = ChangePage {
                     pass: Pass::Window,
                     upserts,
@@ -240,59 +234,55 @@ impl FakeProvider {
                     cursor: None,
                     last,
                 };
-                Ok((
-                    page,
-                    Pos::Window {
-                        window,
-                        offset: next,
-                    },
-                ))
+                Ok((page, Pos::Window { window, after }))
             }
             Pos::Delta {
                 since,
                 until,
-                offset,
+                after,
             } => {
                 if since < s.oldest_cursor {
                     return Err(SyncError::CursorExpired);
                 }
                 // `until` == `since` marks a fresh delta: it covers changes up to now.
                 let until = if until == since { s.version } else { until };
-                let changed: Vec<_> = c
+                // A key changed again after `until` drops out here; the next delta
+                // (from `until`) delivers it.
+                let mut rest = c
                     .log
-                    .iter()
+                    .range(past(&after))
                     .filter(|(_, v)| **v > since && **v <= until)
-                    .map(|(k, _)| k)
-                    .collect();
+                    .map(|(k, _)| k);
+                let changed: Vec<_> = rest.by_ref().take(size).collect();
+                let last = rest.next().is_none();
                 let mut upserts = Vec::new();
                 let mut removals = Vec::new();
-                for key in changed.iter().skip(offset).take(size) {
+                for key in &changed {
                     match c.objects.get(*key) {
                         Some(o) => upserts.push(o.object.clone()),
                         None => removals.push((*key).clone()),
                     }
                 }
-                let next = offset + upserts.len() + removals.len();
-                let last = next >= changed.len();
                 let pos = if last {
                     Pos::Delta {
                         since: until,
                         until,
-                        offset: 0,
+                        after: None,
                     }
                 } else {
                     Pos::Delta {
                         since,
                         until,
-                        offset: next,
+                        after: changed.last().map(|k| (*k).clone()),
                     }
                 };
+                let cursor = Some(pos.encode());
                 Ok((
                     ChangePage {
                         pass: Pass::Delta,
                         upserts,
                         removals,
-                        cursor: Some(pos.encode()),
+                        cursor,
                         last,
                     },
                     pos,
@@ -302,35 +292,57 @@ impl FakeProvider {
     }
 }
 
-/// Decoded cursor: where a pass continues.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Key range strictly after `after` (all keys for `None`).
+fn past(after: &Option<RemoteKey>) -> (Bound<&RemoteKey>, Bound<&RemoteKey>) {
+    (
+        after.as_ref().map_or(Bound::Unbounded, Bound::Excluded),
+        Bound::Unbounded,
+    )
+}
+
+/// Decoded cursor: where a pass continues. Pages continue after the last key
+/// delivered (keyset), so concurrent inserts and deletes never shift a page.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Pos {
-    /// Full read at `offset` in key order; ends with a delta cursor at `snapshot`.
-    Full { snapshot: u64, offset: usize },
+    /// Full read in key order; ends with a delta cursor at `snapshot`.
+    Full {
+        snapshot: u64,
+        after: Option<RemoteKey>,
+    },
     /// Window read (never encoded: window pages carry no cursor).
-    Window { window: TimeWindow, offset: usize },
-    /// Changes with version in `(since, until]`, at `offset` in key order.
+    Window {
+        window: TimeWindow,
+        after: Option<RemoteKey>,
+    },
+    /// Changes with version in `(since, until]`, in key order.
     Delta {
         since: u64,
         until: u64,
-        offset: usize,
+        after: Option<RemoteKey>,
     },
 }
 
 impl Pos {
-    fn encode(self) -> Cursor {
-        let (tag, a, b, c) = match self {
-            Pos::Full { snapshot, offset } => (b'F', snapshot, 0, offset as u64),
+    /// Tag, two big-endian `u64`s, then `1` and the key, or `0`.
+    fn encode(&self) -> Cursor {
+        let (tag, a, b, after) = match self {
+            Pos::Full { snapshot, after } => (b'F', *snapshot, 0, after),
             Pos::Delta {
                 since,
                 until,
-                offset,
-            } => (b'D', since, until, offset as u64),
+                after,
+            } => (b'D', *since, *until, after),
             Pos::Window { .. } => unreachable!("window pages carry no cursor"),
         };
         let mut v = vec![tag];
-        for n in [a, b, c] {
-            v.extend_from_slice(&n.to_be_bytes());
+        v.extend_from_slice(&a.to_be_bytes());
+        v.extend_from_slice(&b.to_be_bytes());
+        match after {
+            Some(k) => {
+                v.push(1);
+                v.extend_from_slice(k.0.as_bytes());
+            }
+            None => v.push(0),
         }
         Cursor(v)
     }
@@ -338,19 +350,25 @@ impl Pos {
     fn decode(c: &Cursor) -> Result<Self, SyncError> {
         let bad = || SyncError::Permanent("malformed fake cursor".into());
         let (tag, rest) = c.0.split_first().ok_or_else(bad)?;
-        let n: Vec<u64> = rest
-            .chunks(8)
-            .map(|ch| ch.try_into().map(u64::from_be_bytes).map_err(|_| bad()))
-            .collect::<Result<_, _>>()?;
-        match (tag, n.as_slice()) {
-            (b'F', [s, 0, o]) => Ok(Pos::Full {
-                snapshot: *s,
-                offset: usize::try_from(*o).map_err(|_| bad())?,
-            }),
-            (b'D', [s, u, o]) => Ok(Pos::Delta {
-                since: *s,
-                until: *u,
-                offset: usize::try_from(*o).map_err(|_| bad())?,
+        if rest.len() < 17 {
+            return Err(bad());
+        }
+        let (nums, rest) = rest.split_at(16);
+        let a = u64::from_be_bytes(nums[..8].try_into().map_err(|_| bad())?);
+        let b = u64::from_be_bytes(nums[8..].try_into().map_err(|_| bad())?);
+        let after = match rest.split_first() {
+            Some((0, [])) => None,
+            Some((1, key)) => Some(RemoteKey(
+                String::from_utf8(key.to_vec()).map_err(|_| bad())?,
+            )),
+            _ => return Err(bad()),
+        };
+        match tag {
+            b'F' if b == 0 => Ok(Pos::Full { snapshot: a, after }),
+            b'D' => Ok(Pos::Delta {
+                since: a,
+                until: b,
+                after,
             }),
             _ => Err(bad()),
         }
@@ -376,7 +394,7 @@ impl Stream for Pages {
             return Poll::Ready(None);
         }
         let pos = match &mut this.pos {
-            Ok(p) => *p,
+            Ok(p) => p.clone(),
             Err(e) => {
                 this.done = true;
                 return Poll::Ready(e.take().map(Err));
@@ -390,7 +408,7 @@ impl Stream for Pages {
         match &item {
             Ok((page, next)) => {
                 this.done = page.last;
-                this.pos = Ok(*next);
+                this.pos = Ok(next.clone());
             }
             Err(_) => this.done = true,
         }
@@ -460,9 +478,12 @@ impl Provider for FakeProvider {
             (Some(c), _) => Pos::decode(c).map_err(Some),
             (None, Start::Full) => Ok(Pos::Full {
                 snapshot,
-                offset: 0,
+                after: None,
             }),
-            (None, Start::Window(window)) => Ok(Pos::Window { window, offset: 0 }),
+            (None, Start::Window(window)) => Ok(Pos::Window {
+                window,
+                after: None,
+            }),
         };
         let size = hint.page_size.map_or(self.page_size, NonZeroU32::get) as usize;
         Box::pin(Pages {

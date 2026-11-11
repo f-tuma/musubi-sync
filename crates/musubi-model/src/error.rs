@@ -112,6 +112,12 @@ pub enum StoreError {
         /// Newest version this build can open.
         supported: u32,
     },
+    /// A full-read operation does not match the collection's read state
+    /// ([`crate::store::TenantStore::apply_page`],
+    /// [`crate::store::TenantStore::finish_full_read`]). A writer bug or a stale
+    /// read after a restart; nothing was written.
+    #[error("full read id does not match the collection state")]
+    StaleRead,
     /// A job lease expired and was taken over; the result of the old holder is
     /// discarded. The holder stops working on the job.
     #[error("job lease lost")]

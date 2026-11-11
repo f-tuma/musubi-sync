@@ -12,8 +12,15 @@
 //!    journal entry and does not advance [`Seq`]; it only records that a full
 //!    read saw the items (`PageWrite::read`).
 //! 3. `Seq` strictly increases and is never reused, not after `prune`, not after a crash.
-//! 4. `finish_full_read(col, r)` tombstones only live items of `col` that no
-//!    page written with `read == Some(r)` contained.
+//! 4. While the full read `r` is active ([`CollectionState::active_read`] is
+//!    `Some(r)`), every page written to the collection, whatever its
+//!    `PageWrite::read`, marks the keys of its `upserts`, `unchanged` and
+//!    `removals` as seen by `r`. So delta pages written between the last page
+//!    of the read and `finish_full_read` (a crash, a finish held back by the
+//!    mass-deletion guard) count as seen. `finish_full_read(col, r)` is
+//!    accepted only after the page with `last` of `r`
+//!    ([`CollectionState::read_complete`]) and tombstones only live items of
+//!    `col` not seen by `r`.
 //! 5. One item per (collection, remote key); one entity per item and one
 //!    placement per entity (phase 1).
 //! 6. `range` returns occurrences sorted by (`start`, `entity`, `recurrence_id`),
@@ -29,7 +36,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use jiff::civil::DateTime;
 use jiff::tz::TimeZone;
 use serde_json::value::RawValue;
 
@@ -50,8 +56,9 @@ pub type CanonicalJson = Box<RawValue>;
 /// (later PostgreSQL). Called by `musubi-syncd` (admin calls, backup) and by the
 /// engine (`open`).
 pub trait Storage: Send + Sync {
-    /// Handle to one tenant.
-    type Tenant: TenantStore;
+    /// Handle to one tenant. `'static` so the engine can move it into the
+    /// tenant writer's thread or task.
+    type Tenant: TenantStore + 'static;
 
     /// Opens a tenant, migrating its schema lazily if it is older.
     ///
@@ -112,6 +119,22 @@ pub trait TenantStore: Send {
     /// `finish_full_read` would delete. Used by the mass-deletion guard.
     fn unseen_count(&self, col: CollectionId, read: ReadId) -> Result<u64, StoreError>;
 
+    /// Keys of the live items of `col` not seen by the full read `read`, in key
+    /// order, starting after `after`, at most `limit` (keyset paging).
+    ///
+    /// The mass-deletion guard re-reads them with
+    /// [`crate::provider::Provider::fetch`]. Objects that still exist are
+    /// marked seen with `apply_page` (`read: Some(read)`, `cursor: None`,
+    /// `last: false`, the keys in `unchanged` or, if changed, in `upserts`);
+    /// the rest are deleted by `finish_full_read`.
+    fn unseen(
+        &self,
+        col: CollectionId,
+        read: ReadId,
+        after: Option<&RemoteKey>,
+        limit: u32,
+    ) -> Result<Vec<RemoteKey>, StoreError>;
+
     /// Series whose occurrence index ends before `until` and that continue past
     /// it, oldest index first, at most `limit`. Used to move the index horizon.
     fn series_to_extend(&self, until: Timestamp, limit: u32) -> Result<Vec<SeriesRef>, StoreError>;
@@ -129,13 +152,38 @@ pub trait TenantStore: Send {
     /// (by hash, existing hash = no write), items, entities and placements
     /// (new ones get fresh ids), occurrences, journal and cursor. Returns the
     /// head after the commit (unchanged if nothing changed).
+    ///
+    /// Full-read bookkeeping (invariant 4), in this order:
+    /// - `p.read == Some(r)` with no active read starts `r` (it must be greater
+    ///   than `last_read`); with an active read `a < r` it replaces `a`, whose
+    ///   seen-marks are dropped (a full read restarted after `CursorExpired`).
+    ///   `r` older than the active read or not above `last_read` is
+    ///   `StaleRead`, and nothing is written.
+    /// - While a read is active, all keys of the page are marked seen by it,
+    ///   whatever `p.read` says.
+    /// - `p.last` on a page of the active read sets
+    ///   [`CollectionState::read_complete`].
+    ///
     /// `NotFound` if the collection does not exist.
     fn apply_page(&mut self, p: &PageWrite) -> Result<Seq, StoreError>;
 
     /// Ends the full read `read` of `col`: tombstones live items it did not see
     /// (their entities and occurrences with them), clears
-    /// [`CollectionState::active_read`] and sets `last_read`. Returns the head.
+    /// [`CollectionState::active_read`] and `read_complete` and sets
+    /// `last_read`. Returns the head. `StaleRead` if `read` is not the active
+    /// read or its last page has not been written.
+    ///
+    /// Phase 1 only: with one placement per entity, an absent item tombstones
+    /// its entity. With several placements (phase 3 and 4) absence detaches
+    /// the placement and the entity stays (proposal 12.7).
     fn finish_full_read(&mut self, col: CollectionId, read: ReadId) -> Result<Seq, StoreError>;
+
+    /// Drops a collection the engine no longer syncs (gone from a complete
+    /// discovery and confirmed, or its account is being removed): tombstones
+    /// all its items with their entities and occurrences, writes the journal
+    /// entries and deletes the collection. Its [`CollectionId`] is never reused.
+    /// Returns the head.
+    fn purge_collection(&mut self, col: CollectionId) -> Result<Seq, StoreError>;
 
     /// Sets the engine-maintained status of a collection (coverage, last error).
     fn set_collection_state(
@@ -180,15 +228,20 @@ pub struct CollectionState {
     pub remote: RemoteCollection,
     /// Stored resume position (mid-pass during a full read, otherwise the delta cursor).
     pub cursor: Option<Cursor>,
-    /// Full read in progress (its pages have been written, `finish_full_read` not yet).
-    /// After a restart the engine resumes it with `cursor` and this id.
+    /// Full read in progress: started by a page with `read: Some(id)`,
+    /// `finish_full_read` not yet called.
     pub active_read: Option<ReadId>,
+    /// The page with `last` of `active_read` has been written: all pages are
+    /// in, only `finish_full_read` is pending (possibly held by the
+    /// mass-deletion guard). After a restart the engine finishes the read if
+    /// this is set, and otherwise resumes it with `cursor` and `active_read`.
+    pub read_complete: bool,
     /// Last finished full read. A new read uses a larger id.
     pub last_read: Option<ReadId>,
     /// Engine-maintained status.
     pub status: CollectionStatus,
     /// Missing from the last complete discovery. Its items stay until the
-    /// engine decides otherwise.
+    /// engine drops it with [`TenantStore::purge_collection`].
     pub gone: bool,
 }
 
@@ -199,6 +252,10 @@ pub struct CollectionStatus {
     pub coverage: Coverage,
     /// Last error, cleared on success.
     pub error: Option<CollectionError>,
+    /// End of the last successful read of any pass (proposal 3.1).
+    pub synced_at: Option<Timestamp>,
+    /// End of the last finished full read.
+    pub full_read_at: Option<Timestamp>,
 }
 
 /// What part of a collection has been read.
@@ -243,9 +300,14 @@ pub struct PageWrite {
     pub collection: CollectionId,
     /// Pass of the page.
     pub pass: Pass,
-    /// `Some` during a full read: every key in `upserts` and `unchanged` is
-    /// marked as seen by this read, and it becomes the collection's `active_read`.
+    /// `Some` on pages of a full read (and on the guard's re-marking pages):
+    /// starts or continues that read. Pages written while a read is active are
+    /// marked seen by it even with `None` ([`TenantStore::apply_page`]).
     pub read: Option<ReadId>,
+    /// The page ends its pass ([`crate::provider::ChangePage::last`]). On a
+    /// page of the active full read it sets [`CollectionState::read_complete`];
+    /// `false` never clears it.
+    pub last: bool,
     /// New cursor, stored in the same transaction. `None` keeps the stored one.
     pub cursor: Option<Cursor>,
     /// New or changed objects.
@@ -289,9 +351,9 @@ pub struct ItemWrite {
 pub struct Correlation {
     /// UID.
     pub uid: String,
-    /// Set for a single instance of a series: the replaced occurrence, local
-    /// time in the series' zone (as in [`OccurrenceRow::recurrence_id`]).
-    pub recurrence_id: Option<DateTime>,
+    /// Set for a single instance of a series: the replaced occurrence, in the
+    /// convention of [`OccurrenceRow::recurrence_id`].
+    pub recurrence_id: Option<Timestamp>,
 }
 
 /// Occurrence index rows of one entity.
@@ -310,8 +372,10 @@ pub struct OccurrenceRow {
     pub start: Timestamp,
     /// End (`>= start`), same convention.
     pub end: Timestamp,
-    /// Occurrence of a series: its recurrence id (local time in the series' zone).
-    pub recurrence_id: Option<DateTime>,
+    /// Occurrence of a series: its recurrence id, the original start of the
+    /// occurrence as an instant. For floating and all-day series the local
+    /// wall time read as UTC, as in `start`. Comparable across zones.
+    pub recurrence_id: Option<Timestamp>,
     /// Floating or all-day: the store widens the search by ±14 hours and filters
     /// exactly with [`RangeQuery::zone`].
     pub floating: bool,
@@ -383,7 +447,7 @@ pub struct RangeCursor {
     /// Its entity.
     pub entity: EntityId,
     /// Its recurrence id.
-    pub recurrence_id: Option<DateTime>,
+    pub recurrence_id: Option<Timestamp>,
 }
 
 /// One page of [`TenantStore::range`].
@@ -404,8 +468,8 @@ pub struct RangePage {
 pub struct OccurrenceView {
     /// The entity (the master for occurrences of a series).
     pub entity: EntityId,
-    /// Recurrence id for occurrences of a series.
-    pub recurrence_id: Option<DateTime>,
+    /// Recurrence id for occurrences of a series ([`OccurrenceRow::recurrence_id`]).
+    pub recurrence_id: Option<Timestamp>,
     /// Start (index convention, see [`OccurrenceRow`]).
     pub start: Timestamp,
     /// End.
@@ -498,6 +562,8 @@ pub struct ItemState {
     pub validator: Validator,
     /// Stored raw hash.
     pub raw_hash: RawHash,
+    /// Schema version of the stored view.
+    pub schema_version: u32,
     /// Mapping version of the stored view (re-decode if older).
     pub mapping_version: u32,
     /// Tombstoned.

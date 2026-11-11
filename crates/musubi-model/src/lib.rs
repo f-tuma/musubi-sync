@@ -38,7 +38,7 @@ pub mod store;
 pub mod time;
 
 pub use capability::ProviderDescriptor;
-pub use control::ControlStore;
+pub use control::{ControlStore, TokenVault};
 pub use error::{PushRejected, StoreError, SyncError};
 pub use event::CalendarEvent;
 pub use id::{AccountId, CollectionId, EntityId, ItemId, PlacementId, ReadId, Seq, TenantId};

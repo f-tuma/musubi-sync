@@ -113,6 +113,55 @@ fn full_read_resumes_from_any_page_cursor() {
 }
 
 #[test]
+fn full_read_misses_no_key_when_collection_changes_mid_read() {
+    let (fake, col) = setup();
+    let first = read(&fake, &col, None, Start::Full).unwrap();
+    // Page 1 delivered a, b. Then both are deleted and aa inserted behind the
+    // cursor; an offset into the live map would now skip c.
+    fake.delete(&col, &RemoteKey("a".into()));
+    fake.delete(&col, &RemoteKey("b".into()));
+    fake.put(&col, obj("aa", None));
+    let rest = read(&fake, &col, first[0].cursor.clone(), Start::Full).unwrap();
+    assert_eq!(keys(&rest), ["c", "d", "e"]);
+
+    // The delta from the end of the full read delivers both changes.
+    let delta = read(
+        &fake,
+        &col,
+        rest.last().and_then(|p| p.cursor.clone()),
+        Start::Full,
+    )
+    .unwrap();
+    assert_eq!(keys(&delta), ["aa"]);
+    let removed: Vec<_> = delta.iter().flat_map(|p| &p.removals).collect();
+    assert_eq!(removed, [&RemoteKey("a".into()), &RemoteKey("b".into())]);
+}
+
+#[test]
+fn delta_pages_skip_no_key_when_a_delivered_key_changes_again() {
+    let (fake, col) = setup();
+    let full = read(&fake, &col, None, Start::Full).unwrap();
+    let start = full.last().and_then(|p| p.cursor.clone());
+    for k in ["a", "b", "c"] {
+        fake.put(&col, obj(k, None));
+    }
+    let first = read(&fake, &col, start, Start::Full).unwrap();
+    assert_eq!(keys(&first[..1]), ["a", "b"]);
+    // a changes again after page 1: c must still come on page 2.
+    fake.put(&col, obj("a", None));
+    let rest = read(&fake, &col, first[0].cursor.clone(), Start::Full).unwrap();
+    assert_eq!(keys(&rest), ["c"]);
+    let next = read(
+        &fake,
+        &col,
+        rest.last().and_then(|p| p.cursor.clone()),
+        Start::Full,
+    )
+    .unwrap();
+    assert_eq!(keys(&next), ["a"]);
+}
+
+#[test]
 fn delta_after_full_read_reports_upserts_and_removals() {
     let (fake, col) = setup();
     let full = read(&fake, &col, None, Start::Full).unwrap();
