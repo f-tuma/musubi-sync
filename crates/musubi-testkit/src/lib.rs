@@ -2,8 +2,12 @@
 //!
 //! K0 contains the skeleton of [`FakeProvider`]: an in-memory [`Provider`] and
 //! [`PushSource`] with paging, resumable cursors and a delta log. Scripted
-//! failures, notifications and call counters follow in K5; the fake Google
-//! server in K3.
+//! failures, notifications and call counters follow in K5.
+//!
+//! [`google`] is the in-process fake Google Calendar HTTP server (K3) that
+//! the Google adapter's transport tests run against.
+
+pub mod google;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
