@@ -145,7 +145,8 @@ pub trait TenantStore: Send {
     //     insert-or-ignore podle (mutace, umístění): nikdy nezmění stav existujícího doručení
     // fn project(&mut self, batch: &ProjectionWrite) -> …;                         // main.db + vodoznak
     // fn due_deliveries(&self, limit: u32) -> …;
-    // fn record_outcome(&self, d: DeliveryId, o: &DeliveryOutcome) -> …;
+    // fn record_outcome(&self, d: DeliveryId, o: &DeliveryOutcome) -> …;           // outbox.db, FULL; i `Sent` před
+    //     odesláním: „odesláno" bez výsledku je po restartu nejisté (pozorování, ne nové odeslání)
 }
 ```
 
