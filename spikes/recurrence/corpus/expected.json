@@ -501,9 +501,9 @@
     "2026-03-23T08:00:00Z"
    ]
   ],
-  "decided_by": "rfc",
+  "decided_by": "policy",
   "error_ok": false,
-  "why": "RFC 5545 3.3.10 (COUNT): 'The DTSTART property value always counts as the first occurrence', so DTSTART uses one of the three. Four instances (dateutil wrapper adding DTSTART on top of COUNT) and dropping DTSTART (ical.js) are both wrong."
+  "why": "Musubi policy: RFC 5545 3.8.5.3 calls a set whose DTSTART is not synchronized with the RRULE undefined; we follow 3.3.10 (COUNT): 'The DTSTART property value always counts as the first occurrence', so DTSTART uses one of the three. Four instances (dateutil wrapper adding DTSTART on top of COUNT) and dropping DTSTART (ical.js) are both rejected."
  },
  "exdate-date-on-timed": {
   "accept": [

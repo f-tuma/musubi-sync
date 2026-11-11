@@ -43,7 +43,7 @@ Má musubi-sync rozbalovat opakování převzatou knihovnou `rrule`, některým 
    - **dateutil** (`oracles/dateutil_oracle.py`): python-dateutil 2.9.0.post0 (`rruleset`). ICS čte vlastní parser na regulárních výrazech (unfold, komponenty, vlastnosti). TZID řeší přes systémový `zoneinfo` (tzdb 2026f) a vložené VTIMEZONE přes `dateutil.tz.tzical`. DTSTART přidává přes `rset.rdate(dtstart)`. `requirements.txt` připíná jen `python-dateutil`. Knihovnu icalendar ani balík tzdata orákulum nepoužívá.
    - **ical.js** 2.2.1 s VTIMEZONE vygenerovanými z tzdb skriptem `oracles/gen_vtimezones.py`. Výstup `vtimezones.json` (155 KB) vytváří `run.sh` při každém běhu, proto není v gitu.
 
-   Kde se orákula shodla, převzali jsme výsledek (59 případů). Ostatní jsme rozhodli ručně podle textu RFC 5545 (25 případů) nebo podle politiky Musubi (5 případů), každý s odůvodněním v `corpus/expected.json` (pole `why`). U nejednoznačných míst RFC přijímáme obě čtení.
+   Kde se orákula shodla, převzali jsme výsledek (59 případů). Ostatní jsme rozhodli ručně podle textu RFC 5545 (24 případů) nebo podle politiky Musubi (6 případů), každý s odůvodněním v `corpus/expected.json` (pole `why`). U nejednoznačných míst RFC přijímáme obě čtení.
 3. **Kandidáti**, jeden Rust binár `candidates/`:
    - `rrule` 0.14.0 a `rrule2` 0.15.0 (obojí chrono + chrono-tz);
    - port na jiff (`ccope/rust-rrule` @ `50db3e2`, uzavřený nesloučený PR #151);
@@ -155,7 +155,7 @@ BY-pravidla (BYSETPOS, BYWEEKNO, BYYEARDAY, záporný BYMONTHDAY), WKST, přestu
   ical.js používá offset *po* gapu, což neodpovídá ani jednomu. U hodinových řad a u Apie se varianta s posunem srazí s dalším skutečným výskytem a deduplikuje se.
 - **Fold** (dvojznačný čas): první výskyt (3.3.5). ical.js bere druhý.
 - **YEARLY s BYMONTHDAY bez BYMONTH** se podle tabulky v 3.3.10 rozbalí do každého měsíce. Google tím myslí „ročně“, ale to patří do Google adaptéru (Musubi to dnes řeší v `sanitizeRecurrence`), ne do enginu.
-- **DTSTART neodpovídající pravidlu**: RFC 3.3.10 u COUNT říká „The DTSTART property value always counts as the first occurrence“. Očekáváme proto `[10. 3., 16. 3., 23. 3.]`, tedy DTSTART a dva výskyty pravidla. Neprojde nikdo:
+- **DTSTART neodpovídající pravidlu** (politika Musubi): RFC 3.8.5.3 nazývá takovou množinu nedefinovanou. Opíráme se proto o 3.3.10, který u COUNT říká „The DTSTART property value always counts as the first occurrence“. Očekáváme `[10. 3., 16. 3., 23. 3.]`, tedy DTSTART a dva výskyty pravidla. Neprojde nikdo:
   - Rust kandidáti a ical.js DTSTART vynechají;
   - dateutil ho přidá navíc a vrátí čtyři výskyty.
 
@@ -267,7 +267,7 @@ Původní VTIMEZONE se vždy uchová beze změny pro zpětný zápis.
    1. Invariant „jádro dostává jen civilní čas v UTC“. Odstranit `Tz::Local` (únik zóny hostitele, `floating-daily-host-gap`), `chrono-tz` a `core/timezone.rs` + `timezone_impl.rs`. Invariant zároveň obchází chybu BYHOUR/BYMINUTE z DTSTART se zónou a chybu parseru u DTSTART v gapu. Hlídá ho regresní test `dst-prague-explicit-gap-dtstart`.
    2. `until-before-dtstart`: jádro vrací chybu validace, obal musí vrátit `[DTSTART]`.
    3. `rdate-only`: jádro odmítne vstup bez RRULE („Missing date generation property“). Obal ho bez RRULE nevolá.
-   4. `dtstart-not-in-rule`: obal přidá DTSTART jako první výskyt a jádro volá s COUNT−1 (RFC 3.3.10).
+   4. `dtstart-not-in-rule`: obal přidá DTSTART jen tehdy, když ho jádro samo nevygenerovalo, a pak množinu ořízne na COUNT výskytů celkem (politika podle RFC 3.3.10). Volat jádro s COUNT−1 nestačí: u synchronizovaného DTSTART by se ztratil poslední výskyt.
    5. `exdate-date-on-timed`: zvolit politiku (vyloučit celý den, nebo chyba). Dnes se EXDATE tiše ignoruje.
    6. EXRULE: jádro ji umí, ale je v RFC 5545 zastaralá. Rozhodnout, zda ji přijímat, nebo odmítat.
    7. Převod UNTIL: hrana převádí UNTIL v UTC na civilní čas jen přibližně a výsledky filtruje podle okamžiku. Ponechat filtr podle okamžiku a doplnit případ UNTIL v hodině foldu, který korpus zatím nemá **(neověřeno)**.
