@@ -88,10 +88,11 @@ fn import_keeps_wal_bounded() {
     if cfg!(not(debug_assertions)) {
         assert!(st.truncates > 0, "{st:?}");
     }
-    // A reset drains readers for at most 10 ms plus the TRUNCATE itself.
+    // A read waits for at most one reset: the 10 ms drain plus the TRUNCATE,
+    // both inside `truncate_max` (~10 ms locally, ~0.5 s on a CI disk).
     assert!(
-        waited < Duration::from_millis(500),
-        "reads waited {waited:?}"
+        waited <= st.truncate_max + Duration::from_millis(100) && waited < Duration::from_secs(5),
+        "reads waited {waited:?}; {st:?}"
     );
 
     // A page is capped whatever the caller asks.
