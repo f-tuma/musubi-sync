@@ -46,19 +46,28 @@ pub(crate) async fn create_tenant(State(app): State<Arc<App>>, caller: Caller) -
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
-/// `DELETE /v1/admin/tenants/{id}`: data, accounts, keys and jobs.
-// Watch channels stay open at Google until they expire: stopping them needs the
-// account's tokens and the adapter (K6 step 2). Their notifications then find
-// no channel and answer 404. Step 2 condition: deleting a tenant or an account
-// stops its watch channels before the account's tokens are deleted.
+/// `DELETE /v1/admin/tenants/{id}`: accounts, data, keys and jobs.
+///
+/// Each account is removed through the engine first: it stops the account's
+/// watch channels at Google while the account's tokens still exist, then
+/// deletes them. Only then go the tenant's rows, store and commit channel.
 pub(crate) async fn delete_tenant(
     State(app): State<Arc<App>>,
     caller: Caller,
     UrlPath(id): UrlPath<TenantId>,
 ) -> Result<StatusCode, ApiError> {
     caller.admin()?;
+    let accounts = app.run(move |a| Ok(a.control.accounts(id)?)).await?;
+    for acc in accounts {
+        app.engine
+            .remove_account(acc.id)
+            .await
+            .map_err(|e| ApiError::internal(&e))?;
+    }
     app.run(move |a| {
         a.control.delete_tenant(id)?;
+        a.engine.forget_tenant(id);
+        a.bus.remove(id);
         match a.storage.delete_tenant(id) {
             Ok(()) | Err(StoreError::NotFound) => Ok(()),
             Err(e) => Err(e.into()),
@@ -178,7 +187,7 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
     let io = |e: std::io::Error| ApiError::bad_request(format!("{}: {e}", to.display()));
     // `create_dir` (not `_all`) refuses an existing destination.
     if let Some(parent) = to.parent() {
-        fs::create_dir_all(parent).map_err(io)?;
+        private_dir_all(parent).map_err(io)?;
     }
     private_dir(to).map_err(io)?;
     private_dir(&to.join("tenants")).map_err(io)?;
@@ -191,9 +200,10 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
     let dest = dest
         .to_str()
         .ok_or_else(|| ApiError::bad_request("to must be valid UTF-8"))?;
+    // Created private and empty first: `VACUUM INTO` fills an empty file.
+    private_new_file(Path::new(dest)).map_err(io)?;
     conn.execute("VACUUM INTO ?1", [dest])
         .map_err(|e| ApiError::internal(&e))?;
-    private_file(Path::new(dest)).map_err(io)?;
 
     let mut n = 0;
     for t in tenant_dirs(&app.data_dir.join("tenants")).map_err(|e| ApiError::internal(&e))? {
@@ -201,8 +211,9 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
         private_dir(&out).map_err(io)?;
         match app.storage.backup(t, &out) {
             Ok(_) => {
+                // The store names its files; the `0700` directory covers them until then.
                 for f in fs::read_dir(&out).map_err(io)? {
-                    private_file(&f.map_err(io)?.path()).map_err(io)?;
+                    set_mode(&f.map_err(io)?.path(), 0o600).map_err(io)?;
                 }
                 n += 1;
             }
@@ -264,7 +275,9 @@ pub async fn backup(c: &Config, to: &Path) -> Result<(), String> {
 /// emptied by hand before running `restore` again.
 pub fn restore(c: &Config, from: &Path) -> Result<(), String> {
     let data = &c.data_dir;
-    private_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
+    private_dir_all(data)
+        .and_then(|()| set_mode(data, 0o700))
+        .map_err(|e| format!("{}: {e}", data.display()))?;
     let _lock = lock_data_dir(data)?;
     for e in fs::read_dir(data).map_err(|e| at(data, e))? {
         let e = e.map_err(|e| at(data, e))?;
@@ -322,8 +335,10 @@ fn fill(data: &Path, from: &Path) -> Result<usize, String> {
 
 /// Copies `src` to the new file `dst` (mode `0600`) and flushes it to disk.
 fn copy_synced(src: &Path, dst: &Path) -> Result<(), String> {
+    private_new_file(dst).map_err(|e| at(dst, e))?;
     fs::copy(src, dst).map_err(|e| at(src, e))?;
-    private_file(dst).map_err(|e| at(dst, e))?;
+    // `copy` gives `dst` the mode of `src`.
+    set_mode(dst, 0o600).map_err(|e| at(dst, e))?;
     fs::File::open(dst)
         .and_then(|f| f.sync_all())
         .map_err(|e| at(dst, e))
@@ -353,14 +368,23 @@ pub(crate) fn private_dir_all(dir: &Path) -> io::Result<()> {
     dir_builder().recursive(true).create(dir)
 }
 
-/// Makes `path` readable and writable by its owner only.
-fn private_file(path: &Path) -> io::Result<()> {
+/// Creates the new empty file `path`, readable and writable by its owner only.
+fn private_new_file(path: &Path) -> io::Result<()> {
+    let mut o = fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    o.open(path).map(drop)
+}
+
+/// Sets the Unix permission bits of `path` (no-op elsewhere).
+pub(crate) fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
     }
     #[cfg(not(unix))]
-    let _ = path;
+    let _ = (path, mode);
     Ok(())
 }

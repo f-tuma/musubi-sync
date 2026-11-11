@@ -282,7 +282,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 
     /// The steps of [`Engine::remove_account`] after the state change; each
-    /// one can run again.
+    /// one can run again, also concurrently with a resumed removal, so what a
+    /// step finds already gone counts as done.
     pub(crate) async fn removal(&self, rec: &AccountRecord) -> Result<(), EngineError> {
         let (tenant, account) = (rec.tenant, rec.id);
         // Under the collection lock: a running job finishes first (including a
@@ -290,35 +291,40 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let cols = self.collections(tenant).await?;
         for col in cols.into_iter().filter(|c| c.account == account) {
             let _lock = self.lock(col.id).lock_owned().await;
-            self.write(tenant, move |s| s.purge_collection(col.id))
-                .await?;
+            gone_ok(
+                self.write(tenant, move |s| s.purge_collection(col.id).map(drop))
+                    .await,
+            )?;
         }
         let channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
         if !channels.is_empty() {
             match self.cx(account, false).await {
                 Ok(cx) => {
                     for ch in &channels {
-                        self.drop_channel(&cx, ch).await?;
+                        gone_ok(self.drop_channel(&cx, ch).await)?;
                     }
                 }
                 Err(e) => {
                     tracing::warn!(%account, error = %e, "cannot stop push channels");
                     for ch in channels {
-                        self.ctl(move |c| c.delete_channel(&ch.sub.channel)).await?;
+                        gone_ok(self.ctl(move |c| c.delete_channel(&ch.sub.channel)).await)?;
                     }
                 }
             }
         }
-        match self.ctl(move |c| c.delete_account(account)).await {
-            Ok(()) | Err(EngineError::Store(StoreError::NotFound)) => {}
-            Err(e) => return Err(e),
-        }
+        gone_ok(self.ctl(move |c| c.delete_account(account)).await)?;
         self.inner
             .accounts
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&account);
         Ok(())
+    }
+
+    /// Stops the writer of a deleted tenant, so its store handle (and the
+    /// unlinked files behind it) is released. Call after removing its accounts.
+    pub fn forget_tenant(&self, tenant: TenantId) {
+        self.writers().remove(&tenant);
     }
 
     /// Runs due jobs one at a time, sync lane first, until none is due.
@@ -537,6 +543,14 @@ async fn blocking<R: Send + 'static>(
 
 fn after(t: Timestamp, d: Duration) -> Timestamp {
     t.saturating_add(d).unwrap_or(Timestamp::MAX)
+}
+
+/// `NotFound` from a step that deletes something means it is done already.
+fn gone_ok(r: Result<(), EngineError>) -> Result<(), EngineError> {
+    match r {
+        Err(EngineError::Store(StoreError::NotFound)) => Ok(()),
+        r => r,
+    }
 }
 
 fn sync_dedup(collection: CollectionId) -> String {

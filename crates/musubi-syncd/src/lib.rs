@@ -5,6 +5,12 @@
 //! SSE, and the `backup` / `restore` operations. The binary in `main.rs` only
 //! parses the command line.
 //!
+//! **Engine.** [`App::engine`] runs the sync engine over the same stores. Its
+//! commits reach SSE through [`CommitBus::notify`]; the OAuth callback starts
+//! a new account's discovery, the webhook enqueues the engine's push job, and
+//! deleting a tenant removes its accounts through the engine first, so their
+//! watch channels are stopped while their tokens still exist.
+//!
 //! **Callers.** Every `/v1` route except the OAuth callback and the webhook
 //! needs `Authorization: Bearer <credential>`:
 //!
@@ -33,9 +39,7 @@ mod oauth;
 mod push;
 mod read;
 
-// Linked so that the dependency graph matches docs/plan/phase1.md chapter 2;
-// the engine is wired in K6 step 2.
-use musubi_engine as _;
+// Linked so that the dependency graph matches docs/plan/phase1.md chapter 2.
 use musubi_recurrence as _;
 
 use std::collections::HashMap;
@@ -52,7 +56,8 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use jiff::Timestamp;
-use musubi_google::{GoogleConfig, GoogleProvider};
+use musubi_engine::Engine;
+use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider};
 use musubi_model::control::{ApiKeyHash, Scope};
 use musubi_model::provider::Clock;
 use musubi_model::{ControlStore, Seq, StoreError, TenantId};
@@ -80,53 +85,83 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Largest request body; the API takes only small JSON objects.
 const BODY_LIMIT: usize = 64 * 1024;
 
-/// The running node: stores, adapter, keys and the commit bus.
+/// The sync engine as the node runs it.
+pub type SyncEngine = Engine<SqliteStorage, GoogleCodec>;
+
+/// The running node: stores, adapter, engine, keys and the commit bus.
 pub struct App {
     control: Arc<SqliteControl>,
-    storage: SqliteStorage,
-    google: GoogleProvider,
+    storage: Arc<SqliteStorage>,
+    google: Arc<GoogleProvider>,
+    engine: SyncEngine,
     oauth: oauth::Client,
     http: reqwest::Client,
     signer: Signer,
     sealer: Arc<Sealer>,
     admin_hash: [u8; 32],
-    bus: CommitBus,
+    bus: Arc<CommitBus>,
     data_dir: PathBuf,
     _lock: File,
 }
 
 impl App {
     /// Opens the data directory (taking its lock: one node per directory) and
-    /// builds everything the routes need.
+    /// builds everything the routes need. The engine's scheduler is not
+    /// started: call [`SyncEngine::start`] and keep its handle.
     pub fn open(c: &Config) -> Result<Arc<Self>, String> {
         c.check()?;
-        admin::private_dir_all(&c.data_dir)
-            .map_err(|e| format!("{}: {e}", c.data_dir.display()))?;
+        let data = |e: std::io::Error| format!("{}: {e}", c.data_dir.display());
+        admin::private_dir_all(&c.data_dir).map_err(data)?;
+        // An existing directory keeps its mode otherwise; it holds every secret.
+        admin::set_mode(&c.data_dir, 0o700).map_err(data)?;
         let lock = lock_data_dir(&c.data_dir)?;
-        let control = SqliteControl::open(&c.data_dir.join("control.db")).map_err(err)?;
-        let storage = SqliteStorage::new(&c.data_dir, OPEN_TENANTS).map_err(err)?;
+        let control = Arc::new(SqliteControl::open(&c.data_dir.join("control.db")).map_err(err)?);
+        let storage = Arc::new(SqliteStorage::new(&c.data_dir, OPEN_TENANTS).map_err(err)?);
         let url = |name: &str, v: &str| Url::parse(v).map_err(|e| format!("{name}: {e}"));
         let g = &c.google;
-        let google = GoogleProvider::new(
-            GoogleConfig {
-                client_id: g.client_id.clone(),
-                client_secret: SecretString::from(g.client_secret.clone()),
-                api_base: url("google.api_base", &g.api_base)?,
-                token_url: url("google.token_url", &g.token_url)?,
-            },
-            Arc::new(SystemClock),
-        )
-        .map_err(err)?;
+        let clock = Arc::new(SystemClock);
+        let google = Arc::new(
+            GoogleProvider::new(
+                GoogleConfig {
+                    client_id: g.client_id.clone(),
+                    client_secret: SecretString::from(g.client_secret.clone()),
+                    api_base: url("google.api_base", &g.api_base)?,
+                    token_url: url("google.token_url", &g.token_url)?,
+                },
+                clock.clone(),
+            )
+            .map_err(err)?,
+        );
         // GoogleProvider::new installed the ring provider reqwest needs.
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(err)?;
         let public = url("public_url", &c.public_url)?;
+        let sealer = Arc::new(Sealer::new(&key32("token_key", &c.token_key)?));
+        let bus = Arc::new(CommitBus::default());
+        let sink = bus.clone();
+        let callback = public.join("v1/webhooks/google").map_err(err)?;
+        let engine = Engine::new(
+            storage.clone(),
+            google.clone(),
+            control.clone(),
+            Arc::new(Vault {
+                control: control.clone(),
+                sealer: sealer.clone(),
+            }),
+            clock,
+            Arc::new(move |tenant, head| sink.notify(tenant, head)),
+            musubi_engine::Config {
+                callback: Some(callback.as_str().parse().map_err(err)?),
+                ..Default::default()
+            },
+        );
         Ok(Arc::new(Self {
-            control: Arc::new(control),
+            control,
             storage,
             google,
+            engine,
             oauth: oauth::Client {
                 client_id: g.client_id.clone(),
                 client_secret: SecretString::from(g.client_secret.clone()),
@@ -139,9 +174,9 @@ impl App {
             },
             http,
             signer: Signer::new(&key32("signing_key", &c.signing_key)?)?,
-            sealer: Arc::new(Sealer::new(&key32("token_key", &c.token_key)?)),
+            sealer,
             admin_hash: sha256(c.admin_key.as_bytes()),
-            bus: CommitBus::default(),
+            bus,
             data_dir: c.data_dir.clone(),
             _lock: lock,
         }))
@@ -195,6 +230,11 @@ impl App {
     /// The Google adapter (shared with the engine).
     pub fn google(&self) -> &GoogleProvider {
         &self.google
+    }
+
+    /// The sync engine over this node's stores.
+    pub fn engine(&self) -> &SyncEngine {
+        &self.engine
     }
 
     /// Commit notifications for SSE.
@@ -272,6 +312,14 @@ impl CommitBus {
         let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let tx = map.entry(tenant).or_insert_with(|| watch::channel(head).0);
         tx.send_if_modified(|h| (head > *h).then(|| *h = head).is_some());
+    }
+
+    /// Drops a deleted tenant's channel; its open streams end.
+    pub(crate) fn remove(&self, tenant: TenantId) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&tenant);
     }
 
     /// A receiver of `tenant`'s heads, unless it already has `max` of them.

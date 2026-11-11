@@ -224,7 +224,6 @@ pub(crate) async fn callback(
                     }
                     acc
                 }
-                // The engine picks up `connecting` accounts and discovers them.
                 None => AccountRecord {
                     id: AccountId::from_bytes(random()),
                     tenant: pending.tenant,
@@ -239,5 +238,10 @@ pub(crate) async fn callback(
             Ok(rec)
         })
         .await?;
+    // Discovers a new account (`connecting` → `active`) or rediscovers a reconnected one.
+    app.engine
+        .connect(rec.id)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
     Ok(Json(json!({ "account": rec.id, "state": rec.state })))
 }

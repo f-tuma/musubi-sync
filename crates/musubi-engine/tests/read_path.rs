@@ -999,6 +999,7 @@ async fn removal_during_a_discovery_leaves_nothing_behind() {
     let remove = tokio::spawn(async move { engine.remove_account(ACCOUNT).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_ne!(h.state(), Some(AccountState::Removing), "removal waits");
+    assert!(!remove.is_finished(), "removal waits for the discovery");
     h.fake.release(Op::Discover);
     remove.await.unwrap().unwrap();
     run.await.unwrap().unwrap();
