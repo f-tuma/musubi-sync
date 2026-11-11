@@ -1,14 +1,34 @@
 #!/usr/bin/env bash
 # Full storage benchmark: SQLite-per-tenant vs shared PostgreSQL 17. See README.md.
-# KEEP=1 keeps the container and data afterwards.
+# KEEP=1 keeps the container and data afterwards (also on failure).
 set -euo pipefail
 cd "$(dirname "$0")"
+# One run at a time: two runs share the container and data, and one's cleanup would wipe the other.
+# Children inherit the descriptor, so an orphaned benchmark process keeps the lock too.
+exec 9>.run.lock
+flock -n 9 || { echo "another run.sh (or its benchmark process) is still running" >&2; exit 1; }
 export BENCH_DATA=${BENCH_DATA:-$PWD/data}
 PG=musubi-storage-bench-pg
+MARK=.storage-bench-data
+# Never delete a directory this script did not create: it must be new/empty or carry our marker.
+if [ -e "$BENCH_DATA" ] && [ ! -e "$BENCH_DATA/$MARK" ] && [ -n "$(ls -A "$BENCH_DATA")" ]; then
+  echo "BENCH_DATA=$BENCH_DATA exists, is not empty and has no $MARK marker; refusing to use it" >&2; exit 1
+fi
 mkdir -p "$BENCH_DATA/pg" results
+touch "$BENCH_DATA/$MARK"
+cleanup() {
+  [ "${KEEP:-0}" = 1 ] && return
+  docker rm -f $PG >/dev/null 2>&1 || true
+  [ -e "$BENCH_DATA/$MARK" ] && rm -rf "$BENCH_DATA"
+}
+trap cleanup EXIT
 # Same filesystem for both backends; nodatacow so btrfs CoW/compression does not skew either one.
 chattr +C "$BENCH_DATA" 2>/dev/null || echo "chattr +C failed (not btrfs?), continuing"
 
+# A stopped container with the same name (e.g. after a crash) would make `docker run` fail.
+if docker ps -a --filter status=exited --filter status=created --format '{{.Names}}' | grep -qx $PG; then
+  docker rm $PG >/dev/null
+fi
 if ! docker ps --format '{{.Names}}' | grep -qx $PG; then
   docker run -d --name $PG --network host --shm-size=10g \
     --user "$(id -u):$(id -g)" -v /etc/passwd:/etc/passwd:ro \
@@ -35,7 +55,9 @@ B=./target/release/storage-bench
   echo "other running containers: $(docker ps -q | wc -l)"
 } | tee results/env.md
 
-[ "${SKIP_SQLITE:-0}" = 1 ] || $B sqlite load size read mixed outbox coldopen | tee results/sqlite.md
+if [ "${SKIP_SQLITE:-0}" != 1 ]; then
+  { $B sqlite load size; $B sqlite read mixed outbox coldopen; } | tee results/sqlite.md
+fi
 $B pg load size read mixed outbox connect | tee results/pg.md
 
 # Backup / restore of the full data set (rough, single run).
@@ -59,7 +81,12 @@ $B pg load size read mixed outbox connect | tee results/pg.md
   rm -f "$BENCH_DATA/pg/dump.pgc"
 } | tee results/backup.md
 
-if [ "${KEEP:-0}" != 1 ]; then
-  docker rm -f $PG >/dev/null
-  rm -rf "$BENCH_DATA"
-fi
+# Raw layer compressed with zstd (measured on one regular and one large tenant). Runs after mixed/outbox,
+# which only touch tenants 0..15, so a regular tenant >= 16 still has the state of the size row.
+python3 -I size_zstd.py "$BENCH_DATA/sqlite/t00100.db" "$BENCH_DATA/sqlite/t100001.db" | tee results/size-zstd.md
+
+# A/B switches on the loaded data (review finding 4): MEMSTATUS and checkpoint strategy.
+for m in 0 1; do SQLITE_MEMSTATUS=$m $B sqlite read; done | tee results/ab-memstatus.md
+{ for c in bg inline passive; do SQLITE_CKPT=$c $B sqlite ingest-large; done
+  SQLITE_WAL_HARD_MB=256 $B sqlite ingest-large; } | tee results/ab-ckpt-ingest.md
+for c in bg passive; do SQLITE_CKPT=$c MIXED_SECS=20 $B sqlite mixed; done | tee results/ab-ckpt-mixed.md

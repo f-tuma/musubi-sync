@@ -1,4 +1,3 @@
 target/
 data/
-results/run.log
-results/run-pg.log
+.run.lock

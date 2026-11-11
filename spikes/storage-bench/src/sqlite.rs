@@ -1,13 +1,13 @@
 //! SQLite, one WAL file per tenant, one writer connection per tenant.
 
 use crate::datagen::{MAX_DUR, Page};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER NOT NULL) WITHOUT ROWID;
@@ -45,17 +45,59 @@ pub fn path(dir: &Path, tenant: u64) -> PathBuf {
     dir.join(format!("t{tenant:05}.db"))
 }
 
+/// Checkpoint strategy, A/B switch `SQLITE_CKPT`:
+/// - `bg` (default): background checkpointer with a WAL size policy (see `Checkpointer`),
+///   `wal_autocheckpoint` kept only as a high fuse;
+/// - `inline`: SQLite default, `wal_autocheckpoint=1000` in the committing writer, no background thread;
+/// - `passive`: the first (flawed) version, PASSIVE every 50 ms and no fuse; the WAL grows without
+///   bound under constant readers. Kept only to reproduce that finding.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Ckpt {
+    Bg,
+    Inline,
+    Passive,
+}
+
+pub fn ckpt_mode() -> Ckpt {
+    match std::env::var("SQLITE_CKPT").as_deref() {
+        Ok("inline") => Ckpt::Inline,
+        Ok("passive") => Ckpt::Passive,
+        Ok("bg") | Err(_) => Ckpt::Bg,
+        Ok(x) => panic!("SQLITE_CKPT={x}: expected bg|inline|passive"),
+    }
+}
+
+/// WAL at or above this size is checkpointed (PASSIVE) on the next sweep; smaller WALs at most once a second.
+const WAL_SOFT: u64 = 8 << 20;
+/// WAL at or above this size makes the tenant's writer run TRUNCATE after its commit (waits for readers,
+/// bounded by `CKPT_WAIT`). The writer does it because it already owns the write lock between its
+/// transactions; a separate thread polling for the lock is starved by a busy writer.
+/// A/B knob `SQLITE_WAL_HARD_MB` (default 64).
+fn wal_hard() -> u64 {
+    std::env::var("SQLITE_WAL_HARD_MB").map_or(64, |v| v.parse().expect("SQLITE_WAL_HARD_MB: integer")) << 20
+}
+/// After a WAL reset the file is cut back to this size (journal_size_limit).
+const WAL_LIMIT: u64 = 4 << 20;
+/// Upper bound on how long TRUNCATE waits for readers and the writer (the writer is blocked meanwhile).
+const CKPT_WAIT: Duration = Duration::from_millis(100);
+/// Fuse: inline auto-checkpoint after 65536 pages (256 MB) in case the background checkpointer falls behind.
+const FUSE_PAGES: u32 = 65536;
+
 /// Tuning documented in the report: WAL, synchronous=NORMAL for synced data
 /// (FULL is switched on per transaction for the outbox), 32 MB page cache, 256 MB mmap.
-/// Auto-checkpoint is off: an inline checkpoint costs the committing writer 25-40 ms here,
-/// so a background `Checkpointer` does PASSIVE checkpoints instead.
+/// busy_timeout goes first so that switching to WAL already waits on a lock instead of failing.
 pub fn open(p: &Path) -> rusqlite::Result<Connection> {
     let c = Connection::open(p)?;
-    c.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY;
-         PRAGMA cache_size=-32768; PRAGMA mmap_size=268435456; PRAGMA busy_timeout=5000;
-         PRAGMA wal_autocheckpoint=0;",
-    )?;
+    let autockpt = match ckpt_mode() {
+        Ckpt::Bg => FUSE_PAGES,
+        Ckpt::Inline => 1000,
+        Ckpt::Passive => 0,
+    };
+    c.execute_batch(&format!(
+        "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY;
+         PRAGMA cache_size=-32768; PRAGMA mmap_size=268435456; PRAGMA journal_size_limit={WAL_LIMIT};
+         PRAGMA wal_autocheckpoint={autockpt};"
+    ))?;
     c.set_prepared_statement_cache_capacity(64);
     // Experiment knob for tuning runs; the report states which pragmas the final run used.
     if let Ok(extra) = std::env::var("SQLITE_PRAGMAS") {
@@ -64,36 +106,104 @@ pub fn open(p: &Path) -> rusqlite::Result<Connection> {
     Ok(c)
 }
 
-/// Background PASSIVE checkpoints for a set of tenant files, off the writers' commit path.
+/// Process-wide, reset by `Checkpointer::start`; one checkpointer per test phase.
+static STATS: Stats = Stats {
+    max_wal: AtomicU64::new(0),
+    passive: AtomicU64::new(0),
+    truncate: AtomicU64::new(0),
+    truncate_busy: AtomicU64::new(0),
+};
+
+struct Stats {
+    max_wal: AtomicU64,
+    passive: AtomicU64,
+    truncate: AtomicU64,
+    truncate_busy: AtomicU64,
+}
+
+/// Background checkpoints for a set of tenant files, off the writers' commit path.
+/// Files are registered with `add` only after the writer has created and initialised them.
+/// Every 50 ms each file's WAL size is sampled; >= WAL_SOFT (or >= 1 s since the last one) runs PASSIVE,
+/// which copies frames into the DB without blocking anyone. Resetting the WAL (TRUNCATE) is left to the
+/// writer, see `Writer::reset_wal`; a WAL over that limit is the writer's and is skipped here (1/s fallback). A thread panic aborts the process (`panic = "abort"`), so a run cannot go on silently
+/// without checkpoints.
 pub struct Checkpointer {
     stop: Arc<AtomicBool>,
+    paths: Arc<Mutex<Vec<PathBuf>>>,
     hs: Vec<JoinHandle<()>>,
 }
 
 impl Checkpointer {
     pub fn start(paths: Vec<PathBuf>, threads: usize) -> Self {
+        let mode = ckpt_mode();
+        let threads = if mode == Ckpt::Inline { 0 } else { threads };
         let stop = Arc::new(AtomicBool::new(false));
-        let paths = Arc::new(paths);
+        let paths = Arc::new(Mutex::new(paths));
+        for a in [&STATS.max_wal, &STATS.passive, &STATS.truncate, &STATS.truncate_busy] {
+            a.store(0, Ordering::Relaxed);
+        }
+        let stats = &STATS;
+        let hard = wal_hard();
         let hs = (0..threads)
             .map(|k| {
                 let (stop, paths) = (stop.clone(), paths.clone());
                 std::thread::spawn(move || {
-                    let mut conns: HashMap<usize, Connection> = HashMap::new();
+                    let mut conns: HashMap<usize, (Connection, PathBuf, Instant)> = HashMap::new();
                     while !stop.load(Ordering::Relaxed) {
-                        for i in (k..paths.len()).step_by(threads) {
-                            // Never create a file here; the writer owns creation.
-                            if !conns.contains_key(&i) && !paths[i].exists() {
+                        let n = paths.lock().unwrap().len();
+                        for i in (k..n).step_by(threads) {
+                            let (c, wal, last) = conns.entry(i).or_insert_with(|| {
+                                let p = paths.lock().unwrap()[i].clone();
+                                let c = open(&p).unwrap();
+                                c.busy_timeout(CKPT_WAIT).unwrap();
+                                (c, PathBuf::from(format!("{}-wal", p.display())), Instant::now())
+                            });
+                            let size = std::fs::metadata(&*wal).map(|m| m.len()).unwrap_or(0);
+                            stats.max_wal.fetch_max(size, Ordering::Relaxed);
+                            if mode == Ckpt::Passive {
+                                stats.passive.fetch_add(1, Ordering::Relaxed);
+                                c.execute_batch("PRAGMA wal_checkpoint(PASSIVE)").unwrap();
                                 continue;
                             }
-                            let c = conns.entry(i).or_insert_with(|| open(&paths[i]).unwrap());
-                            let _ = c.execute_batch("PRAGMA wal_checkpoint(PASSIVE)");
+                            // Over the hard limit the writer resets the WAL itself; a PASSIVE here would hold the
+                            // checkpoint lock and make the writer's TRUNCATE fail at once. Once a second as a fallback
+                            // for an idle writer.
+                            let throttle = size < WAL_SOFT || size >= hard;
+                            if size == 0 || (throttle && last.elapsed() < Duration::from_secs(1)) {
+                                continue;
+                            }
+                            *last = Instant::now();
+                            stats.passive.fetch_add(1, Ordering::Relaxed);
+                            c.execute_batch("PRAGMA wal_checkpoint(PASSIVE)").unwrap();
                         }
                         std::thread::sleep(Duration::from_millis(50));
                     }
                 })
             })
             .collect();
-        Checkpointer { stop, hs }
+        Checkpointer { stop, paths, hs }
+    }
+
+    /// Register a tenant file; call only after the file exists with schema and WAL mode set.
+    pub fn add(&self, p: PathBuf) {
+        self.paths.lock().unwrap().push(p);
+    }
+
+    /// One-line summary for result notes.
+    pub fn summary(&self) -> String {
+        let s = &STATS;
+        match ckpt_mode() {
+            Ckpt::Inline => "ckpt=inline (wal_autocheckpoint=1000)".to_string(),
+            m => format!(
+                "ckpt={}: max WAL {:.1} MB, {} passive, {} truncate ({} busy: readers past {} ms or another checkpoint running)",
+                if m == Ckpt::Bg { "bg" } else { "passive-50ms" },
+                s.max_wal.load(Ordering::Relaxed) as f64 / 1e6,
+                s.passive.load(Ordering::Relaxed),
+                s.truncate.load(Ordering::Relaxed),
+                s.truncate_busy.load(Ordering::Relaxed),
+                CKPT_WAIT.as_millis()
+            ),
+        }
     }
 }
 
@@ -101,7 +211,7 @@ impl Drop for Checkpointer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         for h in self.hs.drain(..) {
-            let _ = h.join();
+            h.join().expect("checkpointer thread panicked");
         }
     }
 }
@@ -121,18 +231,37 @@ pub fn create(p: &Path) -> rusqlite::Result<Connection> {
 pub struct Writer {
     pub c: Connection,
     seq: i64,
+    wal: Option<(PathBuf, u64)>,
 }
 
 impl Writer {
     pub fn new(c: Connection) -> rusqlite::Result<Self> {
         let seq = c.query_row("SELECT v FROM meta WHERE k='seq'", [], |r| r.get(0))?;
-        Ok(Writer { c, seq })
+        let wal = (ckpt_mode() == Ckpt::Bg).then(|| (PathBuf::from(format!("{}-wal", c.path().unwrap())), wal_hard()));
+        Ok(Writer { c, seq, wal })
+    }
+
+    /// After a commit: if the WAL reached the hard limit (`wal_hard`), TRUNCATE it. Waits at most CKPT_WAIT for readers that
+    /// still use old frames (this tenant's writes wait meanwhile); on timeout the next commit tries again.
+    fn reset_wal(&mut self) -> rusqlite::Result<()> {
+        let Some((wal, hard)) = &self.wal else { return Ok(()) };
+        if std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0) < *hard {
+            return Ok(());
+        }
+        self.c.busy_timeout(CKPT_WAIT)?;
+        let busy: i64 = self.c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+        self.c.busy_timeout(Duration::from_secs(5))?;
+        STATS.truncate.fetch_add(1, Ordering::Relaxed);
+        STATS.truncate_busy.fetch_add(busy as u64, Ordering::Relaxed);
+        Ok(())
     }
 
     /// One transaction per page: items + raw + entities + placements + occurrences + journal + cursor.
     /// Returns the number of changed items.
     pub fn apply_page(&mut self, page: &Page) -> rusqlite::Result<usize> {
-        let tx = self.c.transaction()?;
+        // IMMEDIATE: a deferred txn that upgrades read->write gets SQLITE_BUSY without the busy handler
+        // while the checkpointer's TRUNCATE holds the write lock; IMMEDIATE waits for it instead.
+        let tx = self.c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut changed = 0;
         {
             let mut find = tx.prepare_cached("SELECT id, entity_id, validator FROM items WHERE collection_id=? AND remote_key=?")?;
@@ -200,6 +329,7 @@ impl Writer {
             tx.prepare_cached("UPDATE meta SET v=? WHERE k='seq'")?.execute([self.seq])?;
         }
         tx.commit()?;
+        self.reset_wal()?;
         Ok(changed)
     }
 
@@ -207,7 +337,7 @@ impl Writer {
     pub fn accept_mutation(&mut self, entity_id: i64, idem: &str, patch: &str) -> rusqlite::Result<()> {
         self.c.execute_batch("PRAGMA synchronous=FULL")?;
         let res = (|| {
-            let tx = self.c.transaction()?;
+            let tx = self.c.transaction_with_behavior(TransactionBehavior::Immediate)?;
             self.seq += 1;
             let seq = self.seq;
             let base: i64 = tx.prepare_cached("SELECT rev FROM entities WHERE id=?")?.query_row([entity_id], |r| r.get(0))?;
@@ -230,7 +360,8 @@ impl Writer {
             tx.commit()
         })();
         self.c.execute_batch("PRAGMA synchronous=NORMAL")?;
-        res
+        res?;
+        self.reset_wal()
     }
 }
 

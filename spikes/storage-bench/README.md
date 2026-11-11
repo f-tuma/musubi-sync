@@ -13,7 +13,7 @@ Data comes from `src/datagen.rs`, which is deterministic: the same seed gives th
 Needs Docker (pulls `postgres:17`) and Rust 1.85 or newer.
 
 ```sh
-./run.sh            # full run, ~25 min; results/ *.md; removes container + data afterwards
+./run.sh            # full run, ~40 min; results/*.md + run.log; removes container + data afterwards
 KEEP=1 ./run.sh     # keep the container and data/ for poking around
 ```
 
@@ -29,10 +29,26 @@ Environment knobs: `BENCH_DATA` (default `./data`), `PG_URL`, `TENANTS=200`, `EV
 `LARGE=100000`, `CONC=16`, `COLD=10000`, `QUERIES=2000`, `MIXED_SECS=20`.
 For a quick smoke run: `TENANTS=20 EVENTS=500 LARGE=3000 CONC=4 COLD=200 QUERIES=50 MIXED_SECS=2`.
 
-`.cargo/config.toml` builds the bundled SQLite with `SQLITE_DEFAULT_MEMSTATUS=0`. Without it, a
-process-wide malloc mutex serializes readers on different connections, and 8 reader threads drop
-about 8× in throughput (see the report).
+`run.sh` refuses a non-empty `BENCH_DATA` without its `.storage-bench-data` marker, and removes the
+container and data on exit (also on failure) unless `KEEP=1`. Its full log is `results/run.log`.
 
-SQLite runs with `wal_autocheckpoint=0` and a background `Checkpointer` (`src/sqlite.rs`) that runs
-`wal_checkpoint(PASSIVE)` every 50 ms. The default inline auto-checkpoint costs the committing writer
-25–40 ms on this disk and cut ingest throughput 3–4×.
+`.cargo/config.toml` builds the bundled SQLite with `SQLITE_DEFAULT_MEMSTATUS=0`. Without it, a
+process-wide malloc mutex serializes readers on different connections. A/B switch: `SQLITE_MEMSTATUS=1`
+turns it back on at runtime (`results/ab-memstatus.md`; factor: see the report, section 3.4).
+
+WAL checkpoints (`src/sqlite.rs`, A/B switch `SQLITE_CKPT`, results in `results/ab-ckpt-*.md`):
+
+- `bg` (default): a background thread runs `wal_checkpoint(PASSIVE)` when a tenant's WAL reaches 8 MB
+  (smaller ones once a second). PASSIVE never resets the WAL while readers or a busy writer keep using
+  it, so the tenant's writer runs `wal_checkpoint(TRUNCATE)` after its commit once the WAL reaches
+  64 MB (`SQLITE_WAL_HARD_MB`), waiting at most 100 ms for readers. `journal_size_limit=4MB`,
+  `wal_autocheckpoint=65536` as a fuse. Writers use `BEGIN IMMEDIATE`, so they wait on the busy handler
+  instead of failing with `SQLITE_BUSY` during a checkpoint. Result notes give the maximum WAL size.
+- `inline`: SQLite default `wal_autocheckpoint=1000` in the committing writer.
+- `passive`: the first version, PASSIVE every 50 ms with `wal_autocheckpoint=0`. Kept only to reproduce
+  the unbounded WAL growth under readers.
+
+The release profile has `panic = "abort"`: a panic in any thread, the checkpointer included, fails the run.
+
+`size_zstd.py <tenant.db>...` (Python 3.14+, stdlib) measures a tenant file with `raw.body`
+compressed by zstd, per row and with a per-tenant dictionary (`results/size-zstd.md`).

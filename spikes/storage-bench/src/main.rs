@@ -31,8 +31,24 @@ fn env<T: std::str::FromStr>(k: &str, d: T) -> T {
 const LARGE: u64 = 100_001;
 /// Tenant id of the large tenant loaded with 250-item pages.
 const LARGE_250: u64 = 100_000;
+/// Incremental-sync transactions measured per backend (300 gave an unstable p99).
+const INCR: u32 = 3000;
 
 fn main() {
+    // A/B switch: the build sets SQLITE_DEFAULT_MEMSTATUS=0 (.cargo/config.toml); SQLITE_MEMSTATUS=1
+    // turns the global malloc statistics mutex back on. Must run before SQLite initialises.
+    if let Ok(v) = std::env::var("SQLITE_MEMSTATUS") {
+        let on: std::os::raw::c_int = v.parse().expect("SQLITE_MEMSTATUS=0|1");
+        // SAFETY: called before any other SQLite API, as sqlite3_config requires.
+        let rc = unsafe { rusqlite::ffi::sqlite3_config(rusqlite::ffi::SQLITE_CONFIG_MEMSTATUS, on) };
+        assert_eq!(rc, rusqlite::ffi::SQLITE_OK);
+        println!("<!-- SQLITE_MEMSTATUS={on} -->");
+    }
+    for k in ["SQLITE_CKPT", "SQLITE_WAL_HARD_MB"] {
+        if let Ok(v) = std::env::var(k) {
+            println!("<!-- {k}={v} -->");
+        }
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cfg = Cfg {
         data: PathBuf::from(env("BENCH_DATA", "data".to_string())),
@@ -67,7 +83,8 @@ fn main() {
 fn row(b: &str, test: &str, v: &mut [f64], notes: &str) {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let q = |p: f64| if v.is_empty() { f64::NAN } else { v[((v.len() - 1) as f64 * p).round() as usize] };
-    println!("| {b} | {test} | {} | {:.3} | {:.3} | {:.3} | {notes} |", v.len(), q(0.5), q(0.99), q(1.0));
+    let small = if v.len() < 100 { " (n < 100: p99 is the max, not a stable percentile)" } else { "" };
+    println!("| {b} | {test} | {} | {:.3} | {:.3} | {:.3} | {notes}{small} |", v.len(), q(0.5), q(0.99), q(1.0));
 }
 
 fn ms(t: Instant) -> f64 {
@@ -167,26 +184,23 @@ fn sqlite_phase(cfg: &Cfg, ph: &str) {
     std::fs::create_dir_all(&dir).unwrap();
     let b = "sqlite";
     match ph.as_ref() {
+        "ingest-large" => sqlite_ingest_large(cfg, &dir),
         "load" => {
-            for (t, page) in [(LARGE_250, 250), (LARGE, 2500)] {
-                let p = gen_many(&[t], cfg.large, page, 0);
-                let (mut lat, wall) = sqlite_ingest(&dir, &[t], &p, 1);
-                row(b, &format!("ingest solo large tenant page={page}"), &mut lat, &format!("{:.0} items/s", items(&p) as f64 / wall));
-            }
+            sqlite_ingest_large(cfg, &dir);
             let reg = regular(cfg);
             let half = reg.len() / 2;
             for (ts, page) in [(&reg[..half], 250), (&reg[half..], 2500)] {
                 let p = gen_many(ts, cfg.events, page, 0);
-                let (mut lat, wall) = sqlite_ingest(&dir, ts, &p, cfg.conc);
-                let notes = format!("{} tenants x {} writers: {:.0} items/s aggregate", ts.len(), cfg.conc, items(&p) as f64 / wall);
+                let (mut lat, wall, ck) = sqlite_ingest(&dir, ts, &p, cfg.conc);
+                let notes = format!("{} tenants x {} writers: {:.0} items/s aggregate; {ck}", ts.len(), cfg.conc, items(&p) as f64 / wall);
                 row(b, &format!("ingest concurrent page={page}"), &mut lat, &notes);
             }
             // Same tenants once more, one at a time, for the "without concurrency" comparison.
             for page in [250usize, 2500] {
                 let ts: Vec<u64> = (0..8).map(|i| 200_000 + i * 10 + page as u64 / 250).collect();
                 let p = gen_many(&ts, cfg.events, page, 0);
-                let (mut lat, wall) = sqlite_ingest(&dir, &ts, &p, 1);
-                row(b, &format!("ingest solo regular tenants page={page}"), &mut lat, &format!("{:.0} items/s", items(&p) as f64 / wall));
+                let (mut lat, wall, ck) = sqlite_ingest(&dir, &ts, &p, 1);
+                row(b, &format!("ingest solo regular tenants page={page}"), &mut lat, &format!("{:.0} items/s; {ck}", items(&p) as f64 / wall));
             }
             let t = Instant::now();
             for tn in reg.iter().chain(&[LARGE, LARGE_250]) {
@@ -195,13 +209,13 @@ fn sqlite_phase(cfg: &Cfg, ph: &str) {
             println!("<!-- sqlite ANALYZE all tenants: {:.1} s -->", t.elapsed().as_secs_f64());
             // Incremental sync: page of 25 changed items + journal + cursor.
             let mut r = Rng::new(42);
-            let incs: Vec<(u64, Page)> = (0..300)
+            let incs: Vec<(u64, Page)> = (0..INCR)
                 .map(|k| {
                     let t = reg[r.below(reg.len() as u64) as usize];
                     (t, datagen::incremental_page(t, cfg.events, r.below(3) as i64, 25, 1000 + k))
                 })
                 .collect();
-            let _ck = sqlite::Checkpointer::start(reg.iter().map(|t| sqlite::path(&dir, *t)).collect(), 2);
+            let ck = sqlite::Checkpointer::start(reg.iter().map(|t| sqlite::path(&dir, *t)).collect(), 2);
             let mut lat = vec![];
             let mut ws: HashMap<u64, sqlite::Writer> = HashMap::new();
             for (t, p) in &incs {
@@ -215,7 +229,7 @@ fn sqlite_phase(cfg: &Cfg, ph: &str) {
                 assert!(w.apply_page(p).unwrap() > 0);
                 lat.push(ms(s));
             }
-            row(b, "incremental sync page=25 (txn only)", &mut lat, "writer connection already open");
+            row(b, "incremental sync page=25 (txn only)", &mut lat, &format!("writer connection already open; {}", ck.summary()));
         }
         "read" => {
             let mut r = Rng::new(7);
@@ -281,7 +295,7 @@ fn sqlite_phase(cfg: &Cfg, ph: &str) {
         }
         "mixed" => sqlite_mixed(cfg, &dir),
         "outbox" => {
-            let _ck = sqlite::Checkpointer::start((0..cfg.conc as u64).map(|t| sqlite::path(&dir, t)).collect(), 2);
+            let ck = sqlite::Checkpointer::start((0..cfg.conc as u64).map(|t| sqlite::path(&dir, t)).collect(), 2);
             let mut w = sqlite::Writer::new(sqlite::open(&sqlite::path(&dir, 5)).unwrap()).unwrap();
             let mut lat = vec![];
             for k in 0..cfg.queries as i64 {
@@ -306,7 +320,7 @@ fn sqlite_phase(cfg: &Cfg, ph: &str) {
                     });
                 }
             });
-            row(b, &format!("outbox accept, synchronous=FULL, {} tenants concurrently", cfg.conc), &mut lat.into_inner().unwrap(), "");
+            row(b, &format!("outbox accept, synchronous=FULL, {} tenants concurrently", cfg.conc), &mut lat.into_inner().unwrap(), &ck.summary());
         }
         "size" => {
             let mut total = 0u64;
@@ -332,14 +346,23 @@ fn sqlite_phase(cfg: &Cfg, ph: &str) {
     }
 }
 
-fn sqlite_ingest(dir: &Path, tenants: &[u64], pages: &[Vec<Page>], conc: usize) -> (Vec<f64>, f64) {
+fn sqlite_ingest_large(cfg: &Cfg, dir: &Path) {
+    for (t, page) in [(LARGE_250, 250), (LARGE, 2500)] {
+        let p = gen_many(&[t], cfg.large, page, 0);
+        let (mut lat, wall, ck) = sqlite_ingest(dir, &[t], &p, 1);
+        row("sqlite", &format!("ingest solo large tenant page={page}"), &mut lat, &format!("{:.0} items/s; {ck}", items(&p) as f64 / wall));
+    }
+}
+
+/// Returns page latencies, wall time and the checkpointer summary.
+fn sqlite_ingest(dir: &Path, tenants: &[u64], pages: &[Vec<Page>], conc: usize) -> (Vec<f64>, f64, String) {
     let paths: Vec<PathBuf> = tenants.iter().map(|t| sqlite::path(dir, *t)).collect();
     for p in &paths {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", p.display()));
         }
     }
-    let _ck = sqlite::Checkpointer::start(paths, 4);
+    let ck = sqlite::Checkpointer::start(vec![], 4);
     let lat = Mutex::new(vec![]);
     let next = AtomicUsize::new(0);
     let t0 = Instant::now();
@@ -354,6 +377,7 @@ fn sqlite_ingest(dir: &Path, tenants: &[u64], pages: &[Vec<Page>], conc: usize) 
                     }
                     let p = sqlite::path(dir, tenants[i]);
                     let mut w = sqlite::Writer::new(sqlite::create(&p).unwrap()).unwrap();
+                    ck.add(p); // only now: schema and WAL mode are in place
                     for page in &pages[i] {
                         let s = Instant::now();
                         w.apply_page(page).unwrap();
@@ -364,15 +388,17 @@ fn sqlite_ingest(dir: &Path, tenants: &[u64], pages: &[Vec<Page>], conc: usize) 
             });
         }
     });
-    (lat.into_inner().unwrap(), t0.elapsed().as_secs_f64())
+    let wall = t0.elapsed().as_secs_f64();
+    (lat.into_inner().unwrap(), wall, ck.summary())
 }
 
 /// Writers re-ingest full update pages (250 items) into 8 tenants while 8 readers query the same tenants.
 fn sqlite_mixed(cfg: &Cfg, dir: &Path) {
     let ts: Vec<u64> = (0..8).collect();
     let upd: Vec<Vec<Vec<Page>>> = (1..=3).map(|v| gen_many(&ts, cfg.events, 250, v)).collect();
-    let _ck = sqlite::Checkpointer::start(ts.iter().map(|t| sqlite::path(dir, *t)).collect(), 2);
     for writers in [false, true] {
+        // Fresh per pass so the WAL maximum belongs to this pass.
+        let ck = sqlite::Checkpointer::start(ts.iter().map(|t| sqlite::path(dir, *t)).collect(), 2);
         let stop = AtomicBool::new(false);
         let (rlat, wlat) = (Mutex::new(vec![]), Mutex::new(vec![]));
         let pages = AtomicUsize::new(0);
@@ -421,7 +447,8 @@ fn sqlite_mixed(cfg: &Cfg, dir: &Path) {
         });
         let tag = if writers { "with 8 writers" } else { "baseline, no writers" };
         let wp = pages.load(Ordering::Relaxed);
-        row("sqlite", &format!("mixed read (month range + changes) {tag}"), &mut rlat.into_inner().unwrap(), "8 readers, same 8 tenants");
+        let notes = format!("8 readers, same 8 tenants; {}", ck.summary());
+        row("sqlite", &format!("mixed read (month range + changes) {tag}"), &mut rlat.into_inner().unwrap(), &notes);
         if writers {
             let notes = format!("{:.0} items/s while reading", wp as f64 / cfg.mixed_secs as f64);
             row("sqlite", "mixed write page=250 updates", &mut wlat.into_inner().unwrap(), &notes);
@@ -577,7 +604,7 @@ async fn pg_phase(cfg: &Cfg, ph: &str) {
             c.batch_execute("VACUUM ANALYZE").await.unwrap();
             println!("<!-- pg VACUUM ANALYZE: {:.1} s -->", t.elapsed().as_secs_f64());
             let mut r = Rng::new(42);
-            let incs: Vec<(u64, Page)> = (0..300)
+            let incs: Vec<(u64, Page)> = (0..INCR)
                 .map(|k| {
                     let t = reg[r.below(reg.len() as u64) as usize];
                     (t, datagen::incremental_page(t, cfg.events, r.below(3) as i64, 25, 1000 + k))
