@@ -158,6 +158,7 @@ BY-pravidla (BYSETPOS, BYWEEKNO, BYYEARDAY, záporný BYMONTHDAY), WKST, přestu
 - **DTSTART neodpovídající pravidlu** (politika Musubi): RFC 3.8.5.3 nazývá takovou množinu nedefinovanou. Opíráme se proto o 3.3.10, který u COUNT říká „The DTSTART property value always counts as the first occurrence“. Očekáváme `[10. 3., 16. 3., 23. 3.]`, tedy DTSTART a dva výskyty pravidla. Neprojde nikdo:
   - Rust kandidáti a ical.js DTSTART vynechají;
   - dateutil ho přidá navíc a vrátí čtyři výskyty.
+  - Stejná politika platí i pro `friday-13th` (COUNT=5, DTSTART mimo pravidlo a v EXDATE). DTSTART zabere jeden z pěti výskytů a EXDATE ho pak odstraní, takže zbudou čtyři. V K2 jsme proto očekávání změnili z pěti výskytů (shoda orákul) na čtyři (`decided_by: policy`).
 
   Pravidlo 30. února vrátí `[DTSTART]` nebo `[]`, hlavně ale musí skončit.
 - **Politika** (nevalidní vstupy): UNTIL bez Z u TZID, UNTIL typu DATE u DATE-TIME, EXDATE typu DATE na časované sérii, EXRULE a neznámé TZID. Přijímáme hlasitou chybu nebo rozumné čtení, **nikdy tiché ignorování**.
@@ -270,12 +271,12 @@ Původní VTIMEZONE se vždy uchová beze změny pro zpětný zápis.
    4. `dtstart-not-in-rule`: obal přidá DTSTART jen tehdy, když ho jádro samo nevygenerovalo, a pak množinu ořízne na COUNT výskytů celkem (politika podle RFC 3.3.10). Volat jádro s COUNT−1 nestačí: u synchronizovaného DTSTART by se ztratil poslední výskyt.
    5. `exdate-date-on-timed`: zvolit politiku (vyloučit celý den, nebo chyba). Dnes se EXDATE tiše ignoruje.
    6. EXRULE: jádro ji umí, ale je v RFC 5545 zastaralá. Rozhodnout, zda ji přijímat, nebo odmítat.
-   7. Převod UNTIL: hrana převádí UNTIL v UTC na civilní čas jen přibližně a výsledky filtruje podle okamžiku. Ponechat filtr podle okamžiku a doplnit případ UNTIL v hodině foldu, který korpus zatím nemá **(neověřeno)**.
+   7. Převod UNTIL: hrana převádí UNTIL v UTC na civilní čas jen přibližně a výsledky filtruje podle okamžiku. Ponechat filtr podle okamžiku a doplnit případ UNTIL v hodině foldu, který korpus zatím nemá. *Doplněno v K2:* hrana převádí UNTIL přesně (UTC, místní čas i DATE) a hodinu foldu hlídá test `until_in_fold_hour` v `musubi-recurrence`.
    8. Řešení TZID a vlastní VTIMEZONE v hraně podle strategie výše (`vtimezone-windows-name`, `vtimezone-custom-rules`).
    9. Přepisy RECURRENCE-ID a THISANDFUTURE přesunout z harnessu do modulu.
    10. Licence: do vendored adresáře zkopírovat `LICENSE-MIT`, `LICENSE-APACHE` a copyright z repa `fmeringdal/rust-rrule` (v tarballu chybí) a zachovat hlavičky souborů.
-   11. Převzít `rrule-afl-fuzz` a pouštět ho v CI. Zda dnes funguje, jsme neověřili **(neověřeno)**.
-   12. Volitelně: přeskok na začátek okna pro dlouhé série (viz Výkon).
+   11. Převzít `rrule-afl-fuzz` a pouštět ho v CI. *Ověřeno v K2 (11. 11. 2026):* upstream harness (commit `1c3420e`) s `cargo-afl` 0.18.2 funguje, 90 s, 1,2 mil. spuštění, 0 pádů. Lokálně s LLVM 23 bylo nutné `cargo afl config --update`, protože přibalené AFL++ tak nové LLVM nezná. Převzatý harness (`crates/musubi-recurrence/fuzz`) volá veřejné `expand` a běží v nočním CI.
+   12. Volitelně: přeskok na začátek okna pro dlouhé série (viz Výkon). **Odloženo v K2:** `TooExpensive` znamená „v tomto okně nerozbalitelné" a K5 ho musí zviditelnit (plán fáze 1, K5 a kapitola 9).
 5. **Politika v našem obalu**, která platí pro jakékoli jádro:
    - plovoucí čas se nikdy nepočítá v zóně hostitele;
    - gap a fold podle RFC 3.3.5: fold → první výskyt, gap → offset před gapem; tak to dnes dělá hrana;

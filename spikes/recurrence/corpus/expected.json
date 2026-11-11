@@ -607,13 +607,12 @@
     "1998-02-13T14:00:00Z",
     "1998-03-13T14:00:00Z",
     "1998-11-13T14:00:00Z",
-    "1999-08-13T13:00:00Z",
-    "2000-10-13T13:00:00Z"
+    "1999-08-13T13:00:00Z"
    ]
   ],
-  "decided_by": "oracles",
+  "decided_by": "policy",
   "error_ok": false,
-  "why": "dateutil and ical.js agree"
+  "why": "Musubi policy, same as dtstart-not-in-rule: RFC 5545 3.3.10 'The DTSTART property value always counts as the first occurrence', so DTSTART (not a Friday 13th) takes one of the five, and EXDATE then removes it from the set without giving the slot back. dateutil and ical.js agree on five rule instances only because both drop an unsynchronised DTSTART."
  },
  "google-exdate-tzid": {
   "accept": [

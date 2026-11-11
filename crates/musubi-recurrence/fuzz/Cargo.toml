@@ -1,0 +1,17 @@
+# AFL harness for `musubi_recurrence::expand`, adapted from rust-rrule's `rrule-afl-fuzz`
+# (copyright 2021 Fredrik Meringdal, Ralph Bisschops; MIT or Apache-2.0).
+# Its own workspace so `afl` stays out of the main lockfile and `cargo deny`; run by the
+# nightly CI job `fuzz-recurrence` through `run.sh`.
+[package]
+name = "musubi-recurrence-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+afl = "0.18.2"
+jiff = { version = "0.2.43", default-features = false, features = ["std", "tzdb-bundle-always"] }
+musubi-recurrence = { path = ".." }
