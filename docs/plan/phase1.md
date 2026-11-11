@@ -418,12 +418,21 @@ Viz K3. Je to jediný „poskytovatel" v CI. Scénáře jsou jazykově neutráln
   - klient, který četl `/changes` před pádem, po pádu nepřeskočí žádnou změnu;
   - žádná úloha ve frontě nezůstala pronajatá navždy.
 - PR: 20 vražd. Noc: 1 000 vražd a nahlášený seed každé chyby.
+- **Provedení (K7):** test `musubi-syncd/tests/crash.rs`, harness (podproces, náhodný generátor, klient API) v `musubi_testkit::harness`. Sudá kola vraždí v náhodném okamžiku 0–1,5 s zátěže, lichá kola střídají body `apply-page`, `truncate`, `commit-sse` a `backup`, každé dvacáté kolo vraždí hned po požadavku na nový watch kanál (obnova kanálu se pozná u falešného serveru, bod v procesu nepotřebuje). Po každé vraždě uzel nic nebudí kromě vlastního doběhnutí při startu; pak se ověří všech pět invariantů a sledující klient `/changes` a SSE.
+- **Body vraždy jen v testu:** body jsou za cargo feature `crash-points` (`musubi-syncd` → `musubi-store-sqlite`), která je ve výchozím stavu vypnutá. Vyžaduje ji jen testovací cíl `crash` (`required-features`), takže `cargo build --release` ani běžné `cargo test` kód bodů vůbec nepřeloží. Proměnné `MUSUBI_CRASH_AT=<bod>[:<n>]` a `MUSUBI_WAL_HARD` (nižší limit WAL, aby malá data došla k `TRUNCATE`) čte jen kód za touto feature.
+- **Noc:** `MUSUBI_SYNCD_CRASH_RUNS=50` běhů po 20 vraždách; každý neúspěšný běh vypíše seed a kolo, `MUSUBI_CRASH_SEED=<seed> MUSUBI_SYNCD_CRASH_RUNS=1` přehraje jeho plán (načasování vraždy samo reprodukovatelné není).
+- **Co crash testy našly v enginu (opraveno v K7):**
+  - změna u Googlu po snímku úplného čtení nebo před otevřením kanálu čekala na hodinové dotazování: po úplném čtení a po novém kanálu teď do 150 ms (`COALESCE`) následuje inkrement;
+  - oznámení během výpadku uzlu se ztratila: `Engine::catch_up` při startu zařadí push úlohu pro každý kanál;
+  - pronajaté úlohy po pádu čekaly na vypršení pronájmu a mohly zůstat dvakrát: `release_leases` při otevření uzlu uvolní pronájmy a sloučí duplicitní úlohy podle `dedup`;
+  - úloha úplného čtení zabitá mezi commitem `finish` a naplánováním dalšího syncu nechala kolekci bez kanálu i bez úlohy navždy: taková úloha teď pokračuje inkrementem, který naplánování dodělá.
 
 ### 6.4 Záloha a obnova v CI
 
 - Během běžícího syncu se udělá `musubi-syncd backup`, uzel se zastaví, adresář dat se smaže a `musubi-syncd restore` ho obnoví.
 - Po startu se odpovědi `range` a `changes` rovnají stavu k okamžiku zálohy a engine potom dožene změny falešného serveru bez duplicit.
 - Test počítá s pořadím `main.db` → `outbox.db`, i když `outbox.db` ve fázi 1 neexistuje.
+- **Provedení (K7):** test `musubi-syncd/tests/backup.rs` v běžném `cargo test`. Záloha běží, zatímco inkrement visí na odezvě falešného serveru 5 s, a test ověří, že během zálohy žádný commit nedopadl. Obnovený uzel odpovídá jako v okamžiku zálohy, pak dožene novou změnu; prefix žurnálu zůstane a sedí počty položek proti falešnému serveru. Záloha tenanta obsahuje jen `main.db`.
 
 ### 6.5 Benchmarky
 
@@ -440,6 +449,12 @@ Měří je `musubi-testkit` (binárka `bench`) proti `musubi-syncd` a falešném
 | B7 | paměť aktora | 10 000 spících účtů, RSS na účet | nahlásit; rozpočet se stanoví po prvním měření |
 | B8 | cena kodeku | `decode` na událost, mikrobenchmark | nahlásit a hlídat regresi |
 | B9 | rekurence | 10 000 sérií v okně 2026–2031 (fáze 0: 2,2–3,1 s) | hlídat regresi |
+
+Provedení (K7):
+
+- `bench` spouští sestavenou binárku `musubi-syncd` (vedle sebe, nebo `--syncd`) jako podproces a falešný server v sobě; `--only B1,B3` vybere část. `--smoke` běží v malém měřítku a hlídá řádově: selže až nad desetinásobkem rozpočtu. Plné rozpočty hlídá noc.
+- B3 nepoužívá seed falešného serveru (ten soustředí události do ±30 dní), ale vlastního tenanta: 4 950 jednotlivých událostí rozložených do ±2,5 roku a 50 otevřených týdenních sérií.
+- B8 a B9 jsou benchmarky crates (`cargo bench -p musubi-google -p musubi-recurrence --benches`, `MUSUBI_BENCH_SMOKE=1` pro malé měřítko), protože `musubi-testkit` nesmí záviset na `musubi-google` ani `musubi-recurrence`. B9 používá syntetickou sadu (denní, týdenní, měsíční a roční pravidla ve třech zónách a plovoucí čas), ne korpus fáze 0, a hlídá horní mez fáze 0.
 
 Přijetí zápisu (p99 pod 10 ms, během importu téhož tenanta pod 20 ms) se měří až ve fázi 3, se souborem outboxu. Odezvu Googlu změří K8.
 
@@ -473,10 +488,10 @@ GitHub Actions, workflow `.github/workflows/ci.yml`, akce připnuté na SHA, cac
 | clippy | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PR, `main` |
 | test | `cargo test --workspace --locked` (včetně kontraktních testů, zálohy a obnovy, krátkých crash testů) | PR, `main` |
 | deny | `cargo deny check` (licence, advisories, bans, sources) přes `EmbarkStudios/cargo-deny-action` | PR, `main`, denně |
-| bench-smoke | `cargo run -p musubi-testkit --bin bench --release --locked -- --smoke` | PR |
+| bench-smoke | `cargo build --release --locked -p musubi-syncd -p musubi-testkit --bins`, `target/release/bench --smoke` a benchmarky crates B8, B9 v malém měřítku | PR |
 | nightly | dlouhé crash testy, plné benchmarky, fuzz rekurence | v noci |
 
-Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1 a K7. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Fuzz rekurence (K2) běží v nočním jobu `fuzz-recurrence`. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
+Od K0 byly bench-smoke a nightly zástupné joby; K7 je nahradil. Job test navíc pouští 20 vražd celé binárky (`cargo test -p musubi-syncd --features crash-points --release --locked --test crash`), nightly 1 000 a plné benchmarky. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Fuzz rekurence (K2) běží v nočním jobu `fuzz-recurrence`. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
 
 `deny.toml`:
 
