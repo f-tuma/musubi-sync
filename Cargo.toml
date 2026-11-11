@@ -22,10 +22,13 @@ musubi-engine = { path = "crates/musubi-engine", version = "0.0.0" }
 musubi-testkit = { path = "crates/musubi-testkit", version = "0.0.0" }
 
 async-trait = "0.1.92"
+axum = { version = "0.8.9", default-features = false }
 futures-core = { version = "0.3.34", default-features = false, features = ["alloc"] }
 http = { version = "1.5.0", default-features = false, features = ["std"] }
 # Bundled tzdb only (jiff-tzdb), never the host's /usr/share/zoneinfo or local
 # zone: recurrence expansion must give the same result on every machine.
+hyper = { version = "1.12.0", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
 jiff = { version = "0.2.43", default-features = false, features = [
     "std",
     "tz-fat",
@@ -38,6 +41,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["raw_value"] }
 sha2 = "0.10.9"
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
