@@ -86,12 +86,16 @@ fn import_keeps_wal_bounded() {
     // Release (CI runs this test so too) outpaces the background PASSIVE and
     // resets the WAL; a debug build is too slow to get there.
     if cfg!(not(debug_assertions)) {
-        assert!(st.truncates > 0, "{st:?}");
+        // Most resets succeed, also on a slow CI disk.
+        assert!(
+            st.truncates > 0 && st.reset_failures <= st.truncates,
+            "{st:?}"
+        );
     }
-    // A read waits for at most one reset: the 10 ms drain plus the TRUNCATE,
-    // both inside `truncate_max` (~10 ms locally, ~0.5 s on a CI disk).
+    // A reset holds reads only for its 10 ms drain, not for the TRUNCATE's
+    // fsyncs (~0.5 s on a CI disk).
     assert!(
-        waited <= st.truncate_max + Duration::from_millis(100) && waited < Duration::from_secs(5),
+        waited <= Duration::from_millis(50),
         "reads waited {waited:?}; {st:?}"
     );
 

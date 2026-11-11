@@ -337,27 +337,34 @@ pub(crate) struct Shared {
 /// Lets the WAL reset drain this process's readers of a tenant.
 #[derive(Default)]
 struct Gate {
-    /// Running reads, and whether a reset is draining them.
-    state: Mutex<(usize, bool)>,
+    /// Running reads, whether a reset is draining them, and whether a reset
+    /// is running at all (which keeps out only the background PASSIVE).
+    state: Mutex<(usize, bool, bool)>,
     changed: Condvar,
     /// Longest time a read waited for a reset, in microseconds.
     wait_max_us: AtomicU64,
 }
 
 impl Gate {
-    fn lock(&self) -> MutexGuard<'_, (usize, bool)> {
+    fn lock(&self) -> MutexGuard<'_, (usize, bool, bool)> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn enter(&self) -> GateRead<'_> {
+    /// `passive`: a PASSIVE holds the checkpoint lock, which would fail a
+    /// running reset at once, so it also waits for the reset to end.
+    fn enter(&self, passive: bool) -> GateRead<'_> {
         let mut s = self.lock();
-        if s.1 {
+        let blocked = |s: &mut (usize, bool, bool)| s.1 || (passive && s.2);
+        if blocked(&mut s) {
             let start = Instant::now();
-            while s.1 {
-                s = self.changed.wait(s).unwrap_or_else(|p| p.into_inner());
+            s = self
+                .changed
+                .wait_while(s, blocked)
+                .unwrap_or_else(|p| p.into_inner());
+            if !passive {
+                let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+                self.wait_max_us.fetch_max(us, Ordering::Relaxed);
             }
-            let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
-            self.wait_max_us.fetch_max(us, Ordering::Relaxed);
         }
         s.0 += 1;
         GateRead(self)
@@ -367,10 +374,10 @@ impl Gate {
     /// they did not finish (reads are let go again).
     fn drain(&self, wait: Duration) -> Option<GateDrain<'_>> {
         let mut s = self.lock();
-        if s.1 {
+        if s.2 {
             return None;
         }
-        s.1 = true;
+        (s.1, s.2) = (true, true);
         let (mut s, _) = self
             .changed
             .wait_timeout_while(s, wait, |s| s.0 > 0)
@@ -378,7 +385,7 @@ impl Gate {
         if s.0 == 0 {
             return Some(GateDrain(self));
         }
-        s.1 = false;
+        (s.1, s.2) = (false, false);
         self.changed.notify_all();
         None
     }
@@ -398,9 +405,18 @@ impl Drop for GateRead<'_> {
 
 struct GateDrain<'a>(&'a Gate);
 
+impl GateDrain<'_> {
+    /// Lets reads in again; the background PASSIVE stays out until drop.
+    fn let_reads_in(&self) {
+        self.0.lock().1 = false;
+        self.0.changed.notify_all();
+    }
+}
+
 impl Drop for GateDrain<'_> {
     fn drop(&mut self) {
-        self.0.lock().1 = false;
+        let mut s = self.0.lock();
+        (s.1, s.2) = (false, false);
         self.0.changed.notify_all();
     }
 }
@@ -482,7 +498,7 @@ impl Shared {
 
     /// Runs `f` in one short read transaction (a consistent snapshot).
     pub(crate) fn read<T>(&self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
-        let _read = self.gate.enter();
+        let _read = self.gate.enter(false);
         let mut c = self.reader()?;
         let r = {
             let tx = c.transaction()?;
@@ -519,7 +535,10 @@ impl Shared {
             .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
         let start = Instant::now();
         let r: rusqlite::Result<i64> = match self.gate.drain(CKPT_WAIT) {
-            Some(_drain) => {
+            Some(drain) => {
+                // The old snapshots are gone and the writer adds no frames
+                // meanwhile, so new reads need not wait for the fsyncs.
+                drain.let_reads_in();
                 // Readers outside the gate (a backup) get the same bounded wait.
                 w.conn.busy_timeout(CKPT_WAIT)?;
                 let r = w
@@ -559,9 +578,7 @@ impl Shared {
     }
 
     fn passive(&self) -> Result<()> {
-        // Through the gate: a running PASSIVE holds the checkpoint lock, which
-        // would fail the writer's reset at once.
-        let _read = self.gate.enter();
+        let _read = self.gate.enter(true);
         let c = self.reader()?;
         let r = c.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
         self.put_reader(c);
