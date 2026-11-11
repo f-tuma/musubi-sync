@@ -23,6 +23,9 @@ musubi-testkit = { path = "crates/musubi-testkit", version = "0.0.0" }
 
 async-trait = "0.1.92"
 axum = { version = "0.8.9", default-features = false }
+# Only for the vendored rrule core in musubi-recurrence (civil time marked UTC);
+# no "clock", so no host time zone is ever consulted.
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 futures-core = { version = "0.3.34", default-features = false, features = ["alloc"] }
 futures-util = { version = "0.3.34", default-features = false }
 http = { version = "1.5.0", default-features = false, features = ["std"] }

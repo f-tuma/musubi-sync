@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ecc5773712c831dba9cfa644d80e4e62b0a008a91ae35f2750bcb086f187fb3e # shrinks to s = Series { start: 2029-12-03T00:00:00, zone: None, duration: 0s, rules: ["FREQ=DAILY;INTERVAL=3;COUNT=9;BYMONTHDAY=13"], exrules: [], rdates: [], exdates: [], overrides: [] }, offset = 14343, len = 4162

@@ -306,7 +306,7 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
   - regresní případy: `dst-prague-explicit-gap-dtstart`, `until-before-dtstart`, `rdate-only`, `dtstart-not-in-rule`, `floating-daily-host-gap` (plovoucí čas nikdy v zóně hostitele);
   - bez okna to nejde zavolat (typově), strop výskytů vrací chybu, ne useknutý výsledek;
   - `proptest`: výskyty jsou seřazené, v okně, bez duplicit, nejvýš strop;
-  - fuzz harness převzatý z `rrule-afl-fuzz` běží v nočním CI **(neověřeno, zda dnes funguje)**;
+  - fuzz harness převzatý z `rrule-afl-fuzz` běží v nočním CI (upstream harness ověřen 11. 11. 2026: s `cargo-afl` 0.18.2 funguje);
   - licence převzatého kódu (`LICENSE-MIT`, `LICENSE-APACHE`, copyright) jsou v adresáři vendored kódu.
 - **Závisí na:** K0.
 - **Souběžně:** K1, K3, K4.
@@ -349,7 +349,8 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
   - pronajatá úloha po restartu procesu znovu doběhne, žádná se neztratí ani nespustí dvakrát souběžně;
   - `ReauthRequired` přepne účet do stavu „vyžaduje přihlášení" a dotazování se zastaví;
   - chybějící kalendář v discovery není smazání, pokud discovery není úplné;
-  - zrušený výskyt importované série (cizí iCalUID) se k předloze připojí podle `recurringEventId` a nezobrazí se jako živý (otevřená otázka 3).
+  - zrušený výskyt importované série (cizí iCalUID) se k předloze připojí podle `recurringEventId` a nezobrazí se jako živý (otevřená otázka 3);
+  - `RecurrenceError::TooExpensive` z rozbalení výskytů (série se v tomto okně nedá rozbalit) engine zviditelní u položky a nikdy ji nebere jako prázdnou sérii: nesmaže kvůli ní výskyty z indexu (test se sérií `FREQ=MINUTELY` se starým DTSTART).
 - **Závisí na:** K1, K2. Na K4 ne: engine i jeho testy pracují jen s traity.
 - **Souběžně:** K6 a dobíhající K3, K4.
 
@@ -472,7 +473,7 @@ GitHub Actions, workflow `.github/workflows/ci.yml`, akce připnuté na SHA, cac
 | bench-smoke | `cargo run -p musubi-testkit --bin bench --release --locked -- --smoke` | PR |
 | nightly | dlouhé crash testy, plné benchmarky, fuzz rekurence | v noci |
 
-Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1, K2 a K7. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
+Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1 a K7. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Fuzz rekurence (K2) běží v nočním jobu `fuzz-recurrence`. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
 
 `deny.toml`:
 
@@ -509,3 +510,4 @@ Rozhodnuto (koordinátor, 11. 11. 2026): soubor outboxu se implementuje ve fázi
 1. **Stroj pro měření ext4/XFS a disku s PLP.** Bez něj zůstane toto měření otevřené i po fázi 1.
 2. **Testovací účet Google, projekt GCP a veřejná adresa pro webhook** pro K8.
 3. **Uid zrušeného výskytu importované série.** Google vrací zrušený výskyt jen jako skořápku s `recurringEventId` bez `iCalUID`. Adaptér K4 odvodí uid z id předlohy, což u série s cizím iCalUID (import) nesedí s uid předlohy. `musubi-model` se v K4 nemění; K5 rozhodne, zda vazbu na sérii ponese `Correlation`, nebo `RemoteObject`.
+4. **Přeskok vpřed u drahých sérií (oprava 12 z `recurrence.md`, odložena).** `TooExpensive` dnes znamená „v tomto okně nerozbalitelné". Známé případy: `FREQ=MINUTELY` (nebo `SECONDLY`) se starým DTSTART, kde okno leží za rozpočtem 1 000 000 vygenerovaných okamžiků, a nemožné pravidlo jako `BYMONTH=2;BYMONTHDAY=30` daleko od DTSTART (jádro skončí po `MAX_ITER_LOOP` = 100 000 prázdných period, `was_limited`). Otázka: zda a kdy doplnit přeskok na začátek okna; do té doby to K5 hlásí, nemlčí.

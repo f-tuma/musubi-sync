@@ -82,5 +82,26 @@ jobs:
       - run: cargo test -p musubi-store-sqlite --release --locked --test crash
         env:
           MUSUBI_CRASH_ROUNDS: "1000"
-      # STUB: the whole-binary crash tests and full benchmarks (K7) and the
-      # recurrence fuzz harness (K2) are added by those checkpoints.
+      # STUB: the whole-binary crash tests and full benchmarks are added by K7.
+      # The recurrence fuzz harness (K2) is the `fuzz-recurrence` job.
+
+  fuzz-recurrence:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: crates/musubi-recurrence/fuzz
+          # Not true (the default): a cached cargo-afl skips `cargo install`, but rust-cache
+          # prunes registry/src, where `cargo afl config --build` finds the AFL++ sources.
+          cache-bin: false
+      - run: cargo install cargo-afl --locked --version 0.18.2
+      - run: cargo afl config --build --force
+      - run: crates/musubi-recurrence/fuzz/run.sh 600
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: recurrence-fuzz-out
+          path: crates/musubi-recurrence/fuzz/crashes
