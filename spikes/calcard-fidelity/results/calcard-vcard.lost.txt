@@ -27,7 +27,7 @@ patch Tel      n=144: AST route: rest byte-equal to input 13/144 (9.0 %), rest e
   raw-splice not ok x1: refused: entry count mismatch raw=427 ast=15
   raw-splice not ok x1: refused: entry count mismatch raw=51 ast=29
   raw-splice not ok x1: refused: name mismatch raw=VALUE ast=other.value
-JSContact+raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 2935/8927 (32.9 %), properties gone 18/8927 (0.2 %)
+JSContact+raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 2933/8927 (32.9 %), properties gone 18/8927 (0.2 %)
                      properties gone: Nx8 CATEGORIESx3 ORGx3 X-ABLABELx3 TELx1
 JSContact-raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 4703/8927 (52.7 %), properties gone 713/8927 (8.0 %)
                      properties gone: X-ABLABELx116 X-ADDRESSBOOKSERVER-MEMBERx64 LABELx53 X-ABADRx50 X-ABRELATEDNAMESx47 TZx17 Nx15 GENDERx13 IMPPx13 REVx13 X-ADDRESSBOOKSERVER-KINDx13 X-ABDATEx12
@@ -131,10 +131,10 @@ JSContact-raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs c
      1  CALURI                       CALURI;MEDIATYPE=text/calendar:ftp://ftp.example.com/calA.ics
      1  FAX                          fax;TYPE=foo,pref;bar:fax
      1  FN                           FN;QUOTED-PRINTABLE:=E5=8D=81=E5=9F=8E=E7=9B=AE=E7=AE=A1=E7=90=86=E5=A4=A7=E5=9E=8B=E7=9F=A5=E5=
-     1  MIDDLE                       MIDDLE;PARAM=value;PARAM2=value2:pas-id-4094434A00000001
      1  O                            o:Universit=E6t G=F6rlitz
      1  PHONE                        phone:+1 313 747-4454
      1  SESAME STREET                Sesame Street;California;11111;USA:
+     1  SN                           sn:Jensen
 
 -- JSContact-raw-props: calcard-rt lines lost after conversion and back (count, first example)
   1230  N                            N:Gump;Forrest;;Mr.

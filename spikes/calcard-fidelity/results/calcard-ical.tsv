@@ -13,7 +13,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 011.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 012.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 013.ics	true	1	0	0	L3	9	9	true	true	ast_coll_in=9 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	-	1
-014.ics	true	1	0	0	L3	18	18	true	true	ast_coll_in=17 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=18 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+014.ics	true	1	0	0	L3	18	18	true	true	ast_coll_in=17 ast_coll_rt=0 raw=ok raw_value=refused: encoded value (ENCODING/CHARSET param)	ast_coll_in=18 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 015.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	-	3
 016.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
 017.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	2
@@ -45,7 +45,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 043.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 044.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 045.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-046.ics	true	3	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	4
+046.ics	true	3	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 047.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 048.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 049.ics	false	0	3	0	-	-	-	-	-	-	-	-	-
@@ -98,7 +98,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 096.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
 097.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
 098.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
-099.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+099.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 100.ics	true	1	1	0	L3	2	1	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 101.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 102.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -210,7 +210,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 208.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 209.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 210.ics	true	1	0	0	L0	0	0	true	true	-	-	-	0
-211.ics	true	2	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	5
+211.ics	true	2	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	6
 212.ics	true	1	0	0	L3	1	1	true	true	-	-	-	0
 213.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 214.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -227,10 +227,10 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 225.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
 226.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	1316
 227.ics	true	1	0	0	L2	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-228.ics	true	2	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	5
+228.ics	true	2	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	4
 229.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 230.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	2
-231.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+231.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=refused: encoded value (ENCODING/CHARSET param)	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 232.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 233.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 234.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -252,14 +252,14 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 250.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 251.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 252.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-253.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+253.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 254.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 255.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 256.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 257.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 258.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	2
-259.ics	true	1	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	6
-260.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	5
+259.ics	true	1	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	8
+260.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	4
 261.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 262.ics	true	1	0	0	L0	0	0	true	true	-	-	-	0
 263.ics	true	1	0	0	L3	2	2	true	true	-	-	-	0
@@ -269,7 +269,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 267.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
 268.ics	true	1	0	0	L3	2	2	true	true	-	-	-	0
 269.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	2
-270.ics	true	1	0	0	L3	1	1	true	true	-	-	-	1
+270.ics	true	1	0	0	L3	1	1	true	true	-	-	-	0
 271.ics	true	1	0	0	L3	1	1	true	true	-	-	-	0
 272.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
 273.ics	true	1	0	0	L3	1	1	true	true	-	-	-	0
@@ -279,7 +279,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 277.ics	true	2	0	0	L1	0	0	true	true	-	-	-	0
 278.ics	true	1	0	0	L3	1	1	true	true	-	-	-	0
 279.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
-280.ics	true	1	0	0	L3	3	3	true	true	-	-	-	2
+280.ics	true	1	0	0	L3	3	3	true	true	-	-	-	4
 281.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
 282.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
 283.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -306,7 +306,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 304.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 305.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 306.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-307.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+307.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 308.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 309.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 310.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
@@ -401,8 +401,8 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 399.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
 400.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 401.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
-402.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-403.ics	true	1	0	0	L3	1	1	true	true	-	-	-	0
+402.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
+403.ics	true	1	0	0	L3	1	1	true	true	-	-	-	1
 404.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
 405.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
 406.ics	true	1	0	0	L1	0	0	true	true	-	-	-	1
@@ -482,7 +482,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 480.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 481.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 482.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-483.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	1
+483.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 484.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	5
 485.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 486.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -493,7 +493,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 491.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 492.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	4
 493.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-494.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	1
+494.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 495.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 496.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 497.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -511,8 +511,8 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 509.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 510.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 511.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
-512.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	1
-513.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+512.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+513.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 514.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 515.ics	true	1	1	0	L3	4	3	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 516.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
@@ -536,7 +536,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 534.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 535.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 536.ics	true	1	0	0	L3	1	1	true	true	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-537.ics	true	1	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	9
+537.ics	true	1	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	8
 538.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 539.ics	true	1	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	8
 540.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	2
@@ -601,7 +601,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 599.ics	true	1	0	0	L3	6	6	true	true	-	-	-	4
 600.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
 601.ics	true	1	0	0	L1	0	0	true	true	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	4
-602.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	-	1
+602.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
 603.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	-	1
 604.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 605.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -697,7 +697,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 695.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	3
 696.ics	true	53	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	36
 697.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	1
-698.ics	true	3	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	10
+698.ics	true	3	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 699.ics	true	15	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	16
 700.ics	true	1	0	0	L3	5	6	true	true	-	-	-	4
 701.ics	true	1	0	0	L3	3	2	true	true	-	-	-	4
@@ -810,7 +810,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 808.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 809.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 810.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-811.ics	true	1	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	3
+811.ics	true	1	0	0	L3	6	6	true	true	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=6 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 812.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 813.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 814.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -836,7 +836,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 834.ics	true	1	0	0	L0	0	0	true	true	-	-	-	1
 835.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 836.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	3
-837.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+837.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 838.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 839.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 840.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	4
@@ -872,16 +872,16 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 870.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	-	4
 871.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	2
 872.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	5
-873.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+873.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 874.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	3
 875.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 876.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 877.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	1
-878.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	4
-879.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+878.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	5
+879.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 880.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 881.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	2
-882.ics	true	1	0	0	L3	17	17	true	true	ast_coll_in=16 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=16 ast_coll_rt=0 raw=ok raw_value=ok	-	1
+882.ics	true	1	0	0	L3	17	17	true	true	ast_coll_in=16 ast_coll_rt=0 raw=ok raw_value=refused: encoded value (ENCODING/CHARSET param)	ast_coll_in=16 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 883.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 884.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	222
 885.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
@@ -912,10 +912,10 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 910.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	4
 911.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 912.ics	true	1	0	0	L3	4	4	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	-	5
-913.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	-	1
+913.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
 914.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
 915.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-916.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	1
+916.ics	true	1	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 917.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	1
 918.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 919.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
@@ -984,16 +984,16 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 982.ics	true	1	0	0	L3	1	1	true	true	-	-	-	0
 983.ics	true	1	0	0	L0	0	0	true	true	-	-	-	0
 984.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
-985.ics	true	1	0	0	L3	14	14	true	true	ast_coll_in=14 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=14 ast_coll_rt=0 raw=ok raw_value=ok	-	8
+985.ics	true	1	0	0	L3	14	14	true	true	ast_coll_in=14 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=14 ast_coll_rt=0 raw=ok raw_value=ok	-	7
 986.ics	true	1	0	0	L3	381	381	true	true	ast_coll_in=381 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=380 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 987.ics	true	1	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	1
-988.ics	true	22	0	0	L3	10	10	true	true	ast_coll_in=10 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=10 ast_coll_rt=0 raw=ok raw_value=ok	-	34
+988.ics	true	22	0	0	L3	10	10	true	true	ast_coll_in=10 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=10 ast_coll_rt=0 raw=ok raw_value=ok	-	35
 989.ics	true	22	0	0	L3	11	11	true	true	ast_coll_in=11 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=11 ast_coll_rt=0 raw=ok raw_value=ok	-	36
 990.ics	true	22	0	0	L3	4	4	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	30
 991.ics	true	22	1	0	L3	6	5	true	true	ast_coll_in=6 ast_coll_rt=0 raw=refused: 24 raw objects vs 22 parsed raw_value=	ast_coll_in=6 ast_coll_rt=0 raw=refused: 24 raw objects vs 22 parsed raw_value=	-	30
 992.ics	true	3	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	6
-993.ics	true	3	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	6
+993.ics	true	3	0	0	L3	2	2	true	true	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	-	5
 994.ics	true	3	0	0	L3	3	3	true	true	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	-	9
-995.ics	true	1	0	0	L3	29	28	true	true	-	-	-	19
+995.ics	true	1	0	0	L3	29	28	true	true	-	-	-	20
 996.ics	true	5	1	0	L3	55	53	true	true	ast_coll_in=54 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=55 ast_coll_rt=0 raw=refused: name mismatch raw=>","Æ?" ast=ATTENDEE raw_value=	-	68
 997.ics	true	1	0	0	L3	68	68	true	true	ast_coll_in=68 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=67 ast_coll_rt=0 raw=ok raw_value=ok	-	0

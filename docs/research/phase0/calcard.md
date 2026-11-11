@@ -51,16 +51,18 @@ Kontroluje se také pořadí vlastností, idempotence (`rt(rt(x)) == rt(x)`) a r
 Mění se SUMMARY a DTSTART (iCal) a TEL (vCard). Srovnáváme tři cesty:
 
 1. **AST cesta**: upravit entry v AST a serializovat celý objekt. Měří se, jestli zbytek souboru zůstal verbatim.
-2. **raw splice**: prototyp `src/rawpatch.rs`, 161 řádků kódu bez testů a komentářů. Funguje takto:
+2. **raw splice**: prototyp `src/rawpatch.rs`, 202 řádků kódu bez testů a komentářů (v první verzi PR 160; přibyla vestavěná kontrola a odmítání kódovaných hodnot). Funguje takto:
    - zarovná logické řádky raw textu s entries calcardu;
    - nahradí bajty jediného řádku výstupem `entry.write_to()`;
    - když zarovnání nesedí, patch odmítne.
-3. **value-only splice**: jako raw splice, ale ze serializace calcardu vezme jen hodnotu za `:`. Jméno a parametry zůstanou v původním zápisu.
+3. **value-only splice**: jako raw splice, ale ze serializace calcardu vezme jen hodnotu za `:`. Jméno a parametry zůstanou v původním zápisu. Řádky s parametrem `ENCODING`/`CHARSET` (nebo holým `QUOTED-PRINTABLE`/`BASE64` z vCard 2.1) odmítne, protože calcard serializuje dekódovanou hodnotu.
 
-U každé cesty kontrolujeme, že:
+Obě splice cesty po každém zápisu samy ověří (`rawpatch::checked_splice`), že:
 
-- AST výsledku se od očekávaného liší **jen** v cílové vlastnosti;
-- ostatní řádky zůstaly bajtově stejné.
+- bajty mimo nahrazený řádek se nezměnily;
+- calcard výsledek znovu načte přesně na očekávaný AST, který se od původního liší **jen** v cílové vlastnosti.
+
+Při nesouladu patch odmítnou. U AST cesty harness kontroluje totéž zvenku.
 
 ### Konverze
 
@@ -95,7 +97,7 @@ Podrobný původ je v `spikes/calcard-fidelity/corpus/SOURCES.md`.
 ```sh
 cd spikes/calcard-fidelity
 cargo build --release
-cargo test --release                     # 2 testy raw-patch prototypu
+cargo test --release                     # 3 testy raw-patch prototypu (vč. regrese single-line QP)
 cargo fetch
 R=$(ls -d ~/.cargo/registry/src/*/calcard-0.3.14/resources)
 ./target/release/calcard-fidelity corpus corpus/musubi corpus/synth $R/ical $R/vcard > results/summary.txt
@@ -106,6 +108,8 @@ R=$(ls -d ~/.cargo/registry/src/*/calcard-0.3.14/resources)
 ```
 
 Výstupy jsou commitnuté v `results/`. Per-file data jsou v `results/<korpus>.tsv` a ztracené řádky v `results/<korpus>.lost.txt`.
+
+**Determinismus:** parse, round-trip, patch a „vlastnosti pryč“ vycházejí při opakovaném běhu stejně. Metrika „řádky ne-verbatim“ u JS* konverzí kolísá mezi běhy o jednotky řádků (např. synth JSCalendar+raw 12 nebo 13/511, calcard-ical 4 891–4 900/138 348). Příčinou je calcard sám: při cestě JS → X zapisuje parametry X-vlastností z hash mapy v náhodném pořadí, např. `X-CUSTOM-CAL-PROP;X-FOO=bar;X-QUOTED=…`. Řazení našeho výstupu by to neodstranilo, protože jde o skutečnou nedeterministickou změnu řádku, proto to jen uvádíme. Čísla v reportu jsou z běhu commitnutého v `results/`.
 
 ## 4. Výsledky
 
@@ -180,10 +184,12 @@ Sledujeme podíl patchů, po kterých se změnila **jen cílová vlastnost** a z
 | synth SUMMARY | 7/15 | 15/15 | 15/15 |
 | synth TEL | 2/8 | 7/8 | 7/8 |
 | calcard-ical DTSTART | 350/760 (46,1 %) | 747/760 (98,3 %) | 747/760 |
-| calcard-ical SUMMARY | 365/778 (46,9 %) | 765/778 (98,3 %) | 765/778 |
+| calcard-ical SUMMARY | 365/778 (46,9 %) | 765/778 (98,3 %) | 762/778 (97,9 %) |
 | calcard-vcard TEL | 13/144 (9 %) | 126/144 (87,5 %) | 126/144 |
 
-Ve zbytku případů splice patch **odmítl**: zarovnání raw ↔ AST nesedělo. Šlo o vCard 2.1 QP s měkkými zalomeními, rozbitý folding ve fixtures a karty bez VERSION. Ani v jednom případě nevznikl tichý chybný zápis. Odmítnutí je správné chování; volající pak musí zvolit fallback.
+Ve zbytku případů splice patch **odmítl**. Většinou zarovnání raw ↔ AST nesedělo: vCard 2.1 QP s měkkými zalomeními, rozbitý folding ve fixtures, karty bez VERSION. U value-only SUMMARY přibyla 3 odmítnutí kvůli kódování (`SUMMARY;CHARSET=utf-8`, 2× `SUMMARY;ENCODING=QUOTED-PRINTABLE`). Odmítnutí je správné chování; volající pak musí zvolit fallback.
+
+**Oprava proti první verzi PR:** tvrzení „nevznikl tichý chybný zápis“ platilo jen díky kontrole re-parse v harnessu (`main.rs`), ne díky samotnému `rawpatch.rs`. Nezávislé review našlo, že value-only splice jednořádkového QP (`TEL;CELL;ENCODING=QUOTED-PRINTABLE:+420=20123`, nová hodnota `ext=12 café`) ponechal `ENCODING=QUOTED-PRINTABLE` nad dekódovanou hodnotou. Klient by pak četl `ext\x12 cafÃ©`. V korpusu se to neprojevilo, protože tam takový TEL nebyl. Teď `rawpatch.rs` takové řádky odmítá a po každém splice sám ověřuje re-parse proti očekávanému AST. Případ pokrývá regresní test `single_line_qp_is_refused_not_corrupted`.
 
 **Raw splice** zapisuje celý řádek ze serializace calcardu. Mění tedy i zápis jména a parametrů cílového řádku: TEL v 5/8 (synth) a 96/144 (calcard-vcard), například `type=cell;type=voice` → `TYPE=CELL,VOICE`. **Value-only splice** tento problém nemá, protože jméno a parametry ponechá v původním zápisu. Pro produkci je proto správná varianta value-only. Pokud se mění parametr, musí vrstva přepsat jen dotčený parametr.
 
@@ -237,7 +243,7 @@ Výkon pro sync engine bohatě stačí. Úzkým hrdlem bude síť a databáze, n
 
 ### 4.7 Zralost, licence, údržba
 
-- **Licence**: calcard je Apache-2.0 OR MIT. Strom závislostí má 43 crates, všechny permisivní (MIT/Apache, BSD-3 `sha1_smol`, Unicode-3.0 `unicode-ident`, BSD-2/Apache/MIT `zerocopy`). **Copyleft ve stromu není.** Část testovacích fixtures calcardu pochází z LGPL a GPL projektů (Evolution, Nextcloud, Roundcube, Zimbra), ale ty jen čteme z registry a nevendorujeme je.
+- **Licence**: calcard je Apache-2.0 OR MIT. Strom závislostí má 43 crates, všechny permisivní (MIT/Apache, BSD-3 `sha1_smol`, Unicode-3.0 `unicode-ident`, BSD-2/Apache/MIT `zerocopy`). **Copyleft ve stromu není.** Část testovacích fixtures calcardu pochází z LGPL a GPL projektů (Evolution, Nextcloud, Roundcube, Zimbra), celé soubory jen čteme z registry a nevendorujeme je. `results/*.lost.txt` a `*.tsv` ale obsahují krátké doslovné výňatky jednotlivých řádků z těchto fixtures (viz `corpus/SOURCES.md`).
 - **Kadence vydávání**: verze 0.3.14 vyšla 2026-09-15. Od 2025-05-10 vyšlo 20 releasů a v srpnu 2026 jich bylo 5 (0.3.9–0.3.13).
 - **Stažení**: 90 798 celkem, z toho 47 208 za poslední období. Hlavním uživatelem je Stalwart Mail Server, takže crate je odzkoušený v produkci jednoho velkého CalDAV/CardDAV serveru.
 - **API a dokumentace**:
@@ -245,7 +251,7 @@ Výkon pro sync engine bohatě stačí. Úzkým hrdlem bude síť a databáze, n
   - README slibuje dokumentaci builderů jako „coming soon“.
   - `Display` pro JSCalendar a JSContact existuje jen pod `cfg(test)`, takže musíme volat `serde_json::to_string(&js.0)`.
   - `ConversionOptions` jsou zanořené v modulech `jscalendar::import` / `jscontact::import`.
-  - `Entry::TooManyComponents` se nikde nekonstruuje.
+  - `Entry::TooManyComponents` vrací parser jen při přetečení čítače ID komponent (`src/icalendar/parser.rs:100`); v praxi nedosažitelné.
   - Na API je potřeba pinnout přesnou verzi a mít vlastní tenký adaptér.
 
 ### 4.8 Prior art v Musubi
@@ -278,9 +284,11 @@ Doporučené kroky:
    - zarovnat raw logické řádky s entries;
    - měnit jen cílový řádek;
    - u změny hodnoty dělat value-only splice (původní jméno a parametry, folding na 75 oktetů, zachovat EOL payloadu);
+   - **value-only splice odmítnout u každého řádku s `ENCODING` (QP/B/BASE64) nebo `CHARSET`**, včetně holých parametrů vCard 2.1; takový řádek přepsat celý, nebo patch odmítnout;
+   - **po každém splice payload znovu parsovat a porovnat AST s očekávaným**, a při nesouladu odmítnout. Tato kontrola musí být součástí vrstvy samotné, ne jen testů nebo volajícího;
    - když zarovnání nesedí, **odmítnout** a nahlásit chybu, nikdy nepřegenerovat celý objekt.
 
-   Prototyp má 161 řádků a pokrývá jen změnu hodnoty existující vlastnosti. Produkční odhad je **~400–800 řádků + testy (neověřeno)**. Navíc bude potřeba:
+   Prototyp má 202 řádků a pokrývá jen změnu hodnoty existující vlastnosti. Produkční odhad je **~400–800 řádků + testy (neověřeno)**. Navíc bude potřeba:
    - přidávat a odebírat vlastnosti;
    - přidávat a odebírat komponenty (override VEVENT, EXDATE);
    - měnit jednotlivé parametry;
@@ -297,8 +305,10 @@ Varianta „reject“ by znamenala napsat vlastní parser. Pro to není důvod: 
 
 ## 6. Otevřená rizika
 
+- **Parse rate 98,9 % je nejspíš optimistický.** Pochází z vlastních fixtures calcardu, na kterých autoři knihovnu ladili. Na cizích datech může být úspěšnost nižší **(neověřeno)**.
 - **Korpus „provider-style“ je syntetický.** Reálné payloady od Google, Outlook/Exchange, iCloud a Nextcloud **(neověřeno)** mohou obsahovat konstrukce, které tu chybí. Než bude rozhodnutí finální, je potřeba harness pustit nad anonymizovanými skutečnými payloady.
 - **Odhad produkční patch vrstvy** (400–800 řádků) **(neověřeno)**. Nejrizikovější části jsou přidávání a odebírání komponent u override instancí a vCard 2.1 QP.
+- **Kódované hodnoty a ověření po zápisu.** Value-only splice nad řádkem s `ENCODING`/`CHARSET` tiše poškodí data (doloženo review, viz 4.3). Produkční vrstva proto musí takové řádky odmítat a po každém splice ověřit re-parse proti očekávanému AST. Bez toho se chybné zápisy nedají spolehlivě vyloučit.
 - **Tiché selhání u vlastní VTIMEZONE**: bez kroku 2 vede ke špatným časům bez jakékoli chyby.
 - **API 0.x a `calcard-next`**: API se může rozbít a směr vývoje (chrono vs jiff) zatím není jasný. `calcard-next` jsem netestoval **(neověřeno)**.
 - **Normalizace v round-tripu u X-vlastností Apple a Android**: když se omylem použije plná serializace, hrozí sémantická změna dat. Tomu musí zabránit review a testy.

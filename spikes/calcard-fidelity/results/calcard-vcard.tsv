@@ -29,7 +29,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 028.vcf	true	1	0	0	L3	0	1	true	true	-	-	-	0
 029.vcf	true	6	0	0	L3	46	27	true	true	-	-	ast_coll_in=45 ast_coll_rt=0 raw=ok raw_value=ok	28
 030.vcf	true	1	0	0	L3	1	1	true	true	-	-	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	5
-031.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	12
+031.vcf	true	1	0	0	L3	6	6	true	true	-	-	ast_coll_in=5 ast_coll_rt=0 raw=ok raw_value=ok	11
 032.vcf	true	1	0	0	L3	4	4	true	true	-	-	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	12
 033.vcf	true	1	0	0	L3	13	13	true	true	-	-	ast_coll_in=12 ast_coll_rt=0 raw=ok raw_value=ok	19
 034.vcf	true	1	0	0	L3	9	9	true	true	-	-	ast_coll_in=8 ast_coll_rt=0 raw=ok raw_value=ok	16
@@ -185,7 +185,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 184.vcf	true	1	0	0	L3	1	2	true	false	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	2
 185.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	7
 186.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	4
-187.vcf	true	1	0	0	L3	3	3	true	true	-	-	-	2
+187.vcf	true	1	0	0	L3	3	3	true	true	-	-	-	1
 188.vcf	true	1	0	0	L3	19	9	true	true	-	-	ast_coll_in=18 ast_coll_rt=0 raw=refused: entry count mismatch raw=20 ast=10 raw_value=	7
 189.vcf	true	1	0	0	L3	9	3	true	true	-	-	ast_coll_in=9 ast_coll_rt=0 raw=refused: entry count mismatch raw=16 ast=10 raw_value=	8
 190.vcf	true	1	0	0	L3	2	2	true	true	-	-	ast_coll_in=2 ast_coll_rt=0 raw=ok raw_value=ok	5

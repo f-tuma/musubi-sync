@@ -65,7 +65,7 @@ JSContact-raw-props  objs=11 converted+back 11/11 (100.0 %)  X->JS->X vs calcard
      1  X-MULTI                      X-MULTI:a,b\,c,d
 
 -- JSCalendar+raw-props: calcard-rt lines lost after conversion and back (count, first example)
-     4  ATTENDEE                     ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE;CN="Alice Example";X-NUM-GUESTS=0:
+     5  ATTENDEE                     ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE;CN="Alice Example";X-NUM-GUESTS=0:
      1  ATTACH                       ATTACH;FILENAME=/Talk/agenda.pdf;FMTTYPE=application/pdf;X-NC-FILE-ID=4242;X-NC-HAS-PREVIEW=true:https://cloud
      1  CONFERENCE                   CONFERENCE;FEATURE=AUDIO,VIDEO;LABEL=Talk;VALUE=URI:https://cloud.example.org/call/abcd1234
      1  RDATE                        RDATE;VALUE=DATE-TIME:20271031T030000
@@ -73,7 +73,6 @@ JSContact-raw-props  objs=11 converted+back 11/11 (100.0 %)  X->JS->X vs calcard
      1  TRIGGER                      TRIGGER;VALUE=DURATION:-PT15M
      1  URL                          URL;VALUE=URI:
      1  X-APPLE-STRUCTURED-LOCATION  X-APPLE-STRUCTURED-LOCATION;X-ADDRESS="Národní 2, 110 00 Praha 1, Česko";X-APPLE-MAPKIT-HANDLE="CAESvAEaEglzSy
-     1  X-CUSTOM-CAL-PROP            X-CUSTOM-CAL-PROP;X-FOO=bar;X-QUOTED="semi;colon:comma,":value with \; esc
 
 -- JSCalendar-raw-props: calcard-rt lines lost after conversion and back (count, first example)
     27  BEGIN                        BEGIN:VTIMEZONE

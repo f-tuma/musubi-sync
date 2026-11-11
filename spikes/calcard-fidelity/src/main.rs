@@ -13,19 +13,13 @@ mod rawpatch;
 use calcard::icalendar::{ICalendar, ICalendarComponentType, ICalendarProperty, ICalendarValue};
 use calcard::jscalendar::JSCalendar;
 use calcard::jscontact::JSContact;
-use calcard::vcard::{VCard, VCardProperty, VCardValue, VCardVersion};
+use calcard::vcard::{VCardProperty, VCardValue, VCardVersion};
 use calcard::{Entry, Parser};
-use rawpatch::{logical_lines, RawLine};
+use rawpatch::{logical_lines, Obj, RawLine};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-
-#[derive(Clone, PartialEq, Debug)]
-enum Obj {
-    Ical(ICalendar),
-    Card(VCard),
-}
 
 impl Obj {
     fn write(&self) -> String {
@@ -233,24 +227,9 @@ fn patch(raw: &str, parsed: &Parsed, rt: &str, op: Op) -> Option<PatchResult> {
     };
     let mut expect = parsed.objs.clone();
     expect[oi] = mutated;
-    let verify = |new_line: &str| {
-        let out = rawpatch::splice(raw, &line, new_line);
-        let tail = raw.len() - line.end;
-        let bytes_ok = out.as_bytes()[..line.start] == raw.as_bytes()[..line.start]
-            && out.as_bytes()[out.len() - tail..] == raw.as_bytes()[line.end..];
-        if !bytes_ok {
-            "verify_fail: bytes outside span changed".to_string()
-        } else if parse_all(&out).objs != expect {
-            "verify_fail: re-parse differs from mutated AST".to_string()
-        } else {
-            "ok".to_string()
-        }
-    };
-    r.raw = verify(&new_entry);
-    r.raw_value = match rawpatch::value_only_line(&line, &new_entry) {
-        Some(l) => verify(&l),
-        None => "refused: no ':' in line".into(),
-    };
+    let status = |res: Result<String, String>| res.map_or_else(|e| e, |_| "ok".to_string());
+    r.raw = status(rawpatch::checked_splice(raw, &line, &new_entry, &expect));
+    r.raw_value = status(rawpatch::patch_value(raw, &line, &new_entry, &expect));
     // Does the rewritten line keep the original name casing / param spelling? Compare everything
     // before the first ':' (outside quotes) of the unfolded old vs new line.
     let head = |t: &str| t[..t.len() - t.split(':').next_back().unwrap_or("").len()].to_string();
@@ -456,7 +435,7 @@ fn corpus(dirs: &[String]) {
                         e.3 += (r.raw == "ok") as usize;
                         e.4 += r.raw_target_line_changed_beyond_value as usize;
                         e.5 += (r.raw_value == "ok") as usize;
-                        if r.raw_value.starts_with("verify_fail") {
+                        if !r.raw_value.is_empty() && r.raw_value != "ok" {
                             *a.raw_refusals.entry(format!("value-only {}", r.raw_value)).or_default() += 1;
                         }
                         if r.raw != "ok" {

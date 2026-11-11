@@ -2,7 +2,7 @@ file	parse_ok	objs	warn	err	rt_level	lost	added	idempotent	ast_eq	patch_summary	
 edge_custom_vtimezone_unmapped.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 edge_line_endings_lf.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 edge_long_utf8_fold.ics	true	1	0	0	L3	1	1	true	true	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=1 ast_coll_rt=0 raw=ok raw_value=ok	-	0
-edge_lowercase_unknown_component.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	2
+edge_lowercase_unknown_component.ics	true	1	0	0	L3	5	5	true	true	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=4 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 google_allday_floating.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 google_contacts_export.vcf	true	1	0	0	L3	3	3	true	true	-	-	ast_coll_in=3 ast_coll_rt=0 raw=ok raw_value=ok	13
 google_event_meet.ics	true	1	0	0	L3	7	7	true	true	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	-	2
@@ -17,7 +17,7 @@ outlook_recurring_exception.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_co
 outlook_v21_qp.vcf	true	1	0	0	L3	7	6	true	true	-	-	ast_coll_in=6 ast_coll_rt=0 raw=refused: entry count mismatch raw=11 ast=10 raw_value=	5
 rfc2426_v3_example.vcf	true	2	0	0	L1	0	0	true	true	-	-	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	12
 rfc5545_journal_freebusy.ics	true	1	0	0	L1	0	0	true	true	-	-	-	0
-rfc5545_meeting_tz.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
+rfc5545_meeting_tz.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	1
 rfc5545_recurring_overrides.ics	true	1	0	0	L0	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	0
 rfc5545_todo_alarm.ics	true	1	0	0	L1	0	0	true	true	ast_coll_in=0 ast_coll_rt=0 raw=ok raw_value=ok	-	-	0
 rfc6350_v4_example.vcf	true	1	0	0	L3	8	8	true	true	-	-	ast_coll_in=7 ast_coll_rt=0 raw=ok raw_value=ok	12

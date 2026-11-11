@@ -4,9 +4,32 @@
 //! line are replaced in the original payload. Everything else stays byte-identical.
 //! Alignment between raw lines and calcard entries is by order inside each component and is
 //! verified by property name; any mismatch refuses the patch (caller falls back / reports).
+//! Every splice is re-parsed and must yield exactly the expected AST, otherwise it is refused.
 
 use calcard::icalendar::{ICalendar, ICalendarEntry};
 use calcard::vcard::{VCard, VCardEntry, VCardProperty, VCardVersion};
+use calcard::{Entry, Parser};
+
+/// A top-level object as calcard parses it.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Obj {
+    Ical(ICalendar),
+    Card(VCard),
+}
+
+/// All top-level objects calcard finds in a payload (invalid lines and errors skipped).
+pub fn parse_objects(text: &str) -> Vec<Obj> {
+    let mut p = Parser::new(text);
+    let mut out = Vec::new();
+    loop {
+        match p.entry() {
+            Entry::ICalendar(c) => out.push(Obj::Ical(c)),
+            Entry::VCard(c) => out.push(Obj::Card(c)),
+            Entry::Eof => return out,
+            _ => {}
+        }
+    }
+}
 
 /// One logical (unfolded) content line of the raw payload.
 #[derive(Debug, Clone)]
@@ -159,12 +182,43 @@ fn value_colon(t: &str) -> Option<usize> {
     None
 }
 
+/// Splice `new_line` over `line` and accept the result only if no byte outside the line's span
+/// changed and calcard re-parses the whole payload to exactly `expect`.
+pub fn checked_splice(raw: &str, line: &RawLine, new_line: &str, expect: &[Obj]) -> Result<String, String> {
+    let out = splice(raw, line, new_line);
+    let tail = raw.len() - line.end;
+    if out.as_bytes()[..line.start] != raw.as_bytes()[..line.start]
+        || out.as_bytes()[out.len() - tail..] != raw.as_bytes()[line.end..]
+    {
+        return Err("verify_fail: bytes outside span changed".into());
+    }
+    if parse_objects(&out) != expect {
+        return Err("verify_fail: re-parse differs from mutated AST".into());
+    }
+    Ok(out)
+}
+
 /// Value-only rewrite: keep the original name/params spelling verbatim and take only the value
 /// part from calcard's serialisation. Valid when only the value changed (params untouched).
-pub fn value_only_line(orig: &RawLine, serialized_crlf: &str) -> Option<String> {
-    let new = logical_lines(serialized_crlf).into_iter().next()?.text;
-    let head = &orig.text[..value_colon(&orig.text)?];
-    Some(fold(&format!("{head}{}", &new[value_colon(&new)?..])))
+/// Refused when the original value bytes are encoded (ENCODING / CHARSET / bare 2.1 QP or BASE64):
+/// calcard emits the decoded value, which the kept params would make clients decode again.
+pub fn value_only_line(orig: &RawLine, serialized_crlf: &str) -> Result<String, String> {
+    let colon = value_colon(&orig.text).ok_or("refused: no ':' in line")?;
+    let head = &orig.text[..colon];
+    if head.split(';').skip(1).any(|p| {
+        let n = p.split('=').next().unwrap_or("").trim().to_ascii_uppercase();
+        matches!(n.as_str(), "ENCODING" | "CHARSET" | "QUOTED-PRINTABLE" | "BASE64")
+    }) {
+        return Err("refused: encoded value (ENCODING/CHARSET param)".into());
+    }
+    let new = logical_lines(serialized_crlf).into_iter().next().ok_or("refused: empty serialisation")?.text;
+    let vc = value_colon(&new).ok_or("refused: no ':' in serialisation")?;
+    Ok(fold(&format!("{head}{}", &new[vc..])))
+}
+
+/// Value-only rewrite of one line, spliced and verified (see `value_only_line`, `checked_splice`).
+pub fn patch_value(raw: &str, line: &RawLine, serialized_crlf: &str, expect: &[Obj]) -> Result<String, String> {
+    checked_splice(raw, line, &value_only_line(line, serialized_crlf)?, expect)
 }
 
 /// Fold at 75 octets on char boundaries, CRLF + single space (RFC 5545 3.1).
@@ -209,6 +263,25 @@ mod tests {
         e.values = vec![calcard::icalendar::ICalendarValue::Text("new".into())];
         let out = splice(raw, &lines[*li], &write_ical_entry(&e));
         assert_eq!(out, raw.replace("SUMMARY:old\r\n  folded\r\n", "SUMMARY:new\r\n"));
+    }
+
+    #[test]
+    fn single_line_qp_is_refused_not_corrupted() {
+        // Regression: value-only splice used to keep ENCODING=QUOTED-PRINTABLE over a decoded value,
+        // so "ext=12 café" was read back by clients as "ext\x12 cafÃ©".
+        let raw = "BEGIN:VCARD\r\nVERSION:2.1\r\nN:Doe;Jan\r\nTEL;CELL;ENCODING=QUOTED-PRINTABLE:+420=20123\r\nEND:VCARD\r\n";
+        let Obj::Card(card) = parse_objects(raw).remove(0) else { panic!() };
+        let lines = logical_lines(raw);
+        let (ei, li) = *align_vcard(&lines, &card).unwrap().iter().find(|(_, li)| lines[*li].name() == "TEL").unwrap();
+        let mut patched = card.clone();
+        patched.entries[ei].values = vec![calcard::vcard::VCardValue::Text("ext=12 café".into())];
+        let expect = [Obj::Card(patched.clone())];
+        let ser = write_vcard_entry(&patched.entries[ei], VCardVersion::V2_1);
+        let err = patch_value(raw, &lines[li], &ser, &expect).unwrap_err();
+        assert!(err.contains("encoded value"), "{err}");
+        // The bad line the old code produced must also be caught by the re-parse check.
+        let bad = "TEL;CELL;ENCODING=QUOTED-PRINTABLE:ext=12 café\r\n";
+        assert!(checked_splice(raw, &lines[li], bad, &expect).unwrap_err().starts_with("verify_fail"));
     }
 
     #[test]
