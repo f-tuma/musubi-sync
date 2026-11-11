@@ -13,7 +13,9 @@ mkdir -p results
 node oracles/icaljs/oracle.mjs corpus/cases.json > results/icaljs.json
 cargo build -q --release --manifest-path candidates/Cargo.toml
 BIN=candidates/target/release/rrule-candidates
-for c in rrule rrule2 rrule-jiff calcard calcard-next; do "$BIN" run "$c" corpus/cases.json > "results/$c.json"; done
+for c in rrule rrule2 rrule-jiff rrule+edge rrule-jiff+edge calcard calcard-next; do "$BIN" run "$c" corpus/cases.json > "results/$c.json"; done
 "$BIN" tzcheck > results/tzcheck.json
 .venv/bin/python compare.py
+.venv/bin/python tools/core_failures.py
+python3 tools/core_size.py > results/core_size.json
 if [ "${1:-}" = "--bench" ]; then .venv/bin/python bench.py 10000 5 > results/bench.json; fi

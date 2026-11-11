@@ -232,7 +232,7 @@
   ],
   "decided_by": "rfc",
   "error_ok": false,
-  "why": "ISO week 53 exists only in 1998, 2004, 2009 (years starting on Thursday, or leap years starting Wednesday)."
+  "why": "Mondays of ISO week 53 from 1998 with COUNT=3: 1998, 2004, 2009 (week 53 exists only in years starting on Thursday, or leap years starting on Wednesday; the next are 2015, 2020, 2026, beyond COUNT)."
  },
  "byweekno-neg1-thursday": {
   "accept": [
@@ -498,18 +498,12 @@
    [
     "2026-03-10T08:00:00Z",
     "2026-03-16T08:00:00Z",
-    "2026-03-23T08:00:00Z",
-    "2026-03-30T07:00:00Z"
-   ],
-   [
-    "2026-03-16T08:00:00Z",
-    "2026-03-23T08:00:00Z",
-    "2026-03-30T07:00:00Z"
+    "2026-03-23T08:00:00Z"
    ]
   ],
   "decided_by": "rfc",
   "error_ok": false,
-  "why": "RFC 3.8.5.3: an unsynchronised DTSTART gives an undefined set; with or without DTSTART accepted."
+  "why": "RFC 5545 3.3.10 (COUNT): 'The DTSTART property value always counts as the first occurrence', so DTSTART uses one of the three. Four instances (dateutil wrapper adding DTSTART on top of COUNT) and dropping DTSTART (ical.js) are both wrong."
  },
  "exdate-date-on-timed": {
   "accept": [

@@ -3,7 +3,8 @@
 //!   rrule-candidates run <candidate> ../corpus/cases.json > ../results/<candidate>.json
 //!   rrule-candidates bench <candidate> <series> <years>
 //!
-//! Candidates: rrule, rrule2, rrule-jiff, calcard, calcard-next, parse-only (bench baseline).
+//! Candidates: rrule, rrule2, rrule-jiff, calcard, calcard-next, parse-only (bench baseline), and
+//! rrule+edge / rrule-jiff+edge: the same cores behind our own jiff time-zone edge (`edge_expand`).
 //! Output strings match the oracles: zoned/UTC -> YYYY-MM-DDTHH:MM:SSZ,
 //! floating -> YYYY-MM-DDTHH:MM:SS, DATE -> YYYY-MM-DD.
 use serde_json::{json, Map, Value};
@@ -29,6 +30,12 @@ impl Prop {
     }
 }
 
+fn parse_prop(l: &str) -> Prop {
+    let (head, value) = l.split_once(':').unwrap_or((l, ""));
+    let (name, params) = head.split_at(head.find(';').unwrap_or(head.len()));
+    Prop { name: name.to_ascii_uppercase(), params: params.into(), value: value.into() }
+}
+
 fn events(ics: &str) -> Vec<Vec<Prop>> {
     let unfolded = ics.replace("\r\n", "\n").replace("\n ", "").replace("\n\t", "");
     let (mut out, mut cur, mut in_event) = (vec![], vec![], false);
@@ -39,11 +46,7 @@ fn events(ics: &str) -> Vec<Vec<Prop>> {
                 in_event = false;
                 out.push(std::mem::take(&mut cur));
             }
-            _ if in_event => {
-                let (head, value) = l.split_once(':').unwrap_or((l, ""));
-                let (name, params) = head.split_at(head.find(';').unwrap_or(head.len()));
-                cur.push(Prop { name: name.to_ascii_uppercase(), params: params.into(), value: value.into() });
-            }
+            _ if in_event => cur.push(parse_prop(l)),
             _ => {}
         }
     }
@@ -174,6 +177,127 @@ fn run_rrule_jiff(ics: &str, b: &Bounds) -> Out {
     rrule_family(ics, b, expand, parse_dt)
 }
 
+// ---------- "core + our jiff edge": the crate only expands DTSTART/RRULE/EXRULE in UTC-as-civil time ----------
+//
+// Zones never reach the core: DTSTART is passed as its civil time marked Z, UNTIL is converted to that
+// civil time, and each civil result is resolved in the series zone afterwards (jiff `to_zoned`, the
+// RFC 5545 3.3.5 reading: fold -> first, gap -> offset before the gap). RDATE/EXDATE are applied here
+// as instants. This is the design calcard-next uses in icalendar/dates.rs, with the core swapped out.
+// shortcut: TZID resolves through the IANA db only (no VTIMEZONE, no Windows names); policy cases
+// (DATE EXDATE on a timed series, DTSTART outside COUNT) are left to the policy layer, as in the report.
+
+type Core = fn(&str, i64, usize) -> Result<Vec<i64>, String>;
+
+fn zone(id: &str) -> Result<jiff::tz::TimeZone, String> {
+    jiff::tz::db().get(id).map_err(|e| format!("TZID {id}: {e}"))
+}
+
+fn civil_secs(dt: jiff::civil::DateTime) -> i64 {
+    dt.to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp().as_second()
+}
+
+fn civil_of(secs: i64) -> jiff::civil::DateTime {
+    jiff::Timestamp::from_second(secs).unwrap().to_zoned(jiff::tz::TimeZone::UTC).datetime()
+}
+
+fn ics_utc(secs: i64) -> String {
+    chrono::DateTime::from_timestamp(secs, 0).unwrap().format("%Y%m%dT%H%M%SZ").to_string()
+}
+
+/// One DATE / DATE-TIME / PERIOD value -> seconds in the `fmt` convention of the master `kind`.
+fn value_secs(p: &Prop, v: &str, kind: Kind) -> Result<i64, String> {
+    let v = v.split('/').next().unwrap_or(v);
+    let e = |e: jiff::Error| format!("{v}: {e}");
+    let dt = if v.len() == 8 {
+        jiff::civil::Date::strptime("%Y%m%d", v).map_err(e)?.to_datetime(jiff::civil::Time::midnight())
+    } else {
+        jiff::civil::DateTime::strptime("%Y%m%dT%H%M%S", v.trim_end_matches('Z')).map_err(e)?
+    };
+    match (kind, p.param("TZID")) {
+        (Kind::Instant, Some(id)) if !v.ends_with('Z') => Ok(zone(id)?.to_zoned(dt).map_err(e)?.timestamp().as_second()),
+        _ => Ok(civil_secs(dt)),
+    }
+}
+
+fn edge_expand(core: Core, text: &str, kind: Kind, b: &Bounds) -> Result<Vec<i64>, String> {
+    let props: Vec<Prop> = text.lines().map(parse_prop).collect();
+    let ds = props.iter().find(|p| p.name == "DTSTART").ok_or("no DTSTART")?;
+    let tz = match (kind, ds.param("TZID")) {
+        (Kind::Instant, Some(id)) => Some(zone(id)?),
+        (Kind::Instant, None) => Some(jiff::tz::TimeZone::UTC),
+        _ => None,
+    };
+    let start = civil_secs(jiff::civil::DateTime::strptime(
+        if ds.value.len() == 8 { "%Y%m%d" } else { "%Y%m%dT%H%M%S" },
+        ds.value.trim_end_matches('Z'),
+    ).or_else(|_| jiff::civil::Date::strptime("%Y%m%d", &ds.value).map(|d| d.to_datetime(jiff::civil::Time::midnight())))
+    .map_err(|e| format!("DTSTART: {e}"))?);
+    let utc_to_civil = |s: i64| match &tz {
+        Some(z) => civil_secs(jiff::Timestamp::from_second(s).unwrap().to_zoned(z.clone()).datetime()),
+        None => s,
+    };
+    let mut core_text = vec![format!("DTSTART:{}", ics_utc(start))];
+    for p in props.iter().filter(|p| p.name == "RRULE" || p.name == "EXRULE") {
+        let parts: Vec<String> = p.value.split(';').map(|kv| match kv.split_once('=') {
+            Some((k, u)) if k.eq_ignore_ascii_case("UNTIL") => {
+                let civil = match u.len() {
+                    8 => civil_secs(jiff::civil::Date::strptime("%Y%m%d", u).map(|d| d.to_datetime(jiff::civil::Time::midnight())).unwrap_or_default())
+                        + if kind == Kind::Date { 0 } else { 86_399 }, // DATE UNTIL on a timed series: end of that day
+                    _ if u.ends_with('Z') => utc_to_civil(civil_secs(jiff::civil::DateTime::strptime("%Y%m%dT%H%M%S", &u[..15]).unwrap_or_default())),
+                    _ => civil_secs(jiff::civil::DateTime::strptime("%Y%m%dT%H%M%S", u).unwrap_or_default()), // invalid local UNTIL: lenient
+                };
+                format!("UNTIL={}", ics_utc(civil))
+            }
+            _ => kv.to_string(),
+        }).collect();
+        core_text.push(format!("{}:{}", p.name, parts.join(";")));
+    }
+    // civil bound: the window end plus the largest UTC offset
+    let civil = core(&core_text.join("\n"), b.until.saturating_add(14 * 3_600), b.max)?;
+    let mut out: Vec<i64> = match &tz {
+        Some(z) => civil.into_iter().filter_map(|s| z.to_zoned(civil_of(s)).ok().map(|t| t.timestamp().as_second())).collect(),
+        None => civil,
+    };
+    for p in props.iter().filter(|p| p.name == "RDATE") {
+        for v in p.value.split(',') {
+            out.push(value_secs(p, v, kind)?);
+        }
+    }
+    let mut ex = vec![];
+    for p in props.iter().filter(|p| p.name == "EXDATE") {
+        for v in p.value.split(',') {
+            ex.push(value_secs(p, v, kind)?);
+        }
+    }
+    out.retain(|s| !ex.contains(s) && *s <= b.until);
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+fn edge_dt(line: &str, kind: Kind) -> Result<i64, String> {
+    let p = parse_prop(line);
+    value_secs(&p, &p.value, kind)
+}
+
+fn core_rrule(text: &str, until: i64, max: usize) -> Result<Vec<i64>, String> {
+    let set: rrule::RRuleSet = text.parse().map_err(|e| format!("{e}"))?;
+    Ok((&set).into_iter().map(|d| d.timestamp()).take_while(|s| *s <= until).take(max).collect())
+}
+
+fn core_rrule_jiff(text: &str, until: i64, max: usize) -> Result<Vec<i64>, String> {
+    let set: rrule_jiff::RRuleSet = text.parse().map_err(|e| format!("{e}"))?;
+    Ok((&set).into_iter().map(|d| d.timestamp().as_second()).take_while(|s| *s <= until).take(max).collect())
+}
+
+fn run_rrule_edge(ics: &str, b: &Bounds) -> Out {
+    rrule_family(ics, b, |t, k, b| edge_expand(core_rrule, t, k, b), edge_dt)
+}
+
+fn run_rrule_jiff_edge(ics: &str, b: &Bounds) -> Out {
+    rrule_family(ics, b, |t, k, b| edge_expand(core_rrule_jiff, t, k, b), edge_dt)
+}
+
 // ---------- calcard family: whole-calendar expansion incl. VTIMEZONE and overrides ----------
 
 /// Formats one instance from its own zone: a floating result for a TZID input shows up
@@ -244,6 +368,8 @@ fn candidate(name: &str) -> fn(&str, &Bounds) -> Out {
         "rrule" => run_rrule,
         "rrule2" => run_rrule2,
         "rrule-jiff" => run_rrule_jiff,
+        "rrule+edge" => run_rrule_edge,
+        "rrule-jiff+edge" => run_rrule_jiff_edge,
         "calcard" => run_calcard,
         "calcard-next" => run_calcard_next,
         "parse-only" => |ics, _| Ok(vec![format!("{}", events(ics).len())]),
@@ -268,6 +394,8 @@ fn version(name: &str) -> &'static str {
         "rrule" => "rrule 0.14.0 (crates.io, chrono-tz)",
         "rrule2" => "rrule2 0.15.0 (crates.io, chrono-tz)",
         "rrule-jiff" => "rrule jiff port, ccope/rust-rrule@50db3e2 (closed PR #151)",
+        "rrule+edge" => "rrule 0.14.0 core (UTC civil) + our jiff tz edge",
+        "rrule-jiff+edge" => "rrule jiff port core (UTC civil) + our jiff tz edge",
         "calcard" => "calcard 0.3.14 (crates.io, chrono-tz), ICalendar::expand_dates",
         "calcard-next" => "calcard-next 3.0.1 (crates.io, jiff), ICalendar::expand_dates_between",
         _ => "",
@@ -326,15 +454,25 @@ fn bench(name: &str, n: usize, years: i64) {
     let (lo, hi) = (fmt(Kind::Instant, from), fmt(Kind::Instant, b.until));
     let inputs: Vec<String> = (0..n).map(synthetic).collect();
     let t = std::time::Instant::now();
-    let (mut total, mut errors) = (0usize, 0usize);
+    let (mut total, mut produced, mut errors) = (0usize, 0usize, 0usize);
     for ics in &inputs {
         match f(ics, &b) {
-            Ok(v) => total += v.iter().filter(|s| **s >= lo && **s < hi).count(),
+            Ok(v) => {
+                produced += v.len();
+                total += v.iter().filter(|s| **s >= lo && **s < hi).count();
+            }
             Err(_) => errors += 1,
         }
     }
     let ms = t.elapsed().as_millis();
-    println!("{}", json!({ "candidate": name, "series": n, "years": years, "instances_in_window": total, "errors": errors, "ms": ms }));
+    // every adapter formats each produced instance once (fmt or fmt_result); time that cost alone
+    let t = std::time::Instant::now();
+    for i in 0..produced {
+        std::hint::black_box(fmt(Kind::Instant, std::hint::black_box(from + i as i64 * 3_600)));
+    }
+    let fmt_ms = t.elapsed().as_millis();
+    println!("{}", json!({ "candidate": name, "series": n, "years": years, "instances_in_window": total,
+        "instances_produced": produced, "errors": errors, "ms": ms, "fmt_ms": fmt_ms, "engine_ms_est": ms.saturating_sub(fmt_ms) }));
 }
 
 // ---------- timezones: chrono-tz (compiled-in tzdb) vs jiff (system tzdb), plus a custom VTIMEZONE via POSIX TZ ----------

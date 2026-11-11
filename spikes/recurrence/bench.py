@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).parent
 BIN = ROOT / "candidates/target/release/rrule-candidates"
 N, YEARS = (sys.argv[1:3] + ["10000", "5"][len(sys.argv[1:3]):])
 rows = []
-for cand in ["parse-only", "rrule", "rrule2", "rrule-jiff", "calcard", "calcard-next"]:
+for cand in ["parse-only", "rrule", "rrule2", "rrule-jiff", "rrule+edge", "rrule-jiff+edge", "calcard", "calcard-next"]:
     for run in range(3):
         p = subprocess.Popen([BIN, "bench", cand, N, YEARS], stdout=subprocess.PIPE,
                              env={**os.environ, "TZ": "Europe/Prague"})

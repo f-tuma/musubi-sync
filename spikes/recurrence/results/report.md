@@ -2,102 +2,104 @@
 - `calcard`: calcard 0.3.14 (crates.io, chrono-tz), ICalendar::expand_dates
 - `dateutil`: python-dateutil 2.9.0.post0
 - `icaljs`: ical.js 2.2.1
+- `rrule+edge`: rrule 0.14.0 core (UTC civil) + our jiff tz edge
+- `rrule-jiff+edge`: rrule jiff port core (UTC civil) + our jiff tz edge
 - `rrule-jiff`: rrule jiff port, ccope/rust-rrule@50db3e2 (closed PR #151)
 - `rrule`: rrule 0.14.0 (crates.io, chrono-tz)
 - `rrule2`: rrule2 0.15.0 (crates.io, chrono-tz)
 
-| case | calcard-next | calcard | dateutil | icaljs | rrule-jiff | rrule | rrule2 |
-|---|---|---|---|---|---|---|---|
-| dst-prague-gap-daily | pass | FAIL | pass | FAIL | pass | pass | pass |
-| dst-prague-fold-daily | pass | FAIL | pass | FAIL | pass | pass | pass |
-| dst-prague-weekly-wallclock | pass | pass | pass | pass | pass | pass | pass |
-| dst-ny-gap-daily | pass | FAIL | pass | FAIL | pass | pass | pass |
-| dst-ny-fold-daily | pass | FAIL | pass | FAIL | pass | pass | pass |
-| dst-lordhowe-gap-30min | pass | FAIL | pass | FAIL | pass | pass | pass |
-| dst-lordhowe-fold-30min | pass | FAIL | pass | FAIL | pass | pass | pass |
-| dst-apia-skipped-day | pass | FAIL | pass | pass | pass | pass | pass |
-| dst-prague-hourly-gap | pass | FAIL | pass | pass | pass | pass | pass |
-| dst-prague-explicit-gap-dtstart | pass | ERR | pass | FAIL | FAIL | ERR | FAIL |
-| tz-saopaulo-dst-abolished | pass | pass | pass | pass | pass | pass | pass |
-| tz-moscow-2011-2014 | pass | pass | pass | pass | pass | pass | pass |
-| tz-casablanca-ramadan | pass | pass | pass | pass | pass | pass | pass |
-| tz-kathmandu-0545 | pass | pass | pass | pass | pass | pass | pass |
-| tz-utc-z | pass | FAIL | pass | pass | pass | pass | pass |
-| bysetpos-last-weekday | pass | pass | pass | pass | pass | pass | pass |
-| bysetpos-first-and-last | pass | pass | pass | pass | pass | pass | pass |
-| bysetpos-first-monday | pass | pass | pass | pass | pass | pass | pass |
-| bysetpos-yearly-weekly-mix | pass | pass | pass | FAIL | pass | pass | pass |
-| byweekno-20-monday | pass | pass | pass | FAIL | pass | pass | pass |
-| byweekno-53 | pass | pass | pass | FAIL | pass | pass | pass |
-| byweekno-neg1-thursday | pass | pass | pass | FAIL | pass | pass | pass |
-| byweekno-1-wkst-su | pass | pass | pass | FAIL | pass | pass | pass |
-| byweekno-1-wkst-mo | pass | pass | pass | FAIL | pass | pass | pass |
-| byyearday-every-3rd-year | pass | pass | pass | pass | pass | pass | pass |
-| byyearday-neg366 | pass | pass | pass | pass | pass | pass | pass |
-| byyearday-60-leap | pass | pass | pass | pass | pass | pass | pass |
-| bymonthday-neg1 | pass | pass | pass | pass | pass | pass | pass |
-| bymonthday-neg3 | pass | pass | pass | pass | pass | pass | pass |
-| bymonthday-1-and-neg1 | pass | pass | pass | pass | pass | pass | pass |
-| bymonthday-31-skips | pass | pass | pass | pass | pass | pass | pass |
-| monthly-jan31-no-by | pass | pass | pass | pass | pass | pass | pass |
-| leap-yearly-feb29 | pass | pass | pass | FAIL | pass | pass | pass |
-| leap-bymonth2-bymonthday-neg1 | pass | pass | pass | pass | pass | pass | pass |
-| wkst-mo | pass | pass | pass | pass | pass | pass | pass |
-| wkst-su | pass | pass | pass | pass | pass | pass | pass |
-| yearly-byday-20mo | pass | pass | pass | FAIL | pass | pass | pass |
-| yearly-last-sunday-march | pass | pass | pass | pass | pass | pass | pass |
-| monthly-second-to-last-monday | pass | pass | pass | pass | pass | pass | pass |
-| friday-13th | pass | pass | pass | pass | pass | pass | pass |
-| us-election-day | pass | pass | pass | pass | pass | pass | pass |
-| daily-byhour-interval2 | pass | pass | pass | pass | pass | pass | pass |
-| minutely-byhour | pass | pass | pass | pass | pass | pass | pass |
-| yearly-bymonthday-no-bymonth | pass | pass | pass | FAIL | pass | pass | pass |
-| yearly-byday-no-bymonth | pass | pass | pass | pass | pass | pass | pass |
-| yearly-plain | pass | pass | pass | pass | pass | pass | pass |
-| until-utc-inclusive | pass | FAIL | pass | pass | pass | pass | pass |
-| until-local-no-z | pass | pass | pass | pass | pass | pass | pass |
-| until-date-with-date | pass | pass | pass | pass | pass | pass | pass |
-| until-date-with-datetime | pass | pass | pass | pass | pass | pass | pass |
-| until-between-instances | pass | pass | pass | pass | pass | pass | pass |
-| until-before-dtstart | ERR | ERR | pass | FAIL | ERR | ERR | ERR |
-| dtstart-not-in-rule | pass | pass | pass | pass | pass | pass | pass |
-| count-exdate-no-replenish | pass | pass | pass | pass | pass | pass | pass |
-| count-1 | pass | pass | pass | pass | pass | pass | pass |
-| allday-daily-exdate-date | pass | pass | pass | pass | pass | pass | pass |
-| allday-weekly-until-date | pass | pass | pass | pass | pass | pass | pass |
-| allday-rdate-date | pass | pass | pass | pass | pass | pass | pass |
-| allday-exdate-dtstart | pass | pass | pass | pass | pass | pass | pass |
-| allday-yearly-feb29 | pass | pass | pass | FAIL | pass | pass | pass |
-| floating-daily-host-gap | pass | pass | pass | pass | pass | FAIL | FAIL |
-| floating-exdate | pass | pass | pass | pass | pass | pass | pass |
-| google-exdate-tzid | pass | pass | pass | pass | pass | pass | pass |
-| exdate-utc-for-zoned | pass | pass | pass | pass | pass | pass | pass |
-| exdate-other-zone | pass | pass | pass | pass | pass | pass | pass |
-| exdate-nonmatching | pass | pass | pass | pass | pass | pass | pass |
-| exdate-multi-lines | pass | pass | pass | pass | pass | pass | pass |
-| exdate-date-on-timed | FAIL | FAIL | pass | pass | FAIL | FAIL | FAIL |
-| rdate-tzid-and-duplicate | pass | pass | pass | pass | pass | pass | pass |
-| rdate-period | pass | pass | pass | ERR | ERR | ERR | ERR |
-| rdate-before-dtstart | pass | pass | pass | pass | pass | pass | pass |
-| rdate-only | pass | pass | pass | FAIL | FAIL | FAIL | FAIL |
-| rdate-gap-and-fold | pass | FAIL | pass | FAIL | pass | ERR | pass |
-| exrule | FAIL | FAIL | pass | FAIL | pass | pass | pass |
-| override-moved | pass | pass | pass | pass | pass | pass | pass |
-| override-rid-utc | pass | pass | pass | pass | pass | pass | pass |
-| override-of-rdate | pass | FAIL | pass | pass | pass | pass | pass |
-| override-allday | pass | pass | pass | pass | pass | pass | pass |
-| override-thisandfuture | pass | pass | pass | pass | pass | pass | pass |
-| override-moved-into-window | pass | pass | pass | pass | pass | pass | pass |
-| infinite-daily-window | pass | pass | pass | pass | pass | pass | pass |
-| count-reconstructed-in-window | pass | pass | pass | pass | pass | pass | pass |
-| infinite-leap-far-future | pass | pass | pass | pass | pass | pass | pass |
-| infinite-limit-monthly-31 | pass | pass | pass | pass | pass | pass | pass |
-| impossible-feb30 | pass | pass | pass | FAIL | pass | pass | pass |
-| infinite-daily-since-1900 | pass | pass | pass | pass | pass | pass | pass |
-| vtimezone-windows-name | pass | pass | pass | pass | ERR | ERR | ERR |
-| vtimezone-custom-rules | FAIL | FAIL | pass | pass | ERR | ERR | ERR |
-| vtimezone-mozilla-prefix | pass | pass | pass | pass | pass | pass | pass |
-| total | 85 pass / 3 fail / 1 err | 72 pass / 15 fail / 2 err | 89 pass / 0 fail / 0 err | 66 pass / 22 fail / 1 err | 82 pass / 3 fail / 4 err | 80 pass / 3 fail / 6 err | 81 pass / 4 fail / 4 err |
+| case | calcard-next | calcard | dateutil | icaljs | rrule+edge | rrule-jiff+edge | rrule-jiff | rrule | rrule2 |
+|---|---|---|---|---|---|---|---|---|---|
+| dst-prague-gap-daily | pass | FAIL | pass | FAIL | pass | pass | pass | pass | pass |
+| dst-prague-fold-daily | pass | FAIL | pass | FAIL | pass | pass | pass | pass | pass |
+| dst-prague-weekly-wallclock | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| dst-ny-gap-daily | pass | FAIL | pass | FAIL | pass | pass | pass | pass | pass |
+| dst-ny-fold-daily | pass | FAIL | pass | FAIL | pass | pass | pass | pass | pass |
+| dst-lordhowe-gap-30min | pass | FAIL | pass | FAIL | pass | pass | pass | pass | pass |
+| dst-lordhowe-fold-30min | pass | FAIL | pass | FAIL | pass | pass | pass | pass | pass |
+| dst-apia-skipped-day | pass | FAIL | pass | pass | pass | pass | pass | pass | pass |
+| dst-prague-hourly-gap | pass | FAIL | pass | pass | pass | pass | pass | pass | pass |
+| dst-prague-explicit-gap-dtstart | pass | ERR | pass | FAIL | pass | pass | FAIL | ERR | FAIL |
+| tz-saopaulo-dst-abolished | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| tz-moscow-2011-2014 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| tz-casablanca-ramadan | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| tz-kathmandu-0545 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| tz-utc-z | pass | FAIL | pass | pass | pass | pass | pass | pass | pass |
+| bysetpos-last-weekday | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| bysetpos-first-and-last | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| bysetpos-first-monday | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| bysetpos-yearly-weekly-mix | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| byweekno-20-monday | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| byweekno-53 | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| byweekno-neg1-thursday | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| byweekno-1-wkst-su | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| byweekno-1-wkst-mo | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| byyearday-every-3rd-year | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| byyearday-neg366 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| byyearday-60-leap | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| bymonthday-neg1 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| bymonthday-neg3 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| bymonthday-1-and-neg1 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| bymonthday-31-skips | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| monthly-jan31-no-by | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| leap-yearly-feb29 | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| leap-bymonth2-bymonthday-neg1 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| wkst-mo | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| wkst-su | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| yearly-byday-20mo | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| yearly-last-sunday-march | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| monthly-second-to-last-monday | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| friday-13th | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| us-election-day | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| daily-byhour-interval2 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| minutely-byhour | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| yearly-bymonthday-no-bymonth | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| yearly-byday-no-bymonth | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| yearly-plain | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| until-utc-inclusive | pass | FAIL | pass | pass | pass | pass | pass | pass | pass |
+| until-local-no-z | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| until-date-with-date | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| until-date-with-datetime | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| until-between-instances | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| until-before-dtstart | ERR | ERR | pass | FAIL | ERR | ERR | ERR | ERR | ERR |
+| dtstart-not-in-rule | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL |
+| count-exdate-no-replenish | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| count-1 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| allday-daily-exdate-date | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| allday-weekly-until-date | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| allday-rdate-date | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| allday-exdate-dtstart | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| allday-yearly-feb29 | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| floating-daily-host-gap | pass | pass | pass | pass | pass | pass | pass | FAIL | FAIL |
+| floating-exdate | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| google-exdate-tzid | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| exdate-utc-for-zoned | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| exdate-other-zone | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| exdate-nonmatching | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| exdate-multi-lines | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| exdate-date-on-timed | FAIL | FAIL | pass | pass | FAIL | FAIL | FAIL | FAIL | FAIL |
+| rdate-tzid-and-duplicate | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| rdate-period | pass | pass | pass | ERR | pass | pass | ERR | ERR | ERR |
+| rdate-before-dtstart | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| rdate-only | pass | pass | pass | FAIL | ERR | ERR | FAIL | FAIL | FAIL |
+| rdate-gap-and-fold | pass | FAIL | pass | FAIL | pass | pass | pass | ERR | pass |
+| exrule | FAIL | FAIL | pass | FAIL | pass | pass | pass | pass | pass |
+| override-moved | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| override-rid-utc | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| override-of-rdate | pass | FAIL | pass | pass | pass | pass | pass | pass | pass |
+| override-allday | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| override-thisandfuture | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| override-moved-into-window | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| infinite-daily-window | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| count-reconstructed-in-window | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| infinite-leap-far-future | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| infinite-limit-monthly-31 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| impossible-feb30 | pass | pass | pass | FAIL | pass | pass | pass | pass | pass |
+| infinite-daily-since-1900 | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| vtimezone-windows-name | pass | pass | pass | pass | ERR | ERR | ERR | ERR | ERR |
+| vtimezone-custom-rules | FAIL | FAIL | pass | pass | ERR | ERR | ERR | ERR | ERR |
+| vtimezone-mozilla-prefix | pass | pass | pass | pass | pass | pass | pass | pass | pass |
+| total | 84 pass / 4 fail / 1 err | 71 pass / 16 fail / 2 err | 88 pass / 1 fail / 0 err | 65 pass / 23 fail / 1 err | 83 pass / 2 fail / 4 err | 83 pass / 2 fail / 4 err | 81 pass / 4 fail / 4 err | 79 pass / 4 fail / 6 err | 80 pass / 5 fail / 4 err |
 
 ### Failures
 
@@ -134,14 +136,27 @@
 - **until-before-dtstart** / `calcard-next`: got `[CalendarError { comp_id: 1, error: RRule(ValidationError(UntilBeforeStart { until: "2026-03-01T01:00:00", dt_start: "2026-03-02T09:00:00" })) }]`; accepted `[['2026-03-02T08:00:00Z']]`
 - **until-before-dtstart** / `calcard`: got `[CalendarError { comp_id: 1, error: RRule(ValidationError(UntilBeforeStart { until: "2026-03-01T00:00:00+00:00", dt_start: "2026-03-02T09:00:00+00:00" })) }]`; accepted `[['2026-03-02T08:00:00Z']]`
 - **until-before-dtstart** / `icaljs`: got `[]`; accepted `[['2026-03-02T08:00:00Z']]`
+- **until-before-dtstart** / `rrule+edge`: got `RRule validation error: `UNTIL` is `2026-03-01T01:00:00+00:00`, but `DTSTART` (`2026-03-02T09:00:00+00:00`) is later. That should not be happening.`; accepted `[['2026-03-02T08:00:00Z']]`
+- **until-before-dtstart** / `rrule-jiff+edge`: got `RRule validation error: `UNTIL` is `2026-03-01T01:00:00+00:00`, but `DTSTART` (`2026-03-02T09:00:00+00:00`) is later. That should not be happening.`; accepted `[['2026-03-02T08:00:00Z']]`
 - **until-before-dtstart** / `rrule-jiff`: got `RRule validation error: `UNTIL` is `2026-03-01T00:00:00+00:00`, but `DTSTART` (`2026-03-02T09:00:00+01:00`) is later. That should not be happening.`; accepted `[['2026-03-02T08:00:00Z']]`
 - **until-before-dtstart** / `rrule`: got `RRule validation error: `UNTIL` is `2026-03-01T00:00:00+00:00`, but `DTSTART` (`2026-03-02T09:00:00+01:00`) is later. That should not be happening.`; accepted `[['2026-03-02T08:00:00Z']]`
 - **until-before-dtstart** / `rrule2`: got `RRule validation error: `UNTIL` is `2026-03-01T00:00:00+00:00`, but `DTSTART` (`2026-03-02T09:00:00+01:00`) is later. That should not be happening.`; accepted `[['2026-03-02T08:00:00Z']]`
+- **dtstart-not-in-rule** / `calcard-next`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `calcard`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `dateutil`: got `['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `icaljs`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `rrule+edge`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `rrule-jiff+edge`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `rrule-jiff`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `rrule`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
+- **dtstart-not-in-rule** / `rrule2`: got `['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']`; accepted `[['2026-03-10T08:00:00Z', '2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z']]`
 - **allday-yearly-feb29** / `icaljs`: got `['2024-02-29', '2025-03-01']`; accepted `[['2024-02-29', '2028-02-29']]`
 - **floating-daily-host-gap** / `rrule`: got `['2026-03-28T02:30:00', '2026-03-29T03:30:00', '2026-03-30T02:30:00']`; accepted `[['2026-03-28T02:30:00', '2026-03-29T02:30:00', '2026-03-30T02:30:00']]`
 - **floating-daily-host-gap** / `rrule2`: got `['2026-03-28T02:30:00', '2026-03-29T03:30:00', '2026-03-30T02:30:00']`; accepted `[['2026-03-28T02:30:00', '2026-03-29T02:30:00', '2026-03-30T02:30:00']]`
 - **exdate-date-on-timed** / `calcard-next`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-03T07:00:00Z']]`
 - **exdate-date-on-timed** / `calcard`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-03T07:00:00Z']]`
+- **exdate-date-on-timed** / `rrule+edge`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-03T07:00:00Z']]`
+- **exdate-date-on-timed** / `rrule-jiff+edge`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-03T07:00:00Z']]`
 - **exdate-date-on-timed** / `rrule-jiff`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-03T07:00:00Z']]`
 - **exdate-date-on-timed** / `rrule`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-03T07:00:00Z']]`
 - **exdate-date-on-timed** / `rrule2`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-03T07:00:00Z']]`
@@ -150,6 +165,8 @@
 - **rdate-period** / `rrule`: got `RRule parsing error: `20260410T080000Z/20260410T100000Z` is not a valid datetime format for `RDATE`.`; accepted `[['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-10T08:00:00Z', '2026-04-11T08:00:00Z']]`
 - **rdate-period** / `rrule2`: got `RRule parsing error: `20260410T080000Z/20260410T100000Z` is not a valid datetime format for `RDATE`.`; accepted `[['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-10T08:00:00Z', '2026-04-11T08:00:00Z']]`
 - **rdate-only** / `icaljs`: got `['2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']]`
+- **rdate-only** / `rrule+edge`: got `RRule parsing error: Missing date generation property. There needs to be at least one `RRULE` or `RDATE` to generate occurrences.`; accepted `[['2026-04-01T07:00:00Z', '2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']]`
+- **rdate-only** / `rrule-jiff+edge`: got `RRule parsing error: Missing date generation property. There needs to be at least one `RRULE` or `RDATE` to generate occurrences.`; accepted `[['2026-04-01T07:00:00Z', '2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']]`
 - **rdate-only** / `rrule-jiff`: got `['2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']]`
 - **rdate-only** / `rrule`: got `['2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']]`
 - **rdate-only** / `rrule2`: got `['2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-05T07:00:00Z', '2026-04-07T07:00:00Z']]`
@@ -161,11 +178,15 @@
 - **exrule** / `icaljs`: got `['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z', '2026-04-04T07:00:00Z', '2026-04-05T07:00:00Z', '2026-04-06T07:00:00Z', '2026-04-07T07:00:00Z']`; accepted `[['2026-04-01T07:00:00Z', '2026-04-02T07:00:00Z', '2026-04-03T07:00:00Z', '2026-04-06T07:00:00Z', '2026-04-07T07:00:00Z']]`
 - **override-of-rdate** / `calcard`: got `['2026-04-06T07:00:00Z', '2026-04-13T07:00:00Z', '2026-04-20T07:00:00Z', '2026-04-21T07:00:00Z']`; accepted `[['2026-04-06T07:00:00Z', '2026-04-13T07:00:00Z', '2026-04-21T07:00:00Z']]`
 - **impossible-feb30** / `icaljs`: got `['2026-03-02T08:00:00Z', '2027-03-02T08:00:00Z', '2028-03-01T08:00:00Z', '2029-03-02T08:00:00Z']`; accepted `[['2026-01-01T08:00:00Z'], []]`
+- **vtimezone-windows-name** / `rrule+edge`: got `TZID W. Europe Standard Time: failed to find time zone `W. Europe Standard Time` in time zone database`; accepted `[['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']]`
+- **vtimezone-windows-name** / `rrule-jiff+edge`: got `TZID W. Europe Standard Time: failed to find time zone `W. Europe Standard Time` in time zone database`; accepted `[['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']]`
 - **vtimezone-windows-name** / `rrule-jiff`: got `RRule parsing error: `W. Europe Standard Time` is not a valid timezone.`; accepted `[['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']]`
 - **vtimezone-windows-name** / `rrule`: got `RRule parsing error: `W. Europe Standard Time` is not a valid timezone.`; accepted `[['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']]`
 - **vtimezone-windows-name** / `rrule2`: got `RRule parsing error: `W. Europe Standard Time` is not a valid timezone.`; accepted `[['2026-03-16T08:00:00Z', '2026-03-23T08:00:00Z', '2026-03-30T07:00:00Z']]`
 - **vtimezone-custom-rules** / `calcard-next`: got `['2026-03-06T09:00:00', '2026-03-13T09:00:00', '2026-03-20T09:00:00']`; accepted `[['2026-03-06T07:30:00Z', '2026-03-13T06:30:00Z', '2026-03-20T06:30:00Z']]`
 - **vtimezone-custom-rules** / `calcard`: got `['2026-03-06T09:00:00', '2026-03-13T09:00:00', '2026-03-20T09:00:00']`; accepted `[['2026-03-06T07:30:00Z', '2026-03-13T06:30:00Z', '2026-03-20T06:30:00Z']]`
+- **vtimezone-custom-rules** / `rrule+edge`: got `TZID Musubi Test Zone: failed to find time zone `Musubi Test Zone` in time zone database`; accepted `[['2026-03-06T07:30:00Z', '2026-03-13T06:30:00Z', '2026-03-20T06:30:00Z']]`
+- **vtimezone-custom-rules** / `rrule-jiff+edge`: got `TZID Musubi Test Zone: failed to find time zone `Musubi Test Zone` in time zone database`; accepted `[['2026-03-06T07:30:00Z', '2026-03-13T06:30:00Z', '2026-03-20T06:30:00Z']]`
 - **vtimezone-custom-rules** / `rrule-jiff`: got `RRule parsing error: `Musubi Test Zone` is not a valid timezone.`; accepted `[['2026-03-06T07:30:00Z', '2026-03-13T06:30:00Z', '2026-03-20T06:30:00Z']]`
 - **vtimezone-custom-rules** / `rrule`: got `RRule parsing error: `Musubi Test Zone` is not a valid timezone.`; accepted `[['2026-03-06T07:30:00Z', '2026-03-13T06:30:00Z', '2026-03-20T06:30:00Z']]`
 - **vtimezone-custom-rules** / `rrule2`: got `RRule parsing error: `Musubi Test Zone` is not a valid timezone.`; accepted `[['2026-03-06T07:30:00Z', '2026-03-13T06:30:00Z', '2026-03-20T06:30:00Z']]`
