@@ -1,0 +1,179 @@
+== calcard-vcard: 244 files (11 non-UTF-8, read lossy), 1306 objects
+parse ok             243/244 (99.6 %)   InvalidLine warnings 13   errors 0
+round-trip L0 byte-identical 15/243 (6.2 %)
+           L1 same logical lines (fold/EOL only) 19/243 (7.8 %)
+           L2 same lines, different order 0/243 (0.0 %)
+           L3 lines changed 209/243 (86.0 %)
+input logical lines not reproduced verbatim 1588/9413 (16.9 %)
+X- property lines verbatim 444/506 (87.7 %)   X- params verbatim 11/16 (68.8 %)
+grouped vCard lines verbatim 235/346 (67.9 %)   VTIMEZONE blocks verbatim n/a
+property order kept 178/243 (73.3 %)   idempotent (rt(rt)==rt) 243/243 (100.0 %)   AST(rt)==AST(in) 205/243 (84.4 %)
+patch Tel      n=144: AST route: rest byte-equal to input 13/144 (9.0 %), rest equal to calcard rt 144/144 (100.0 %)
+               raw-splice whole line ok 126/144 (87.5 %) (target name/params respelled 96/144 (66.7 %)); raw-splice value-only ok 126/144 (87.5 %)
+  raw-splice not ok x1: refused: entry count mismatch raw=10 ast=9
+  raw-splice not ok x1: refused: entry count mismatch raw=14 ast=13
+  raw-splice not ok x1: refused: entry count mismatch raw=15 ast=13
+  raw-splice not ok x1: refused: entry count mismatch raw=16 ast=10
+  raw-splice not ok x1: refused: entry count mismatch raw=19 ast=15
+  raw-splice not ok x1: refused: entry count mismatch raw=19 ast=16
+  raw-splice not ok x1: refused: entry count mismatch raw=20 ast=10
+  raw-splice not ok x1: refused: entry count mismatch raw=21 ast=18
+  raw-splice not ok x1: refused: entry count mismatch raw=21 ast=19
+  raw-splice not ok x1: refused: entry count mismatch raw=22 ast=20
+  raw-splice not ok x2: refused: entry count mismatch raw=25 ast=21
+  raw-splice not ok x1: refused: entry count mismatch raw=27 ast=25
+  raw-splice not ok x1: refused: entry count mismatch raw=29 ast=14
+  raw-splice not ok x1: refused: entry count mismatch raw=35 ast=30
+  raw-splice not ok x1: refused: entry count mismatch raw=427 ast=15
+  raw-splice not ok x1: refused: entry count mismatch raw=51 ast=29
+  raw-splice not ok x1: refused: name mismatch raw=VALUE ast=other.value
+JSContact+raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 2935/8927 (32.9 %), properties gone 18/8927 (0.2 %)
+                     properties gone: Nx8 CATEGORIESx3 ORGx3 X-ABLABELx3 TELx1
+JSContact-raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 4703/8927 (52.7 %), properties gone 713/8927 (8.0 %)
+                     properties gone: X-ABLABELx116 X-ADDRESSBOOKSERVER-MEMBERx64 LABELx53 X-ABADRx50 X-ABRELATEDNAMESx47 TZx17 Nx15 GENDERx13 IMPPx13 REVx13 X-ADDRESSBOOKSERVER-KINDx13 X-ABDATEx12
+
+-- round-trip: lost input lines by property (count, first example)
+   295  TEL                          TEL;WORK;VOICE:(111) 555-1212
+   132  EMAIL                        EMAIL;TYPE=INTERNET;TYPE=HOME;TYPE=PREF:lenn@lbi.net
+   129  ADR                          ADR;WORK;PREF:;;100 Waters Edge;Baytown;LA;30314;United States of America
+    60  URL                          URL;HOME:http://www.example.com
+    55  PHOTO                        PHOTO;VALUE=URI;TYPE=GIF:http://www.example.com/dir_photos/my_photo.gif
+    45  LABEL                        LABEL;WORK;PREF;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:100 Waters Edge=0D=0A=\n Baytown\, LA 30314=0D=0AUnite
+    38  FN                           FN:Ludwig-Götz Graßl
+    34  BDAY                         BDAY;VALUE=DATE:1963-09-21
+    29  N                            N:Graßl;Ludwig-Götz;;;
+    21  REV                          REV:2008-04-24T19:52:43Z
+    17  BEGIN                        BEGIN:vCard
+    17  NOTE                         NOTE:Interessen: Internet trollen, Kekse backen, Videos schneiden\nLieblingsessen: Chillibrot mit Kartoffelpuf
+    16  END                          END:vCard
+    14  ORG                          ORG;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91
+    12  KEY                          KEY;X509;ENCODING=BASE64:   MIIDITCCAoqgAwIBAgIQT52W2WawmStUwpV8tBV9TTANBgkqhkiG9w0BAQUFADBMMQswCQYD   VQQGEwJ
+    11  NICKNAME                     NICKNAME;CHARSET=UTF-8:Johnny
+    11  TZ                           TZ:+0100
+     9  =C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91= =C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=C3=91=
+     9  X-ABRELATEDNAMES             item5.X-ABRELATEDNAMES;type=pref:Jenny
+     9  X-MS-OL-DESIGN               X-MS-OL-DESIGN;CHARSET=utf-8:<card xmlns="http://schemas.microsoft.com/office/outlook/12/electronicbusinesscar
+     8  =BA=A7                       =BA=A7
+     7  X-AIM                        X-AIM;TYPE=HOME;X-COUCHDB-UUID="cb9e11fc-bb97-4222-9cd8-99820c1de454":johnny5@aol.com
+     6  X-ABDATE                     ITEM1.X-ABDATE;VALUE=DATE-AND-OR-TIME:20190220T000035
+     5  AGENT                        AGENT:BEGIN:VCARDVERSION:3.0N:Doe;John;Q.,PublicFN:John DoeTEL;TYPE=WORK,VOICE:(111) 555-1212TEL;TYPE=HOME,VOI
+     5  GEO                          GEO;TYPE=work:geo:46.772673,-71.282945
+     5  KIND                         KIND:org
+     5  LOGO                         LOGO;VALUE=uri:http://www.abc.com/pub/logos/abccorp.jpg
+     5  SOURCE                       SOURCE:ldap://ldap.example.com/cn=Babs%20Jensen\,%20o=Babsco\,%20c=US
+     5  X-ABUID                      X-ABUID:6B29A774-D124-4822-B8D0-2780EC117F60\:ABPerson
+     4                               ;=
+     4  RELATED                      RELATED;TYPE=friend:urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+     4  SOUND                        SOUND;TYPE=BASIC;VALUE=uri:CID:JOHNQPUBLIC.part8.19960229T080000.xyzMail@host1.com
+     4  TITLE                        TITLE;CHARSET=UTF-8:TheTitle
+     4  X-JABBER                     item1.X-JABBER;type=pref:adamczyk@example.com
+     4  ﻿BEGIN                       ﻿BEGIN:VCARD
+     3  12345 FREIZEITHAUSEN         12345 Freizeithausen
+     3  37465 ANDERSTADT             37465 Anderstadt
+     3  76543 SCHAFFHAUSEN           76543 Schaffhausen
+     3  =0D=0A=                      I assume it encodes this text inside a NOTE vCard type.=0D=0A=
+     3  VERSION                      version:2.1
+     3  X-ANNIVERSARY                X-ANNIVERSARY;VALUE=DATE-AND-OR-TIME:20190220T000035
+     3  X-EVOLUTION-FILE-AS          X-EVOLUTION-FILE-AS:Friedman, Nat
+     3  X-TEST                       X-Test:geo:123.123,123.123
+     3  X-YAHOO                      X-YAHOO;type=WORK;type=pref:saeko.where@example.com
+     3  X-YAHOO-ID                   X-YAHOO-ID;type=WORK;type=pref:saeko.where@example.com
+     2  89073                        89073;=
+     2  98765 KLEINDORF              98765 Kleindorf
+     2  =20=C3=91=20=C3=91=20=C3=91  =20=C3=91=20=C3=91=20=C3=91;;;;
+     2  =9F=A5=E5=BA=A7=0A=E5=8D=81=E5=9F=8E=E7=9B=AE=E7=AE=A1=E7=90=86=E5=A4=A7=E5= =9F=A5=E5=BA=A7=0A=E5=8D=81=E5=9F=8E=E7=9B=AE=E7=AE=A1=E7=90=86=E5=A4=A7=E5=
+     2  =BA=A7=0A=E5=8D=81=E5=9F=8E=E7=9B=AE=E7=AE=A1=E7=90=86=E5=A4=A7=E5=9E=8B=E7= =BA=A7=0A=E5=8D=81=E5=9F=8E=E7=9B=AE=E7=AE=A1=E7=90=86=E5=A4=A7=E5=9E=8B=E7=
+     2  =C3=91                       =C3=91
+     2  =C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20 =C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20
+     2  =C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91= =C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=20=C3=91=
+     2  =D1=96                       =D1=96;;;
+     2  HONG KONG                    Hong Kong
+     2  IMPP                         IMPP;X-SERVICE-TYPE=aim;type=WORK;type=pref:aim:Messenger%20Work%20(AIM)
+     2  LABEL,TYPE=HOME              LABEL,TYPE=HOME:Rasenstraße 17
+     2  LABEL,TYPE=WORK              LABEL,TYPE=WORK:
+     2  LANG                         LANG;TYPE=work;PREF=1:en
+     2  NETHERLANDS                  Netherlands
+
+-- JSContact+raw-props: calcard-rt lines lost after conversion and back (count, first example)
+  1227  N                            N:Gump;Forrest;;Mr.
+   422  TEL                          TEL;TYPE=WORK,VOICE:(111) 555-1212
+   276  EMAIL                        EMAIL:forrestgump@example.com
+   187  ADR                          ADR;TYPE=WORK;PREF:;;100 Waters Edge;Baytown;LA;30314;United States of America
+   113  X-ABLABEL                    item1.X-ABLabel:Work
+   111  ORG                          ORG:Bubba Gump Shrimp Co.
+   103  URL                          URL;TYPE=HOME:http://kho.me/
+    72  PHOTO                        PHOTO;GIF:http://www.example.com/dir_photos/my_photo.gif
+    71  BDAY                         BDAY;VALUE=DATE:1963-09
+    67  NOTE                         NOTE:Lieblingsfarbe: Violett
+    61  TITLE                        TITLE:Shrimp Man
+    57  NICKNAME                     NICKNAME:mkr
+    24  LABEL                        LABEL;TYPE=WORK;PREF:100 Waters Edge\r\n Baytown\, LA 30314\r\nUnited States of America
+    14  KEY                          KEY;X509;ENCODING=b:MIIDITCCAoqgAwIBAgIQT52W2WawmStUwpV8tBV9TTANBgkqhkiG9w0BAQUFADBMMQswCQYDVQQGEwJaQTElMCMGA1
+    14  LANG                         LANG;PREF=1:fr
+    13  IMPP                         IMPP;X-SERVICE-TYPE=GTalk:xmpp:gtalk
+    11  ROLE                         ROLE:Counting Money
+    10  X-ABSHOWAS                   X-ABShowAs:COMPANY
+     8  SOURCE                       SOURCE:Whatever
+     7  LOGO                         LOGO:http://www.example.com/pub/logos/abccorp.jpg
+     6  ANNIVERSARY                  ANNIVERSARY:20090808T1430-0500
+     6  CATEGORIES                   CATEGORIES:TRAVEL AGENT
+     6  SOUND                        SOUND:CID:JOHNQPUBLIC.part8.19960229T080000.xyzMail@example.com
+     5  NAME                         name:Bjorn Jensen
+     5  TZ                           TZ;VALUE=UTC-OFFSET:-0500
+     4  FBURL                        FBURL:????????????????s????????????
+     4  X-TEST                       X-Test:Just some text\, <- here.
+     3  BIRTHPLACE                   BIRTHPLACE;CHARSET=UTF-8:Hörstel
+     3  CN                           cn:
+     3  VALUE                        some.other.value:1.2.3
+     2  CALADRURI                    CALADRURI:http://example.com/calendar/jdoe
+     2  V                            v;x1=a;x2=,a;x3=a,;x4=a,,a;x5=,a,:
+     2  X-MS-CARDPICTURE             X-MS-CARDPICTURE;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRgABAQEAkACQAAD/2wBDAAcFBQYFBAcGBQYIBwcIChELCgkJChUPEAwRGBUa
+     1  CALURI                       CALURI;MEDIATYPE=text/calendar:ftp://ftp.example.com/calA.ics
+     1  FAX                          fax;TYPE=foo,pref;bar:fax
+     1  FN                           FN;QUOTED-PRINTABLE:=E5=8D=81=E5=9F=8E=E7=9B=AE=E7=AE=A1=E7=90=86=E5=A4=A7=E5=9E=8B=E7=9F=A5=E5=
+     1  MIDDLE                       MIDDLE;PARAM=value;PARAM2=value2:pas-id-4094434A00000001
+     1  O                            o:Universit=E6t G=F6rlitz
+     1  PHONE                        phone:+1 313 747-4454
+     1  SESAME STREET                Sesame Street;California;11111;USA:
+
+-- JSContact-raw-props: calcard-rt lines lost after conversion and back (count, first example)
+  1230  N                            N:Gump;Forrest;;Mr.
+  1222  VERSION                      VERSION:2.1
+   422  TEL                          TEL;TYPE=WORK,VOICE:(111) 555-1212
+   276  EMAIL                        EMAIL:forrestgump@example.com
+   187  ADR                          ADR;TYPE=WORK;PREF:;;100 Waters Edge;Baytown;LA;30314;United States of America
+   116  X-ABLABEL                    item1.X-ABLabel:Work
+   111  ORG                          ORG:Bubba Gump Shrimp Co.
+   103  URL                          URL;TYPE=HOME:http://kho.me/
+    74  BDAY                         BDAY;VALUE=DATE:1963-09
+    72  PHOTO                        PHOTO;GIF:http://www.example.com/dir_photos/my_photo.gif
+    67  NOTE                         NOTE:Lieblingsfarbe: Violett
+    64  X-ADDRESSBOOKSERVER-MEMBER   X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:user01-uid02
+    61  TITLE                        TITLE:Shrimp Man
+    57  NICKNAME                     NICKNAME:mkr
+    53  LABEL                        LABEL;TYPE=WORK;PREF:100 Waters Edge\r\n Baytown\, LA 30314\r\nUnited States of America
+    50  X-ABADR                      item3.X-ABADR:Silicon Alley
+    47  X-ABRELATEDNAMES             item2.X-ABRELATEDNAMES:Jenny
+    34  FN                           FN;CHARSET=UTF-8:Ludwig-Götz Graßl
+    26  REV                          REV;VALUE=DATE-AND-OR-TIME:20210314T092838Z
+    17  TZ                           TZ:+01:00
+    14  KEY                          KEY;X509;ENCODING=b:MIIDITCCAoqgAwIBAgIQT52W2WawmStUwpV8tBV9TTANBgkqhkiG9w0BAQUFADBMMQswCQYDVQQGEwJaQTElMCMGA1
+    14  LANG                         LANG;PREF=1:fr
+    13  GENDER                       GENDER:M
+    13  IMPP                         IMPP;X-SERVICE-TYPE=GTalk:xmpp:gtalk
+    13  X-ADDRESSBOOKSERVER-KIND     X-ADDRESSBOOKSERVER-KIND:group
+    12  X-ABDATE                     item1.X-ABDATE:1975-03-01
+    12  X-AIM                        X-AIM;TYPE=HOME;X-COUCHDB-UUID=cb9e11fc-bb97-4222-9cd8-99820c1de454:johnny5@aol.com
+    11  ROLE                         ROLE:Counting Money
+    10  CLIENTPIDMAP                 CLIENTPIDMAP:1;urn:uuid:3df403f4-5924-4bb7-b077-3c711d9eb34b
+    10  GEO                          GEO:-2.600000;3.400000
+    10  X-ABSHOWAS                   X-ABShowAs:COMPANY
+    10  X-MOZILLA-HTML               X-MOZILLA-HTML:FALSE
+     9  X-MS-OL-DESIGN               X-MS-OL-DESIGN:<card xmlns="http://schemas.microsoft.com/office/outlook/12/electronicbusinesscards" ver="1.0" 
+     8  AGENT                        AGENT:BEGIN:VCARDVERSION:3.0N:Doe\;John\;Q.\,PublicFN:John DoeTEL\;TYPE=WORK\,VOICE:(111) 555-1212TEL\;TYPE=HO
+     8  SOURCE                       SOURCE:Whatever
+     8  X-EVOLUTION-FILE-AS          X-EVOLUTION-FILE-AS:Doe\, John
+     8  X-JABBER                     X-JABBER:IM9
+     7  CLASS                        CLASS:Public
+     7  LOGO                         LOGO:http://www.example.com/pub/logos/abccorp.jpg
+     7  X-ABUID                      X-ABUID:0E7602CC-443E-4B82-B4B1-90F62F99A199:ABPerson

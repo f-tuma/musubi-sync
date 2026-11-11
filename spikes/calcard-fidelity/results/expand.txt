@@ -1,0 +1,20 @@
+edge_custom_vtimezone_unmapped.ics: 2 instances, 0 errors, 48.758µs; first: 2026-11-16T10:00+0000#3 2026-11-17T10:00+0000#3
+google_event_meet.ics: 8 instances, 0 errors, 17.042µs; first: 2026-11-12T10:00+0100#4 2026-11-19T10:00+0100#4 2026-12-03T10:00+0100#4 2026-12-10T10:00+0100#4 2026-12-17T10:00+0100#4 2026-12-24T10:00+0100#4
+icloud_structured_location.ics: 1 instances, 0 errors, 1.86µs; first: 2026-11-14T18:30+0100#4
+nextcloud_event.ics: 1 instances, 0 errors, 2.019µs; first: 2026-11-20T09:00+0100#1
+outlook_exchange_meeting.ics: 1 instances, 0 errors, 1.984µs; first: 2026-11-16T13:00+0100#4
+outlook_recurring_exception.ics: 9 instances, 0 errors, 11.056µs; first: 2026-11-02T09:00+0100#4 2026-11-16T10:00+0100#6 2026-11-23T09:00+0100#4 2026-11-30T09:00+0100#4 2026-12-07T09:00+0100#4 2026-12-14T09:00+0100#4
+rfc5545_recurring_overrides.ics: 4 instances, 0 errors, 6.442µs; first: 2006-01-13T14:00-0500#1 2006-01-04T14:00-0500#1 2006-01-05T15:00-0500#2 2006-01-08T14:00-0500#1
+thunderbird_event.ics: 1000 instances, 0 errors, 419.47µs; first: 2026-11-10T17:00+0100#4 2026-12-08T17:00+0100#4 2027-01-12T17:00+0100#4 2027-02-09T17:00+0100#4 2027-03-09T17:00+0100#4 2027-04-13T17:00+0200#4
+apps_api_src_handlers_event_capabilities_integration_test_ts_44dce692465e.ics: 1000 instances, 0 errors, 222.412µs; first: 2026-01-01T10:00+0000#1 2026-01-08T12:00+0000#2 2026-01-15T10:00+0000#1 2026-01-22T10:00+0000#1 2026-01-29T10:00+0000#1 2026-02-05T10:00+0000#1
+apps_api_src_handlers_event_resolution_integration_test_ts_2b1553520f06.ics: 1000 instances, 0 errors, 220.763µs; first: 2026-09-07T10:00+0000#1 2026-09-14T10:00+0000#1 2026-09-21T10:00+0000#1 2026-09-28T10:00+0000#1 2026-10-05T10:00+0000#1 2026-10-12T10:00+0000#1
+apps_api_src_sync_adapters_caldav_exdates_test_ts_51334af40f45.ics: 1 instances, 0 errors, 3.623µs; first: 2026-03-28T00:00+0000#1
+apps_api_src_sync_adapters_caldav_rdate_test_ts_fdd64fc3fe3e.ics: 2 instances, 0 errors, 2.418µs; first: 2026-03-28T00:00+0000#1 2026-03-29T00:00+0000#1
+apps_api_src_sync_adapters_caldav_test_ts_72a557f52957.ics: 1000 instances, 0 errors, 228.122µs; first: 2026-01-01T10:00+0100#4 2026-01-08T12:00+0100#6 2026-01-15T13:00+0100#7 2026-01-22T10:00+0100#4 2026-01-29T10:00+0100#4 2026-02-05T10:00+0100#4
+apps_api_src_sync_adapters_caldav_test_ts_8837d39eedb1.ics: 999 instances, 0 errors, 218.899µs; first: 2026-02-01T00:00+0000#1 2026-02-15T00:00+0000#1 2026-02-22T00:00+0000#1 2026-03-01T00:00+0000#1 2026-03-08T00:00+0000#1 2026-03-15T00:00+0000#1
+apps_api_src_sync_behavior_event_delivery_json_50e1e30f2912.ics: 0 instances, 1 errors, 600ns; first: 
+   error: CalendarError { comp_id: 1, error: MissingDtStart }
+apps_api_src_sync_task_write_test_ts_8ffab90825a3.ics: 1000 instances, 0 errors, 219.976µs; first: 2026-10-01T09:00+0000#1 2026-10-08T09:00+0000#3 2026-10-15T09:00+0000#1 2026-10-22T09:00+0000#1 2026-10-29T09:00+0000#1 2026-11-05T09:00+0000#1
+ps_api_src_sync_adapters_caldav_radicale_integration_test_ts_389c026a5bcc.ics: 2 instances, 0 errors, 2.754µs; first: 2026-03-28T00:00+0000#1 2026-03-29T00:00+0000#1
+ps_api_src_sync_adapters_caldav_radicale_integration_test_ts_60feeede4f1a.ics: 4 instances, 0 errors, 3.52µs; first: 2026-03-28T09:00+0100#1 2026-03-29T09:00+0200#1 2026-03-30T09:00+0200#1 2026-03-31T09:00+0200#1
+ps_api_src_sync_adapters_caldav_radicale_integration_test_ts_91de17f940f1.ics: 2 instances, 0 errors, 2.869µs; first: 2026-03-28T00:00+0000#1 2026-03-31T00:00+0000#1

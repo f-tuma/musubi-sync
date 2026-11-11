@@ -1,0 +1,19 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Bob Example
+N:Example;Bob;;;
+EMAIL;TYPE=INTERNET;TYPE=WORK:bob@example.org
+EMAIL;TYPE=INTERNET:bob.personal@example.net
+TEL;TYPE=CELL:+1 650-555-0100
+item1.TEL:+1 650-555-0199
+item1.X-ABLabel:Pager-ish
+ADR;TYPE=HOME:;;1600 Amphitheatre Pkwy;Mountain View;CA;94043;US
+item2.URL:https\://example.org/bob
+item2.X-ABLabel:PROFILE
+BDAY:1985-07-04
+ORG:Example Inc.
+TITLE:Engineer
+CATEGORIES:myContacts,Friends
+NOTE:Imported from a Google Contacts style export (synthetic).
+X-ANDROID-CUSTOM:vnd.android.cursor.item/nickname;Bobby;1;;;;;;;;;;;;;
+END:VCARD

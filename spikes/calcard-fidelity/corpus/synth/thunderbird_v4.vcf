@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:4.0
+PRODID:-//Thunderbird//NONSGML Thunderbird 128//EN
+UID:6f1c1b8e-2d3a-4e5f-9a8b-7c6d5e4f3a2b
+FN:Erik Thunder
+N:Thunder;Erik;;;
+EMAIL;PREF=1:erik@example.se
+EMAIL:erik.alt@example.se
+TEL;TYPE=cell;VALUE=TEXT:+46 70 123 45 67
+NOTE:Thunderbird 4.0 vCard (synthetic)
+X-MOZILLA-HTML:TRUE
+END:VCARD

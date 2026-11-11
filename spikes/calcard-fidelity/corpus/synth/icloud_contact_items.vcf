@@ -1,0 +1,34 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Apple Inc.//iPhone OS 18.1//EN
+N:Nováková;Jana;;;
+FN:Jana Nováková
+NICKNAME:Janička
+ORG:Example s.r.o.;Vývoj
+TITLE:Vedoucí týmu
+EMAIL;type=INTERNET;type=HOME;type=pref:jana@example.cz
+EMAIL;type=INTERNET;type=WORK:jana.novakova@example.com
+TEL;type=CELL;type=VOICE;type=pref:+420 777 123 456
+TEL;type=WORK;type=VOICE:+420 222 333 444
+item1.TEL:+420 608 000 111
+item1.X-ABLabel:Chata
+item2.ADR;type=HOME;type=pref:;;Dlouhá 12;Praha;;110 00;Česko
+item2.X-ABADR:cz
+item3.URL;type=pref:https://example.cz/jana
+item3.X-ABLabel:_$!<HomePage>!$_
+item4.X-ABRELATEDNAMES;type=pref:Petr Novák
+item4.X-ABLabel:_$!<Spouse>!$_
+item5.X-ABDATE;type=pref:2015-06-20
+item5.X-ABLabel:_$!<Anniversary>!$_
+item6.IMPP;X-SERVICE-TYPE=Skype;type=pref:skype:jana.novakova
+BDAY;VALUE=date:1990-02-14
+NOTE:Poznámka s čárkou\, středníkem\; a novým\nřádkem
+X-ABUID:8E1D2F3A-4B5C-6D7E-8F90-A1B2C3D4E5F6:ABPerson
+X-ABShowAs:PERSON
+PHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJ
+ CQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/w
+ AALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD
+ /2gAIAQEAAD8AVN//2Q==
+REV:2026-11-05T18:15:12Z
+UID:8E1D2F3A-4B5C-6D7E-8F90-A1B2C3D4E5F6
+END:VCARD

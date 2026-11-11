@@ -1,0 +1,176 @@
+== synth: 25 files (0 non-UTF-8, read lossy), 27 objects
+parse ok             25/25 (100.0 %)   InvalidLine warnings 0   errors 0
+round-trip L0 byte-identical 3/25 (12.0 %)
+           L1 same logical lines (fold/EOL only) 6/25 (24.0 %)
+           L2 same lines, different order 0/25 (0.0 %)
+           L3 lines changed 16/25 (64.0 %)
+input logical lines not reproduced verbatim 74/670 (11.0 %)
+X- property lines verbatim 63/69 (91.3 %)   X- params verbatim 12/14 (85.7 %)
+grouped vCard lines verbatim 10/17 (58.8 %)   VTIMEZONE blocks verbatim 4/8 (50.0 %)
+property order kept 24/25 (96.0 %)   idempotent (rt(rt)==rt) 25/25 (100.0 %)   AST(rt)==AST(in) 25/25 (100.0 %)
+patch Dtstart  n=13: AST route: rest byte-equal to input 6/13 (46.2 %), rest equal to calcard rt 13/13 (100.0 %)
+               raw-splice whole line ok 13/13 (100.0 %) (target name/params respelled 0/13 (0.0 %)); raw-splice value-only ok 13/13 (100.0 %)
+patch Summary  n=15: AST route: rest byte-equal to input 7/15 (46.7 %), rest equal to calcard rt 15/15 (100.0 %)
+               raw-splice whole line ok 15/15 (100.0 %) (target name/params respelled 1/15 (6.7 %)); raw-splice value-only ok 15/15 (100.0 %)
+patch Tel      n=8: AST route: rest byte-equal to input 2/8 (25.0 %), rest equal to calcard rt 8/8 (100.0 %)
+               raw-splice whole line ok 7/8 (87.5 %) (target name/params respelled 5/8 (62.5 %)); raw-splice value-only ok 7/8 (87.5 %)
+  raw-splice not ok x1: refused: entry count mismatch raw=11 ast=10
+JSCalendar+raw-props objs=16 converted+back 16/16 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 12/511 (2.3 %), properties gone 0/511 (0.0 %)
+                     properties gone: 
+JSCalendar-raw-props objs=16 converted+back 16/16 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 248/511 (48.5 %), properties gone 230/511 (45.0 %)
+                     properties gone: BEGINx27 ENDx27 DTSTARTx16 TZOFFSETFROMx15 TZOFFSETTOx15 DTENDx11 TZNAMEx11 RRULEx10 LAST-MODIFIEDx9 TZIDx8 DESCRIPTIONx7 CALSCALEx5
+JSContact+raw-props  objs=11 converted+back 11/11 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 74/158 (46.8 %), properties gone 0/158 (0.0 %)
+                     properties gone: 
+JSContact-raw-props  objs=11 converted+back 11/11 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 104/158 (65.8 %), properties gone 27/158 (17.1 %)
+                     properties gone: X-ABLABELx7 X-ADDRESSBOOKSERVER-MEMBERx2 X-SOCIALPROFILEx2 CLIENTPIDMAPx1 GENDERx1 GEOx1 IMPPx1 TZx1 X-ABADRx1 X-ABDATEx1 X-ABRELATEDNAMESx1 X-ABSHOWASx1
+
+-- round-trip: lost input lines by property (count, first example)
+     8  TEL                          TEL;type=CELL;type=VOICE;type=pref:+420 777 123 456
+     7  RRULE                        RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
+     4  ADR                          item2.ADR;type=HOME;type=pref:;;Dlouhá 12;Praha;;110 00;Česko
+     4  EMAIL                        EMAIL;TYPE=INTERNET;TYPE=WORK:bob@example.org
+     3  ATTENDEE                     ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE;CN=Alice Example;X-NUM-GUESTS=0:ma
+     3  DTSTART                      DTSTART;TZID=Musubi Custom Zone:20261116T100000
+     3  ORG                          ORG:Example s.r.o.;Vývoj
+     3  ORGANIZER                    ORGANIZER;CN=Alice Example:mailto:alice@example.com
+     3  REV                          REV:2026-11-05T18:15:12Z
+     3  URL                          item2.URL:https\://example.org/bob
+     2  FN                           FN:Jana Nováková
+     2  N                            N:Nováková;Jana;;;
+     2  RELATED                      RELATED;TYPE=friend:urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+     2  TZOFFSETFROM                 TZOFFSETFROM:+020000
+     2  TZOFFSETTO                   TZOFFSETTO:+010000
+     1  BDAY                         BDAY;VALUE=date:1990-02-14
+     1  BUDOVA B                     Budova B;Praha;;120 00;=C4=8Cesk=C3=A1 republika
+     1  CONFERENCE                   CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Talk:https://cloud.example.org/call/abcd1234
+     1  DESCRIPTION                  DESCRIPTION:Unfolded by a non-conforming producer: this line is far longer than seventy-five octets and is not
+     1  DTEND                        DTEND;TZID=Central Europe Standard Time:20261116T140000
+     1  DTSTAMP                      dtstamp:20261111T120000Z
+     1  GEO                          GEO;TYPE=work:geo:46.772673,-71.282945
+     1  IMPP                         item6.IMPP;X-SERVICE-TYPE=Skype;type=pref:skype:jana.novakova
+     1  KEY                          KEY;TYPE=work;VALUE=uri:http://www.viagenie.ca/simon.perreault/simon.asc
+     1  KIND                         KIND:group
+     1  NICKNAME                     NICKNAME:Janička
+     1  NOTE                         NOTE:Poznámka s čárkou\, středníkem\; a novým\nřádkem
+     1  PHOTO                        PHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4
+     1  SUMMARY                      Summary;X-Unknown-Param=Keep:Mixed case
+     1  TITLE                        TITLE:Vedoucí týmu
+     1  TRIGGER                      TRIGGER:-P0DT0H10M0S
+     1  UID                          uid:lowercase-names@example.com
+     1  X-ABDATE                     item5.X-ABDATE;type=pref:2015-06-20
+     1  X-ABRELATEDNAMES             item4.X-ABRELATEDNAMES;type=pref:Petr Novák
+     1  X-ANDROID-CUSTOM             X-ANDROID-CUSTOM:vnd.android.cursor.item/nickname;Bobby;1;;;;;;;;;;;;;
+     1  X-APPLE-STRUCTURED-LOCATION  X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-ADDRESS="Národní 2, 110 00 Praha 1, Česko";X-APPLE-MAPKIT-HANDLE=CAESv
+     1  X-MS-OL-DESIGN               X-MS-OL-DESIGN;CHARSET=utf-8:<card xmlns="http://schemas.microsoft.com/office/outlook/12/electronicbusinesscar
+     1  X-MULTI                      X-MULTI:a,b\,c,d
+
+-- JSCalendar+raw-props: calcard-rt lines lost after conversion and back (count, first example)
+     4  ATTENDEE                     ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE;CN="Alice Example";X-NUM-GUESTS=0:
+     1  ATTACH                       ATTACH;FILENAME=/Talk/agenda.pdf;FMTTYPE=application/pdf;X-NC-FILE-ID=4242;X-NC-HAS-PREVIEW=true:https://cloud
+     1  CONFERENCE                   CONFERENCE;FEATURE=AUDIO,VIDEO;LABEL=Talk;VALUE=URI:https://cloud.example.org/call/abcd1234
+     1  RDATE                        RDATE;VALUE=DATE-TIME:20271031T030000
+     1  SUMMARY                      SUMMARY;X-Unknown-Param=Keep:Mixed case
+     1  TRIGGER                      TRIGGER;VALUE=DURATION:-PT15M
+     1  URL                          URL;VALUE=URI:
+     1  X-APPLE-STRUCTURED-LOCATION  X-APPLE-STRUCTURED-LOCATION;X-ADDRESS="Národní 2, 110 00 Praha 1, Česko";X-APPLE-MAPKIT-HANDLE="CAESvAEaEglzSy
+     1  X-CUSTOM-CAL-PROP            X-CUSTOM-CAL-PROP;X-FOO=bar;X-QUOTED="semi;colon:comma,":value with \; esc
+
+-- JSCalendar-raw-props: calcard-rt lines lost after conversion and back (count, first example)
+    27  BEGIN                        BEGIN:VTIMEZONE
+    27  END                          END:STANDARD
+    20  DTSTART                      DTSTART:19700101T000000
+    15  TZOFFSETFROM                 TZOFFSETFROM:+0530
+    15  TZOFFSETTO                   TZOFFSETTO:+0530
+    11  DTEND                        DTEND;VALUE=DATE:20261227
+    11  TZNAME                       TZNAME:MCZ
+    10  RRULE                        RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3
+     9  DESCRIPTION                  DESCRIPTION;ALTREP="cid:part1.0001@example.org":See attachment
+     9  LAST-MODIFIED                LAST-MODIFIED:20261001T000000Z
+     8  TZID                         TZID:Musubi Custom Zone
+     5  ATTENDEE                     ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE;CN="Alice Example";X-NUM-GUESTS=0:
+     5  CALSCALE                     CALSCALE:GREGORIAN
+     3  FREEBUSY                     FREEBUSY:19980314T233000Z/19980315T003000Z
+     3  UID                          UID:A1B2C3D4-0000-1111-2222-333344445555
+     3  X-MICROSOFT-CDO-BUSYSTATUS   X-MICROSOFT-CDO-BUSYSTATUS:TENTATIVE
+     2  ATTACH                       ATTACH;FILENAME=/Talk/agenda.pdf;FMTTYPE=application/pdf;X-NC-FILE-ID=4242;X-NC-HAS-PREVIEW=true:https://cloud
+     2  DTSTAMP                      DTSTAMP:19970324T120000Z
+     2  ORGANIZER                    ORGANIZER:mailto:jsmith@example.com
+     2  TRIGGER                      TRIGGER:19980403T120000Z
+     2  URL                          URL;VALUE=URI:
+     2  X-MICROSOFT-CDO-IMPORTANCE   X-MICROSOFT-CDO-IMPORTANCE:1
+     2  X-MICROSOFT-DISALLOW-COUNTER X-MICROSOFT-DISALLOW-COUNTER:FALSE
+     2  X-MOZ-LASTACK                X-MOZ-LASTACK:20261108T101500Z
+     1  ACTION                       ACTION:AUDIO
+     1  CATEGORIES                   CATEGORIES:Project Report,XYZ,Weekly Meeting
+     1  CLASS                        CLASS:PUBLIC
+     1  COMMENT                      COMMENT:folded mid-word without space and mid-über
+     1  CONFERENCE                   CONFERENCE;FEATURE=AUDIO,VIDEO;LABEL=Talk;VALUE=URI:https://cloud.example.org/call/abcd1234
+     1  DURATION                     DURATION:PT1H
+     1  EXDATE                       EXDATE;TZID="W. Europe Standard Time":20261109T090000
+     1  LOCATION                     LOCATION;LANGUAGE=cs-CZ:Microsoft Teams Meeting
+     1  RDATE                        RDATE;VALUE=DATE-TIME:20271031T030000
+     1  RECURRENCE-ID                RECURRENCE-ID;TZID="W. Europe Standard Time":20261116T090000
+     1  REPEAT                       REPEAT:4
+     1  STATUS                       STATUS:DRAFT
+     1  SUMMARY                      SUMMARY;X-Unknown-Param=Keep:Mixed case
+     1  X-ALT-DESC                   X-ALT-DESC;FMTTYPE=text/html:<html><body><p>Ahoj\,</p><p>probereme plán Q1.</p></body></html>
+     1  X-APPLE-CREATOR-IDENTITY     X-APPLE-CREATOR-IDENTITY:com.apple.mobilecal
+     1  X-APPLE-CREATOR-TEAM-IDENTITY X-APPLE-CREATOR-TEAM-IDENTITY:0000000000
+
+-- JSContact+raw-props: calcard-rt lines lost after conversion and back (count, first example)
+    15  TEL                          TEL;TYPE=CELL:+1 650-555-0100
+    13  EMAIL                        EMAIL;TYPE=INTERNET,WORK:bob@example.org
+     7  ADR                          ADR;TYPE=HOME:;;1600 Amphitheatre Pkwy;Mountain View;CA;94043;US
+     7  N                            N:Example;Bob;;;
+     6  ORG                          ORG:Example Inc.
+     6  X-ABLABEL                    item1.X-ABLabel:Pager-ish
+     4  URL                          item2.URL:https://example.org/bob
+     3  BDAY                         BDAY:1985-07-04
+     3  NOTE                         NOTE:Imported from a Google Contacts style export (synthetic).
+     2  LANG                         LANG;PREF=1:fr
+     2  TITLE                        TITLE:Engineer
+     1  ANNIVERSARY                  ANNIVERSARY:20090808T1430-0500
+     1  IMPP                         item6.IMPP;X-SERVICE-TYPE=Skype;TYPE=pref:skype:jana.novakova
+     1  KEY                          KEY;TYPE=WORK;VALUE=URI:http://www.viagenie.ca/simon.perreault/simon.asc
+     1  NICKNAME                     NICKNAME;CHARSET=UTF-8:Janička
+     1  PHOTO                        PHOTO;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4
+     1  X-ABSHOWAS                   X-ABShowAs:PERSON
+
+-- JSContact-raw-props: calcard-rt lines lost after conversion and back (count, first example)
+    15  TEL                          TEL;TYPE=CELL:+1 650-555-0100
+    13  EMAIL                        EMAIL;TYPE=INTERNET,WORK:bob@example.org
+     7  ADR                          ADR;TYPE=HOME:;;1600 Amphitheatre Pkwy;Mountain View;CA;94043;US
+     7  N                            N:Example;Bob;;;
+     7  VERSION                      VERSION:3.0
+     7  X-ABLABEL                    item1.X-ABLabel:Pager-ish
+     6  ORG                          ORG:Example Inc.
+     4  URL                          item2.URL:https://example.org/bob
+     3  BDAY                         BDAY:1985-07-04
+     3  NOTE                         NOTE:Imported from a Google Contacts style export (synthetic).
+     2  FN                           FN;CHARSET=UTF-8:Jana Nováková
+     2  LANG                         LANG;PREF=1:fr
+     2  TITLE                        TITLE:Engineer
+     2  X-ADDRESSBOOKSERVER-MEMBER   X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:8E1D2F3A-4B5C-6D7E-8F90-A1B2C3D4E5F6
+     2  X-SOCIALPROFILE              X-SOCIALPROFILE;TYPE=mastodon:https://mastodon.example/@carol
+     1  ANNIVERSARY                  ANNIVERSARY:20090808T1430-0500
+     1  CLIENTPIDMAP                 CLIENTPIDMAP:1;urn:uuid:3df403f4-5924-4bb7-b077-3c711d9eb34b
+     1  GENDER                       GENDER:M
+     1  GEO                          GEO;TYPE=WORK:geo:46.772673,-71.282945
+     1  IMPP                         item6.IMPP;X-SERVICE-TYPE=Skype;TYPE=pref:skype:jana.novakova
+     1  KEY                          KEY;TYPE=WORK;VALUE=URI:http://www.viagenie.ca/simon.perreault/simon.asc
+     1  NICKNAME                     NICKNAME;CHARSET=UTF-8:Janička
+     1  PHOTO                        PHOTO;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4
+     1  RELATED                      RELATED;TYPE=CONTACT;VALUE=TEXT:Please contact my assistant Jane Doe for any inquiries.
+     1  REV                          REV;VALUE=DATE-AND-OR-TIME:2026-11-04T10:10:10Z
+     1  TZ                           TZ:-0500
+     1  X-ABADR                      item2.X-ABADR:cz
+     1  X-ABDATE                     item5.X-ABDATE;TYPE=pref:2015-06-20
+     1  X-ABRELATEDNAMES             item4.X-ABRELATEDNAMES;TYPE=pref;CHARSET=UTF-8:Petr Novák
+     1  X-ABSHOWAS                   X-ABShowAs:PERSON
+     1  X-ABUID                      X-ABUID:8E1D2F3A-4B5C-6D7E-8F90-A1B2C3D4E5F6:ABPerson
+     1  X-ADDRESSBOOKSERVER-KIND     X-ADDRESSBOOKSERVER-KIND:group
+     1  X-ANDROID-CUSTOM             X-ANDROID-CUSTOM:vnd.android.cursor.item/nickname\;Bobby\;1\;\;\;\;\;\;\;\;\;\;\;\;\;
+     1  X-MANAGERSNAME               X-MANAGERSNAME:Dave
+     1  X-MOZILLA-HTML               X-MOZILLA-HTML:TRUE
+     1  X-MS-OL-DEFAULT-POSTAL-ADDRESS X-MS-OL-DEFAULT-POSTAL-ADDRESS:2
+     1  X-MS-OL-DESIGN               X-MS-OL-DESIGN:<card xmlns="http://schemas.microsoft.com/office/outlook/12/electronicbusinesscards" ver="1.0" 

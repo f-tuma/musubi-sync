@@ -1,0 +1,18 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//musubi-sync//edge cases//EN
+X-CUSTOM-CAL-PROP;X-FOO=bar;X-QUOTED="semi;colon:comma,":value with \; esc
+BEGIN:VEVENT
+uid:lowercase-names@example.com
+dtstamp:20261111T120000Z
+dtstart:20261111T130000Z
+Summary;X-Unknown-Param=Keep:Mixed case
+DESCRIPTION;ALTREP="cid:part1.0001@example.org":See attachment
+X-EMPTY:
+X-MULTI:a,b\,c,d
+GEO:37.386013;-122.082932
+BEGIN:X-MUSUBI-CUSTOM
+X-INNER:keep me
+END:X-MUSUBI-CUSTOM
+END:VEVENT
+END:VCALENDAR

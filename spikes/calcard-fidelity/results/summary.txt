@@ -1,0 +1,107 @@
+== musubi: 63 files (0 non-UTF-8, read lossy), 63 objects
+parse ok             63/63 (100.0 %)   InvalidLine warnings 0   errors 0
+round-trip L0 byte-identical 29/63 (46.0 %)
+           L1 same logical lines (fold/EOL only) 32/63 (50.8 %)
+           L2 same lines, different order 0/63 (0.0 %)
+           L3 lines changed 2/63 (3.2 %)
+input logical lines not reproduced verbatim 2/792 (0.3 %)
+X- property lines verbatim 29/29 (100.0 %)   X- params verbatim 4/4 (100.0 %)
+grouped vCard lines verbatim n/a   VTIMEZONE blocks verbatim 2/3 (66.7 %)
+property order kept 62/63 (98.4 %)   idempotent (rt(rt)==rt) 63/63 (100.0 %)   AST(rt)==AST(in) 63/63 (100.0 %)
+patch Dtstart  n=43: AST route: rest byte-equal to input 42/43 (97.7 %), rest equal to calcard rt 43/43 (100.0 %)
+               raw-splice whole line ok 43/43 (100.0 %) (target name/params respelled 0/43 (0.0 %)); raw-splice value-only ok 43/43 (100.0 %)
+patch Summary  n=49: AST route: rest byte-equal to input 48/49 (98.0 %), rest equal to calcard rt 49/49 (100.0 %)
+               raw-splice whole line ok 49/49 (100.0 %) (target name/params respelled 0/49 (0.0 %)); raw-splice value-only ok 49/49 (100.0 %)
+JSCalendar+raw-props objs=63 converted+back 63/63 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 6/793 (0.8 %), properties gone 0/793 (0.0 %)
+                     properties gone: 
+JSCalendar-raw-props objs=63 converted+back 63/63 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 152/793 (19.2 %), properties gone 142/793 (17.9 %)
+                     properties gone: DTENDx46 DESCRIPTIONx24 X-UNKNOWNx10 BEGINx8 ENDx8 X-PRIVATEx7 DTSTARTx5 TZIDx3 TZOFFSETFROMx3 TZOFFSETTOx3 X-PRESERVEx3 RRULEx2
+== synth: 25 files (0 non-UTF-8, read lossy), 27 objects
+parse ok             25/25 (100.0 %)   InvalidLine warnings 0   errors 0
+round-trip L0 byte-identical 3/25 (12.0 %)
+           L1 same logical lines (fold/EOL only) 6/25 (24.0 %)
+           L2 same lines, different order 0/25 (0.0 %)
+           L3 lines changed 16/25 (64.0 %)
+input logical lines not reproduced verbatim 74/670 (11.0 %)
+X- property lines verbatim 63/69 (91.3 %)   X- params verbatim 12/14 (85.7 %)
+grouped vCard lines verbatim 10/17 (58.8 %)   VTIMEZONE blocks verbatim 4/8 (50.0 %)
+property order kept 24/25 (96.0 %)   idempotent (rt(rt)==rt) 25/25 (100.0 %)   AST(rt)==AST(in) 25/25 (100.0 %)
+patch Dtstart  n=13: AST route: rest byte-equal to input 6/13 (46.2 %), rest equal to calcard rt 13/13 (100.0 %)
+               raw-splice whole line ok 13/13 (100.0 %) (target name/params respelled 0/13 (0.0 %)); raw-splice value-only ok 13/13 (100.0 %)
+patch Summary  n=15: AST route: rest byte-equal to input 7/15 (46.7 %), rest equal to calcard rt 15/15 (100.0 %)
+               raw-splice whole line ok 15/15 (100.0 %) (target name/params respelled 1/15 (6.7 %)); raw-splice value-only ok 15/15 (100.0 %)
+patch Tel      n=8: AST route: rest byte-equal to input 2/8 (25.0 %), rest equal to calcard rt 8/8 (100.0 %)
+               raw-splice whole line ok 7/8 (87.5 %) (target name/params respelled 5/8 (62.5 %)); raw-splice value-only ok 7/8 (87.5 %)
+  raw-splice not ok x1: refused: entry count mismatch raw=11 ast=10
+JSCalendar+raw-props objs=16 converted+back 16/16 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 12/511 (2.3 %), properties gone 0/511 (0.0 %)
+                     properties gone: 
+JSCalendar-raw-props objs=16 converted+back 16/16 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 248/511 (48.5 %), properties gone 230/511 (45.0 %)
+                     properties gone: BEGINx27 ENDx27 DTSTARTx16 TZOFFSETFROMx15 TZOFFSETTOx15 DTENDx11 TZNAMEx11 RRULEx10 LAST-MODIFIEDx9 TZIDx8 DESCRIPTIONx7 CALSCALEx5
+JSContact+raw-props  objs=11 converted+back 11/11 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 74/158 (46.8 %), properties gone 0/158 (0.0 %)
+                     properties gone: 
+JSContact-raw-props  objs=11 converted+back 11/11 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 104/158 (65.8 %), properties gone 27/158 (17.1 %)
+                     properties gone: X-ABLABELx7 X-ADDRESSBOOKSERVER-MEMBERx2 X-SOCIALPROFILEx2 CLIENTPIDMAPx1 GENDERx1 GEOx1 IMPPx1 TZx1 X-ABADRx1 X-ABDATEx1 X-ABRELATEDNAMESx1 X-ABSHOWASx1
+== calcard-ical: 998 files (5 non-UTF-8, read lossy), 1288 objects
+parse ok             987/998 (98.9 %)   InvalidLine warnings 21   errors 0
+round-trip L0 byte-identical 71/987 (7.2 %)
+           L1 same logical lines (fold/EOL only) 384/987 (38.9 %)
+           L2 same lines, different order 4/987 (0.4 %)
+           L3 lines changed 528/987 (53.5 %)
+input logical lines not reproduced verbatim 8527/138371 (6.2 %)
+X- property lines verbatim 7630/7808 (97.7 %)   X- params verbatim 108/124 (87.1 %)
+grouped vCard lines verbatim 2/8 (25.0 %)   VTIMEZONE blocks verbatim 523/932 (56.1 %)
+property order kept 951/987 (96.4 %)   idempotent (rt(rt)==rt) 987/987 (100.0 %)   AST(rt)==AST(in) 987/987 (100.0 %)
+patch Dtstart  n=760: AST route: rest byte-equal to input 350/760 (46.1 %), rest equal to calcard rt 760/760 (100.0 %)
+               raw-splice whole line ok 747/760 (98.3 %) (target name/params respelled 0/760 (0.0 %)); raw-splice value-only ok 747/760 (98.3 %)
+patch Summary  n=778: AST route: rest byte-equal to input 365/778 (46.9 %), rest equal to calcard rt 778/778 (100.0 %)
+               raw-splice whole line ok 765/778 (98.3 %) (target name/params respelled 29/778 (3.7 %)); raw-splice value-only ok 765/778 (98.3 %)
+  raw-splice not ok x3: refused: 0 raw objects vs 1 parsed
+  raw-splice not ok x2: refused: 2 raw objects vs 1 parsed
+  raw-splice not ok x2: refused: 24 raw objects vs 22 parsed
+  raw-splice not ok x2: refused: name mismatch raw= ast=CATEGORIES
+  raw-splice not ok x2: refused: name mismatch raw=010000000A9E90330A8A0F547903AAFDBDD6A0D26 ast=ATTENDEE
+  raw-splice not ok x2: refused: name mismatch raw=6 BOUW VAN ENDOCRIENE SECRETIEKLIEREN EN AANPASSING AAN HUN FU ast=nctie
+  raw-splice not ok x1: refused: name mismatch raw=91307046514149 ast=X-APPLE-RADIUS
+  raw-splice not ok x1: refused: name mismatch raw=>","Æ?" ast=ATTENDEE
+  raw-splice not ok x2: refused: name mismatch raw=DEAR TEAM, ast=Dear Team
+  raw-splice not ok x2: refused: name mismatch raw=ORGANIZER="MAILTO ast=ORGANIZER
+  raw-splice not ok x2: refused: name mismatch raw=SUMMARY=TESTEVENT ast=SUMMARY
+  raw-splice not ok x1: refused: raw line without entry: ROOM 4350
+  raw-splice not ok x4: refused: raw line without entry: X
+JSCalendar+raw-props objs=1288 converted+back 1288/1288 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 4898/138348 (3.5 %), properties gone 712/138348 (0.5 %)
+                     properties gone: LOCATIONx211 METHODx146 EXDATEx122 DTSTARTx45 CATEGORIESx32 RDATEx32 DTENDx30 TRIGGERx19 ACTIONx10 ATTENDEEx9 CLASSx7 STATUSx7
+JSCalendar-raw-props objs=1288 converted+back 1288/1288 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 59401/138348 (42.9 %), properties gone 55363/138348 (40.0 %)
+                     properties gone: DTENDx6919 BEGINx5243 ENDx5243 DTSTARTx4383 TZOFFSETFROMx4257 TZOFFSETTOx4254 TZNAMEx4078 RDATEx3850 LAST-MODIFIEDx2637 RRULEx2101 TZIDx932 X-MICROSOFT-CDO-BUSYSTATUSx701
+== calcard-vcard: 244 files (11 non-UTF-8, read lossy), 1306 objects
+parse ok             243/244 (99.6 %)   InvalidLine warnings 13   errors 0
+round-trip L0 byte-identical 15/243 (6.2 %)
+           L1 same logical lines (fold/EOL only) 19/243 (7.8 %)
+           L2 same lines, different order 0/243 (0.0 %)
+           L3 lines changed 209/243 (86.0 %)
+input logical lines not reproduced verbatim 1588/9413 (16.9 %)
+X- property lines verbatim 444/506 (87.7 %)   X- params verbatim 11/16 (68.8 %)
+grouped vCard lines verbatim 235/346 (67.9 %)   VTIMEZONE blocks verbatim n/a
+property order kept 178/243 (73.3 %)   idempotent (rt(rt)==rt) 243/243 (100.0 %)   AST(rt)==AST(in) 205/243 (84.4 %)
+patch Tel      n=144: AST route: rest byte-equal to input 13/144 (9.0 %), rest equal to calcard rt 144/144 (100.0 %)
+               raw-splice whole line ok 126/144 (87.5 %) (target name/params respelled 96/144 (66.7 %)); raw-splice value-only ok 126/144 (87.5 %)
+  raw-splice not ok x1: refused: entry count mismatch raw=10 ast=9
+  raw-splice not ok x1: refused: entry count mismatch raw=14 ast=13
+  raw-splice not ok x1: refused: entry count mismatch raw=15 ast=13
+  raw-splice not ok x1: refused: entry count mismatch raw=16 ast=10
+  raw-splice not ok x1: refused: entry count mismatch raw=19 ast=15
+  raw-splice not ok x1: refused: entry count mismatch raw=19 ast=16
+  raw-splice not ok x1: refused: entry count mismatch raw=20 ast=10
+  raw-splice not ok x1: refused: entry count mismatch raw=21 ast=18
+  raw-splice not ok x1: refused: entry count mismatch raw=21 ast=19
+  raw-splice not ok x1: refused: entry count mismatch raw=22 ast=20
+  raw-splice not ok x2: refused: entry count mismatch raw=25 ast=21
+  raw-splice not ok x1: refused: entry count mismatch raw=27 ast=25
+  raw-splice not ok x1: refused: entry count mismatch raw=29 ast=14
+  raw-splice not ok x1: refused: entry count mismatch raw=35 ast=30
+  raw-splice not ok x1: refused: entry count mismatch raw=427 ast=15
+  raw-splice not ok x1: refused: entry count mismatch raw=51 ast=29
+  raw-splice not ok x1: refused: name mismatch raw=VALUE ast=other.value
+JSContact+raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 2935/8927 (32.9 %), properties gone 18/8927 (0.2 %)
+                     properties gone: Nx8 CATEGORIESx3 ORGx3 X-ABLABELx3 TELx1
+JSContact-raw-props  objs=1306 converted+back 1306/1306 (100.0 %)  X->JS->X vs calcard rt: lines not verbatim 4703/8927 (52.7 %), properties gone 713/8927 (8.0 %)
+                     properties gone: X-ABLABELx116 X-ADDRESSBOOKSERVER-MEMBERx64 LABELx53 X-ABADRx50 X-ABRELATEDNAMESx47 TZx17 Nx15 GENDERx13 IMPPx13 REVx13 X-ADDRESSBOOKSERVER-KINDx13 X-ABDATEx12

@@ -1,0 +1,7 @@
+bench n=50000 (best of 3, release build)
+iCal one VCALENDAR    36.7 MB  parse   0.174 s   210.6 MB/s    3.5 µs/event  components=50004
+                    serialize   0.100 s   372.5 MB/s  byte-identical=false
+iCal 50000 resources    59.1 MB  parse   0.530 s   111.5 MB/s   10.6 µs/resource (each with VTIMEZONE)
+                    into_jscalendar   0.463 s    9.3 µs/resource (incl. clone)
+                    expand_dates(all)   0.048 s  instances=95000 errors=0
+vCard 3.0 x50000         20.0 MB  parse   0.117 s   170.7 MB/s    2.3 µs/card

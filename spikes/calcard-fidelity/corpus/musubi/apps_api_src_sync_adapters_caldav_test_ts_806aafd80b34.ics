@@ -1,0 +1,6 @@
+BEGIN:VCALENDAR
+BEGIN:VTODO
+UID:undated@example.com
+SUMMARY:No deadline
+END:VTODO
+END:VCALENDAR

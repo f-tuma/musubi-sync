@@ -1,0 +1,15 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//musubi-sync//edge cases//EN
+BEGIN:VEVENT
+UID:fold-utf8@example.com
+DTSTAMP:20261111T120000Z
+DTSTART;VALUE=DATE:20261111
+SUMMARY:Příliš žluťoučký kůň úpěl ďábelské ódy – Příliš žluťoučký kůň úpěl
+  ďábelské ódy
+DESCRIPTION:Unfolded by a non-conforming producer: this line is far longer than seventy-five octets and is not folded at all, which many real servers emit.
+COMMENT:folded mid-word wit
+ hout space and mid-ü
+ ber
+END:VEVENT
+END:VCALENDAR
