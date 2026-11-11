@@ -1,8 +1,8 @@
 # musubi-sync: návrh samostatného synchronizačního primitiva
 
-**Datum:** 11. 11. 2026 · **Stav:** návrh k rozhodnutí, revize 6 · **Rozsah:** výzkum a architektura, žádná změna kódu
+**Datum:** 11. 11. 2026 · **Stav:** návrh k rozhodnutí, revize 7 · **Rozsah:** výzkum a architektura, žádná změna kódu
 
-Revize 6 zapisuje přijetí verdiktu o federaci a přechod Musubi najednou (kapitola 11.4). Revize 5 zapracovává rozhodnutí o ověřování a pozvánkách, která uživatel svěřil koordinátorovi. Jádro **nemá přihlašování koncových uživatelů** (kapitoly 1 a 7) a **koncové šifrování není cílem**. Pozvánky jsou nastavené tak, aby uživatel viděl **jednu pozvánku, úplný seznam účastníků a žádný spam** (kapitoly 12.7, 14.6, 14.7 a 14.9). Revize 4 přidala pravidla synchronizace v jádru ([kapitola 13](#13-pravidla-synchronizace)), plánování mezi tenanty ([kapitola 14](#14-plánování-mezi-tenanty)), posouzení federace ([kapitola 15](#15-federace)) a volitelné „smazat všude" (kapitola 12.7). Model jednoho záznamu na více místech je v [kapitole 12](#12-jeden-záznam-na-více-místech-entita-a-umístění). Stav rozhodnutí je v kapitole 11.4.
+Revize 7 zapracovává výsledky fáze 0 ([`docs/research/phase0/`](../research/phase0/)) a rozhodnutí uživatele o úložišti ze třetího kola: SQLite, jeden soubor na tenanta, s oddělenou databází outboxu (kapitoly 4.2–4.4 a 11.4). Upravuje cíle rychlosti podle měření (5.1), volbu knihoven (8), rizika (11.3) a tvrzení o poskytovatelích, která fáze 0 ověřila nebo vyvrátila. Plán fáze 1 je v [`docs/plan/phase1.md`](../plan/phase1.md). Revize 6 zapisuje přijetí verdiktu o federaci a přechod Musubi najednou (kapitola 11.4). Revize 5 zapracovává rozhodnutí o ověřování a pozvánkách, která uživatel svěřil koordinátorovi. Jádro **nemá přihlašování koncových uživatelů** (kapitoly 1 a 7) a **koncové šifrování není cílem**. Pozvánky jsou nastavené tak, aby uživatel viděl **jednu pozvánku, úplný seznam účastníků a žádný spam** (kapitoly 12.7, 14.6, 14.7 a 14.9). Revize 4 přidala pravidla synchronizace v jádru ([kapitola 13](#13-pravidla-synchronizace)), plánování mezi tenanty ([kapitola 14](#14-plánování-mezi-tenanty)), posouzení federace ([kapitola 15](#15-federace)) a volitelné „smazat všude" (kapitola 12.7). Model jednoho záznamu na více místech je v [kapitole 12](#12-jeden-záznam-na-více-místech-entita-a-umístění). Stav rozhodnutí je v kapitole 11.4.
 
 Projekt se jmenuje **musubi-sync** (repozitář `f-tuma/musubi-sync`, démon `musubi-syncd`). Je to samostatná služba a knihovna, která stahuje data z mnoha účtů u různých poskytovatelů do jednoho místa, drží je aktuální, umí do nich zapisovat zpět, udržuje jeden záznam shodný na všech jeho umístěních, zrcadlí záznamy mezi kalendáři podle pravidel uživatele, doručuje pozvánky mezi lidmi na stejném serveru a aplikacím nabízí rychlé čtení a proud změn. Musubi je první aplikace nad ním, ne jeho součást.
 
@@ -18,7 +18,7 @@ Rozhodnutí uživatele z 11. 11. 2026, která návrh bere jako daná:
 - hlavní požadavek: **jeden záznam může žít na více místech zároveň** a jádro drží všechna umístění shodná v obou směrech;
 - cílem je **rychlost samotného primitiva** (každá operace hluboko pod 1 s), ne lokální replika v klientovi;
 - **kontakty patří do první vlny** spolu s událostmi, úkoly a free/busy;
-- ověření Microsoft Graphu je **ve fázi 0**;
+- ověření Microsoft Graphu je **ve fázi 0**; dokumentační část je hotová, živé testy na účtech (T1–T12) se přesunuly před fázi, která je potřebuje (kapitola 11.1);
 - **tenant je jeden člověk.** Sdílené tenanty nejsou; lidé na stejném serveru spolu jednají pozvánkami, které doručuje jádro;
 - **pravidla synchronizace žijí v jádru** a běží bez aplikace; maska „Obsazeno" je průmět pravidla;
 - **smazání:** výchozí stav je „zaniká jen to umístění", ale **„smazat všude" je plnohodnotné nastavení** na záznamu i na pravidle;
@@ -43,11 +43,11 @@ Doporučení:
 10. **Obecná obálka místo kalendářového schématu:** jádro zná jen účet, kolekci, položku, entitu, umístění, pravidlo, kurzor, změnu, mutaci a zprávu. Události, úkoly, kontakty, později e-maily a zprávy jsou „druhy" (kinds) s vlastním kanonickým schématem a indexy.
 11. **Sync engine:** jeden aktor na účet se stavovým automatem, trvalá fronta úloh, **push všude, kde existuje** (Google watch, Graph subscriptions), adaptivní dotazování jinde. Stránka změn, sloučení do entity, vyhodnocení pravidel, indexy, záznam do žurnálu a posun kurzoru se zapisují v jedné transakci.
 12. **Zápisy:** mutace míří na entitu a přijme se v milisekundách. Na každé umístění jde vlastní podmíněný zápis (ETag / changeKey) s vlastním stavem doručení. Konflikty se slučují třícestně po polích; u stejného pole vyhrává později zpracovaná změna a poražená hodnota se uloží. Při nejistém výsledku nejdřív pozorování, teprve potom opakování.
-13. **Úložiště:** primitivum drží autorská data. Pro self-host dál doporučuji **SQLite, jeden soubor na tenanta**, pod podmínkou, že zálohování je součást první fáze. Zprávy mezi tenanty transakci přes dva soubory nepotřebují: jsou to dvě transakce s idempotentním příjmem. Pokud má být prvním nasazením hostovaná služba se závazkem dostupnosti, doporučuji začít PostgreSQL. Je to první otevřené rozhodnutí.
-14. **Rychlost:** čtení v jednotkách milisekund, změna u poskytovatele s pushem v proudu změn do 500 ms od oznámení, zápis potvrzený poskytovatelem typicky do 1 s. Podrobně kapitola 5.
+13. **Úložiště (rozhodnuto 11. 11. 2026):** primitivum drží autorská data. Pro fázi 1 i self-host je to **SQLite, sada souborů na tenanta**: hlavní databáze a oddělená databáze outboxu. Outbox je zdrojem pravdy pro mutace, hlavní databáze ho dohání podle značky (watermark). Atomicita přes dva soubory se nepředpokládá. Vlastní checkpointer, omezené čtecí transakce a zálohování jsou součást první fáze. PostgreSQL zůstává za úzkým rozhraním úložiště jako pozdější práce pro hostovanou instanci se SLA. Kapitola 4.
+14. **Rychlost:** čtení v jednotkách milisekund, změna u poskytovatele s pushem v proudu změn do 500 ms od oznámení, zápis potvrzený poskytovatelem typicky do 1 s. Přijetí mutace má p99 pod 10 ms jen mimo import stejného tenanta. Během importu je cíl p99 pod 20 ms (měřeno na btrfs bez PLP; ext4 a disk s PLP neověřeno). Podrobně kapitola 5.
 15. **Adaptér poskytovatele:** oddělený **transport** (HTTP, kurzory, push) a **kodek** (čisté funkce mezi surovými daty a kanonickým tvarem, verzované). Schopnosti jsou strukturovaná data vystavená aplikaci. Rozhraní se zmrazí až po dvou adaptérech.
 16. **Rust ano.** Dnešní pomalost způsobila architektura, ne jazyk, a propustnost jednoho účtu omezuje poskytovatel. Jazyk rozhoduje při růstu.
-17. **Plán:** fáze 0 rozhodne úložiště a ověří série v Graphu. Potom Google pro čtení, CalDAV a CardDAV, zápisy, více umístění, **pravidla synchronizace**, **plánování mezi tenanty**, Microsoft a vydání 1.0. Sdílení kalendářů ke čtení a federace přicházejí po něm. Kapitola 11.1.
+17. **Plán:** fáze 0 je hotová (úložiště, calcard, rekurence, dokumentace poskytovatelů). Živé testy na účtech (T1–T12) se přesunuly před fázi, která je potřebuje; série v Graphu (T1) blokují jen fázi 7. Potom Google pro čtení, CalDAV a CardDAV, zápisy, více umístění, **pravidla synchronizace**, **plánování mezi tenanty**, Microsoft a vydání 1.0. Sdílení kalendářů ke čtení a federace přicházejí po něm. Kapitola 11.1.
 18. **Rozsah první vlny:** celá rodina Cal (události, úkoly, kontakty, free/busy) u Googlu, Microsoftu, iCloudu a obecného CalDAV/CardDAV. Výjimka: úkoly z iCloudu nejsou přes CalDAV dostupné.
 
 ---
@@ -77,7 +77,7 @@ Lokální replika na zařízení mezi vrstvy nepatří; je to volitelná budouc�
   - MIT nemá výslovnou patentovou licenci jako Apache-2.0. Je to vědomá cena za nejjednodušší a nejznámější licenci.
   - Závislosti pod MIT, BSD, ISC a Apache-2.0 použít lze. U závislostí jen pod Apache-2.0 musí binární distribuce nést jejich licenční texty a soubory NOTICE.
   - Copyleft závislosti zůstávají vyloučené: `libdav` (EUPL-1.2) použít nejde, `calcard` (Apache-2.0 nebo MIT) ano.
-  - DAVx⁵ (GPL-3.0) a Nango (Elastic License) jsou zdroj znalostí, ne kódu (licence z paměti).
+  - DAVx⁵ (GPL-3.0) a Nango (Elastic License 2.0) jsou zdroj znalostí, ne kódu (licence ověřeny ve fázi 0).
   - Licence závislostí hlídá v CI `cargo-deny` s výčtem povolených licencí; přehled pro distribuci generuje `cargo-about`.
 
 **Multi-tenant v modelu, ne v předpokladu provozu.** Hierarchie dat je `tenant → účet → kolekce → položka` a vedle ní `tenant → entita → umístění`. **Tenant je jeden člověk** (rozhodnutí uživatele) a je to tři věci najednou:
@@ -217,7 +217,7 @@ Dva vztahy mezi kopiemi:
 
 U korelace platí dál: **propojení, ne sloučení.** Sloučení by při zápisu zpět nevědělo, kterou kopii měnit. Jediná výjimka: tatáž pozvánka doručená jednomu tenantovi schránkou jádra i poskytovatelem se spojí do jedné entity podle přesné identity iTIP (kapitola 14.7).
 
-**Nejistota:** dokumentace Graphu v1.0 říká, že `iCalUId` je identifikátor události napříč kalendáři a že se liší pro každý výskyt opakované série. Korelace série proto musí vycházet z hlavní události. Skutečné chování ověří spike ve fázi 0 (kapitola 11.2).
+**Nejistota:** dokumentace Graphu v1.0 říká, že `iCalUId` je identifikátor události napříč kalendáři a že se liší pro každý výskyt opakované série. Korelace série proto musí vycházet z hlavní události. Fáze 0 to z dokumentace potvrdila: pole `uid` (stejné pro celou sérii) je jen v betě. Skutečné chování ověří živý test T1 (krok 5) před fází 7 (kapitola 11.2).
 
 ### 2.5 Opakování a rychlé dotazy na rozsah
 
@@ -236,29 +236,31 @@ U korelace platí dál: **propojení, ne sloučení.** Sloučení by při zápis
 | --- | --- | --- | --- |
 | Kalendáře | Calendar API `calendarList` | sync token, watch kanál | barva je per uživatel |
 | Události | Calendar API `events` | sync token na kalendář (nelze kombinovat s časovým filtrem; `410` znamená plný sync), watch kanál | jen relativní připomenutí popup/e-mail; žádné plovoucí časy; role účastníka jen „volitelný"; vlastní X- vlastnosti jen přes `extendedProperties`; speciální typy (focus time, out of office, working location) mají omezení zápisu |
-| Úkoly | Tasks API | **žádný sync token, žádný push**; jen `updatedMin` + `showDeleted` | termín jen jako datum, čas se zahodí; opakování, připomenutí a přiřazení API nevystavuje; podúkoly jen přes `parent` |
+| Úkoly | Tasks API | **žádný sync token, žádný push**; jen `updatedMin` + `showDeleted` s překryvem okna (−1 min) a deduplikací podle etagu; stránka nejvýš 100 | termín jen jako datum, čas se zahodí; opakování, připomenutí a přiřazení API nevystavuje; podúkoly jen přes `parent` |
 | Free/busy | `freebusy.query` | — | |
 | Kontakty | People API | viz kapitola 2.7 | |
 
-- Limity: Calendar API 600 požadavků za minutu na uživatele a 10 000 za minutu na projekt, klouzavé okno. Tasks API 50 000 dotazů za den jako „zdvořilostní limit".
+- Limity: Calendar API 600 požadavků za minutu na uživatele a 10 000 za minutu na projekt, klouzavé okno. Tasks API 50 000 dotazů za den jako „zdvořilostní limit". Calendar API má pro projekty založené od 1. 5. 2026 navíc práh 1 000 000 požadavků za den na projekt, nad kterým se bude platit.
 - Push: oznámení nemá tělo, jen hlavičky; kanál vyprší a neobnovuje se sám; Google sám píše, že oznámení „nejsou stoprocentně spolehlivá". Po každém oznámení následuje delta dotaz a vedle toho běží pojistné dotazování.
 - Idempotentní vytvoření: klient může zadat vlastní ID události. Podmíněný zápis: ETag a `If-Match`.
-- Výchozí a maximální životnost watch kanálu a velikost dávky batch endpointu jsem z dokumentace nepotvrdil **(neověřeno)**.
+- Watch kanál: výchozí životnost 604 800 s (7 dní), maximum dokumentace neuvádí. Obnovuje se podle vrácené `expiration`, výchozí plán po 6 dnech. Skutečnou životnost ověří živý test T8 ve fázi 1.
+- Stránka `events.list` má nejvýš 2 500 položek (výchozí 250). Stránka může být prázdná a přesto nést `nextPageToken`.
+- Dávka batch má nejvýš 1 000 volání a do kvóty se počítá jako N požadavků. Neověřená aplikace s citlivými scope má strop 100 nových uživatelů celkem.
 
 **Microsoft**
 
 | Část sady | API | Delta a push | Co chybí nebo je ztrátové |
 | --- | --- | --- | --- |
 | Kalendáře | Graph `/me/calendars` | bez delty, porovnání seznamu | barva jen z předvoleb |
-| Události | Graph `events`, `calendarView` | ve v1.0 **jen `calendarView/delta`**: pevné časové okno, výskyty už rozbalené, `@removed` chodí i pro události mimo okno, `$select` nejde; neomezená `events/delta` je jen v beta. Subscriptions na `/me/events` | opakování je vlastní struktura, ne RRULE: žádné RDATE, žádná kombinace pravidel; jedno připomenutí; zóny jako Windows ID; tělo v HTML |
+| Události | Graph `events`, `calendarView` | ve v1.0 **jen `calendarView/delta`, a jen pro primární kalendář**: pevné časové okno, výskyty už rozbalené, `@removed` chodí i pro události mimo okno, `$select` nejde; neomezená `events/delta` je jen v beta. Subscriptions na `/me/events`; sekundární kalendáře jen přes subscription a dotazování | opakování je vlastní struktura, ne RRULE: žádné RDATE, žádná kombinace pravidel; jedno připomenutí; zóny jako Windows ID; tělo v HTML |
 | Úkoly | Graph To Do | delta na seznamy i úkoly, subscriptions | podúkoly jen jako plochý checklist; důležitost ve třech stupních; jedno připomenutí; podmíněný zápis není prokázaný |
 | Free/busy | `getSchedule` | — | jen pracovní a školní účty |
 | Kontakty | Graph `contacts` | viz kapitola 2.7 | |
 
-- Limity: 10 000 požadavků za 10 minut a 4 souběžné požadavky na schránku; `$batch` nejvýš 20 požadavků; při `429` hlavička `Retry-After`.
-- Subscriptions: pro zprávy, události a kontakty nejvýš 10 080 minut (necelých 7 dní), pro `todoTask` 4 230 minut a jen v globálním cloudu; nejvýš 1 000 aktivních subscriptions na schránku. Latence oznámení pro události je v dokumentaci uvedená jako „neznámá".
-- **Důsledek pro návrh:** `calendarView/delta` použít jen jako signál „v okně se něco změnilo" a jako pojistku. Pravdu o sérii načíst z hlavní události a jejích výjimek a uložit **jednu položku na sérii**. Dokumentace v1.0 čtení výjimek (`$expand=exceptionOccurrences`) a zrušených výskytů (`cancelledOccurrences`) u hlavní události popisuje. Chování na skutečných účtech ověří spike ve fázi 0, který má i dva záložní modely (kapitola 11.2).
-- Další známé nástrahy: ID se mění při přesunu, pokud se nevyžádají neměnná ID hlavičkou `Prefer`; osobní a pracovní účty se chovají různě; idempotentní vytvoření přes `transactionId` nemá zaručené nekonečné okno (zjištění Musubi).
+- Limity: 10 000 požadavků za 10 minut a 4 souběžné požadavky na schránku; `$batch` nejvýš 20 požadavků, každý se omezuje zvlášť a počítá se do 4 souběžných; při `429` hlavička `Retry-After`. Strop `odata.maxpagesize` není dokumentovaný (T3).
+- Subscriptions: pro zprávy, události a kontakty nejvýš 10 080 minut (necelých 7 dní), pro `todoTask` 4 230 minut a jen v globálním cloudu; nejvýš 1 000 aktivních subscriptions na schránku. Latence oznámení pro události je v dokumentaci uvedená jako „neznámá". S bohatými oznámeními je životnost jen 1 440 minut.
+- **Důsledek pro návrh:** `calendarView/delta` použít jen jako signál „v okně se něco změnilo" a jako pojistku. Pravdu o sérii načíst z hlavní události a jejích výjimek a uložit **jednu položku na sérii**. Dokumentace v1.0 čtení výjimek (`$expand=exceptionOccurrences`) a zrušených výskytů (`cancelledOccurrences`) u hlavní události popisuje. Fáze 0 potvrdila, že výjimky a zrušené výskyty vrací jen GET hlavní události podle ID s `$select`/`$expand` a že zrušený výskyt je znám jen datem. Chování na skutečných účtech ověří živý test T1 před fází 7. Záložní modely zůstávají (kapitola 11.2).
+- Další známé nástrahy: ID se mění při přesunu, pokud se nevyžádají neměnná ID hlavičkou `Prefer: IdType="ImmutableId"`, a to u každého požadavku i u subscription; API pro přesun neexistuje (T2); osobní a pracovní účty se chovají různě; `transactionId` má nedokumentované okno, je to pomocník, ne klíč idempotence, a obnova po nejistém vytvoření je pozorováním (T5); EWS se od 1. 10. 2026 vypíná po tenantech a 1. 4. 2027 končí úplně.
 
 **Apple iCloud**
 
@@ -268,15 +270,16 @@ U korelace platí dál: **propojení, ne sloučení.** Sloučení by při zápis
 | Úkoly | prakticky nedostupné | — | Připomínky od iOS 13 nejsou na CalDAV; staré VTODO kolekce jsou oddělený svět |
 | Kontakty | CardDAV | viz kapitola 2.7 | |
 
-- Přihlášení jen heslem pro aplikaci: vyžaduje dvoufázové ověření, nejvýš 25 hesel na účet, při změně hlavního hesla se zruší všechna. OAuth neexistuje.
-- Limity nejsou dokumentované. Je nutné chovat se zdvořile a měřit.
+- Přihlášení jen heslem pro aplikaci: vyžaduje dvoufázové ověření, nejvýš 25 hesel na účet, při změně hlavního hesla se zruší všechna. OAuth neexistuje. Odpověď `401` znamená výzvu uživateli k novému heslu, ne opakování.
+- Limity nejsou dokumentované. Výchozí souběžnost 2 na účet, respektovat `Retry-After` a přizpůsobit se při `503`/`429`.
+- `SCHEDULE-AGENT=CLIENT` iCloud podle jediné sekundární zkoušky ignoruje (T12), takže pro plánování se chová jako Graph (kapitola 14.6).
 - Poctivý závěr: **iCloud úkoly do první verze nepatří.**
 
 **Obecný CalDAV**
 
 - Sada je podle specifikace úplná, ale každý server umí něco jiného: `sync-collection` (RFC 6578) je volitelná, plánování (RFC 6638) je volitelné, VTODO se inzeruje per kolekce.
 - Delta má tři stupně podle schopností: `sync-collection`; ctag kolekce a porovnání ETagů; úplný výpis.
-- Push: WebDAV-Push je stále draft. Umí ho Nextcloud přes rozšíření a RustiCal; Stalwart zatím ne. Výchozí je dotazování.
+- Push: WebDAV-Push je soukromý draft -00 mimo IETF Datatracker. Umí ho DAVx⁵, Nextcloud přes rozšíření, RustiCal a Xandikos; Radicale a Stalwart ne. Výchozí je dotazování, WebDAV-Push je volitelná schopnost po 1.0.
 - Zjišťování služby podle RFC 6764. Přihlášení Basic, Digest nebo OAuth.
 - Limity neznámé: 1–2 souběžné požadavky na účet, multiget po desítkách položek.
 - Potřebujeme **profily serverů** (Nextcloud/Sabre, Radicale, Baikal, Fastmail, Stalwart, Zimbra, …) jako data, ne jako větve kódu.
@@ -295,9 +298,9 @@ Kontakty jsou druhy `contact` a `contact_group` ve stejné obálce jako událost
 
 | Poskytovatel | API | Delta a push | Zápis | Co chybí nebo je ztrátové |
 | --- | --- | --- | --- | --- |
-| Google | People API: `people.connections` (Moje kontakty), `contactGroups`, `otherContacts` | sync token platí 7 dní, potom plný sync; token se musí vyžádat a parametry dotazu se mezi koly nesmí změnit; `contactGroups` má vlastní sync token; **žádný push** | `updateContact` s výčtem měněných polí; vyžaduje aktuální etag (z paměti, neověřeno); fotka samostatnou metodou | `otherContacts` jsou jen pro čtení a mají tři pole (jména, e-maily, telefony); libovolné vlastnosti jen jako páry klíč–hodnota; vlastní zápis se v deltě objeví až po minutách |
-| Microsoft | Graph `/me/contacts`, `/me/contactFolders/{id}/contacts` | delta po složkách je ve v1.0 dokumentovaná; delta bez složky (`/me/contacts/delta`) funguje, ale zdroje se neshodnou, zda je dokumentovaná (neověřeno); subscriptions s životností pod 7 dní, latence oznámení v průměru pod minutu, nejvýš 3 minuty | PATCH; podmíněný zápis přes `changeKey` a `If-Match` jsem z oficiální stránky nepotvrdil (neověřeno); fotka přes `/photo/$value` | pevné schéma: telefony podle typu, omezený počet e-mailů (přesný počet neověřen), žádné libovolné vlastnosti kromě rozšíření |
-| iCloud | CardDAV na `contacts.icloud.com`, přesměrování na oddílové hostitele | ETagy; podporu `sync-collection` dokládají jen cizí projekty (neověřeno); žádný push | PUT s `If-Match` | jen vCard 3.0; skupiny jako samostatné karty s vlastnostmi Applu |
+| Google | People API: `people.connections` (Moje kontakty), `contactGroups`, `otherContacts` | sync token platí 7 dní, potom plný sync; token se musí vyžádat a parametry dotazu se mezi koly nesmí změnit; `contactGroups` má vlastní sync token; **žádný push** | `updateContact` s výčtem měněných polí; vyžaduje aktuální etag, nesoulad vrací `400 failedPrecondition` a mapuje se na konflikt; zápisy sekvenčně (souběžnost 1); značka entity v `clientData`; fotka samostatnou metodou | `otherContacts` jsou jen pro čtení a mají tři pole (jména, e-maily, telefony); libovolné vlastnosti jen jako páry klíč–hodnota; vlastní zápis se v deltě objeví až po minutách |
+| Microsoft | Graph `/me/contacts`, `/me/contactFolders/{id}/contacts` | delta po složkách: `/me/contactFolders/delta`, potom `contactFolders/{id}/contacts/delta`; delta bez složky (`/me/contacts/delta`) nepoužíváme, dokládá ji jen Q&A (T7); subscriptions s životností pod 7 dní, latence oznámení v průměru pod minutu, nejvýš 3 minuty | PATCH s `If-Match` z `@odata.etag`, ne `changeKey` (dokumentace to nepotvrzuje, T6); DELETE je nepodmíněný; fotka přes `/photo/$value` | pevné schéma: telefony podle typu, omezený počet e-mailů (přesný počet neověřen, T6), žádné libovolné vlastnosti kromě rozšíření |
+| iCloud | CardDAV na `contacts.icloud.com`, přesměrování na oddílové hostitele | ETagy; podporu `sync-collection` dokládají jen cizí projekty (neověřeno, T11), zjišťuje se z `supported-report-set`; žádný push | PUT s `If-Match`; vdirsyncer hlásí u `If-Match` odpověď `403` (neověřeno, T11) | jen vCard 3.0; skupiny jako samostatné karty s vlastnostmi Applu |
 | Obecný CardDAV | RFC 6352 | `sync-collection` je volitelná, jinak ctag a ETagy; `addressbook-multiget` | PUT s `If-Match`, vytvoření s `If-None-Match: *` | vCard 3.0 je povinná, 4.0 volitelná; podoba skupin se liší podle serveru, patří do profilu |
 
 Dva důsledky pro engine:
@@ -305,7 +308,7 @@ Dva důsledky pro engine:
 - **Po vlastním zápisu do Googlu nečekat na deltu.** Novým stavem je odpověď na zápis; delta ho potvrdí až po minutách.
 - **Kontakty u Googlu a iCloudu nemají push**, takže se na ně vztahuje adaptivní dotazování z kapitoly 3.2.
 
-Oficiální minutové kvóty People API jsem nenašel (neověřeno). Dokumentace uvádí jen zvláštní, nenavýšitelnou kvótu na první stránku plného syncu.
+Minutové kvóty People API jsou vidět jen v konzoli projektu, veřejně dokumentované nejsou. Dokumentace uvádí jen zvláštní, nenavýšitelnou kvótu na první stránku plného syncu.
 
 ---
 
@@ -333,6 +336,8 @@ Oficiální minutové kvóty People API jsem nenašel (neověřeno). Dokumentace
 
 Stahuje aktor účtu, ale revize entit zapisuje jediný zapisovatel tenanta. Entita s umístěními ve třech účtech má tak jedno pořadí změn. Stejným zapisovatelem procházejí i zprávy z jiných tenantů a vyhodnocení pravidel, takže pravidlo vidí každou revizi právě jednou.
 
+**Dva soubory na tenanta** (kapitola 4.3). „Jedna transakce" z diagramu je transakce v hlavním souboru tenanta. Přijetí mutace z API je jiná transakce v souboru outboxu. Zapisovatel tenanta ji potom promítne do hlavního souboru a ve stejné transakci posune vodoznak. Atomicita mezi soubory není; spojuje je vodoznak a idempotentní promítnutí.
+
 ### 3.1 Stavový automat účtu
 
 `Připojování → Zjišťování → Úvodní sync → Živý (push | dotazování) ⇄ Omezený (backoff) → Vyžaduje přihlášení | Pozastavený | Odebraný`
@@ -344,7 +349,7 @@ Každá kolekce má vlastní podstav: kurzor, pokrytí (okno nebo celek), čas p
 - **Trvalá fronta úloh** v úložišti: čas spuštění, pronájem (lease), sloučení duplicit. Žádný `setInterval` nad všemi uživateli.
 - **Priority:** uživatel se dívá nebo právě zapsal; přišel push; plánované dotazování; dosyp historie; pojistné srovnání.
 - **Omezovače** podle klíče (aplikace u poskytovatele, účet, hostitel), respektují `Retry-After`. Souběžnost na schránku podle poskytovatele.
-- **Push je spouštěč, ne zdroj dat.** Webhook jen označí kolekci jako špinavou. Obsah oznámení se nikdy nepoužije, vždy následuje delta. Subscriptions obnovuje plánovaná úloha zhruba ve dvou třetinách životnosti.
+- **Push je spouštěč, ne zdroj dat.** Webhook jen označí kolekci jako špinavou. Obsah oznámení se nikdy nepoužije, vždy následuje delta. Subscriptions obnovuje plánovaná úloha zhruba ve dvou třetinách životnosti. Watch kanál Googlu se obnovuje podle vrácené `expiration`, ne podle předpokládané životnosti.
 - **Adaptivní dotazování** tam, kde push není (iCloud, obecný CalDAV, Google Tasks): desítky sekund, když má uživatel otevřeného klienta; minuty v klidu; hodiny u spících účtů. Laciná kontrola (ctag, sync token) před drahým čtením.
 
 **Proč push není volitelný.** 20 000 účtů se třemi kalendáři dotazovaných každých 5 minut je 12 000 požadavků za minutu, tedy víc než výchozí limit Googlu 10 000 za minutu na projekt. Dotazování jako hlavní mechanismus má strop v jednotkách tisíc uživatelů na projekt.
@@ -379,14 +384,15 @@ Z toho plyne odolnost proti pádu: buď je stránka celá i s kurzorem, nebo nen
 ### 3.5 Zápisy: mutace, doručení a konflikty
 
 1. API přijme mutaci **entity** a ověří ji proti schopnostem jejích umístění. Zápis, který neunese hlavní nebo jediné umístění, odmítne **před přijetím** typovanou chybou. Co neunese kopie, vrátí jako seznam přibližných polí (kapitola 12.8). Každému účastníkovi přiřadí kanál pozvánky (kapitola 14.6).
-2. V jedné transakci: neměnná mutace (druh operace, výchozí revize, kanonická záplata, idempotency klíč), nová revize entity, záznam do žurnálu, **doručení pro každé umístění** (u vytváření i s předem přiděleným vzdáleným ID), umístění, která nově vyžadují pravidla, a zprávy pro místní účastníky. Klienti změnu vidí hned se stavem „čeká".
-3. Pracovník outboxu se probudí hned po commitu, ne na časovač. Umístění obsluhuje souběžně, každé z nich sériově. Adaptér pošle **podmíněný zápis** a jako základ vezme poslední surový stav, do kterého promítne jen změněná pole. Podrobnosti k latenci zápisu jsou v kapitole 5.5.
-4. Výsledky, pro každé umístění zvlášť:
+2. **Přijetí** je jedna transakce v souboru outboxu tenanta s plným fsync: neměnná mutace (druh operace, výchozí revize, kanonická záplata, idempotency klíč), **doručení pro každé umístění** (u vytváření i s předem přiděleným vzdáleným ID) a zprávy pro místní účastníky. Kontrola výchozí revize zahrnuje i nepromítnuté mutace téže entity. Tím je mutace přijatá.
+3. **Promítnutí** dělá zapisovatel tenanta hned potom, v transakci hlavního souboru: nová revize entity, záznam do žurnálu, umístění, která nově vyžadují pravidla, a vodoznak. Je idempotentní a po pádu se přehraje od vodoznaku. Doručení, která z promítnutí plynou (nová umístění podle pravidel), se zapíšou do outboxu idempotentně podle klíče (mutace, umístění). Klienti změnu vidí se stavem „čeká" po promítnutí. Kdo potřebuje vidět vlastní zápis hned, dostane od API i nepromítnuté mutace.
+4. Pracovník outboxu se probudí hned po commitu, ne na časovač. Umístění obsluhuje souběžně, každé z nich sériově. Adaptér pošle **podmíněný zápis** a jako základ vezme poslední surový stav, do kterého promítne jen změněná pole. Podrobnosti k latenci zápisu jsou v kapitole 5.5.
+5. Výsledky, pro každé umístění zvlášť:
    - **Přijato:** uloží se vrácený surový stav a validátor. Ozvěna v příští deltě je díky shodnému validátoru no-op.
    - **Konflikt (412):** načíst aktuální stav a sloučit třícestně po polích (základ, vzdálená změna, naše změna). Nepřekrývající se pole se sloučí a zápis se zopakuje. U překrývajících se rozhoduje politika: výchozí je „vyhrává příchozí změna a aplikace dostane záznam o konfliktu s poraženou hodnotou".
    - **Odmítnuto:** trvalá chyba s důvodem. Odmítne-li hlavní nebo jediné umístění, mutace se vrátí. Odmítne-li kopie, entita platí dál (kapitola 12.5).
-   - **Nejisté** (timeout po odeslání): žádné slepé opakování. Nejdřív pozorování: čtení podle předem přiděleného ID (Google), deterministické URL (CalDAV) nebo `transactionId` (Graph).
-5. Stav doručení (`čeká`, `synchronizováno`, `konflikt`, `selhalo`, `nejisté`) je v API u každého umístění a jako souhrn u entity.
+   - **Nejisté** (timeout po odeslání): žádné slepé opakování. Nejdřív pozorování: čtení podle předem přiděleného ID (Google), deterministické URL (CalDAV) nebo obsahu a značky (Graph; `transactionId` je jen pomocník s nedokumentovaným oknem).
+6. Stav doručení (`čeká`, `synchronizováno`, `konflikt`, `selhalo`, `nejisté`) je v API u každého umístění a jako souhrn u entity.
 
 U entity s jedním umístěním je to stejný postup jako v revizi 2: jedna mutace, jeden podmíněný zápis. Změna je do potvrzení optimistická vrstva nad pozorovaným stavem položky. Rozeslání na více umístění, ochranu proti smyčkám a pravidla pro schůzky popisuje kapitola 12.
 
@@ -424,13 +430,13 @@ Dvě podstatné vlastnosti zátěže:
 
 | Varianta | Pro | Proti | Verdikt |
 | --- | --- | --- | --- |
-| **SQLite, soubor na tenanta** | čtení i zápis v procesu bez síťového skoku; self-host bez externí databáze; izolace souborem; export, záloha a smazání tenanta jsou práce se souborem; FTS5; jediný zapisovatel na tenanta řadí všechny změny jedné entity za sebe bez zámků | zálohování, replikace a vysoká dostupnost jsou naše práce a u autorských dat už nejsou volitelné; mnoho souborů; migrace schématu přes N souborů; tenant sedí na jednom uzlu, takže je potřeba směrování | **doporučeno pro self-host** |
-| **PostgreSQL, sdílené** | hotová replikace, obnova k bodu v čase a spravované služby; provozně známé; dotazy napříč tenanty; RLS | síťový skok na každý dotaz i zápis; slučování entit potřebuje zámek na entitu nebo tenanta; bloat při masivních upsertech; hluční sousedé; self-hoster musí provozovat další službu | **doporučeno pro hostovanou službu se závazkem dostupnosti** |
+| **SQLite, soubor na tenanta** | čtení i zápis v procesu bez síťového skoku; self-host bez externí databáze; izolace souborem; export, záloha a smazání tenanta jsou práce se souborem; FTS5; jediný zapisovatel na tenanta řadí všechny změny jedné entity za sebe bez zámků | zálohování, replikace a vysoká dostupnost jsou naše práce a u autorských dat už nejsou volitelné; mnoho souborů; migrace schématu přes N souborů; tenant sedí na jednom uzlu, takže je potřeba směrování | **zvoleno** (11. 11. 2026): fáze 1, self-host i první hostovaná instance bez SLA |
+| **PostgreSQL, sdílené** | hotová replikace, obnova k bodu v čase a spravované služby; provozně známé; dotazy napříč tenanty; RLS | síťový skok na každý dotaz i zápis; slučování entit potřebuje zámek na entitu nebo tenanta; bloat při masivních upsertech; hluční sousedé; self-hoster musí provozovat další službu | **pozdější druhý backend** za úzkým rozhraním, pro hostovanou instanci se SLA |
 | **FoundationDB** | škáluje, striktní serializovatelnost | těžký provoz, nevhodné pro self-host, indexy i dotazovací vrstvu bychom psali sami | zamítnuto pro první verze |
 | **Vestavěné KV (RocksDB, fjall, redb)** | nejrychlejší surový zápis | vlastní indexy, vlastní dotazy, vlastní fulltext; Stalwart touto cestou šel a stála roky | zamítnuto jako primární |
 | **Log událostí + projekce** | přehratelnost | další infrastruktura; přínos pokrývá žurnál a surová vrstva | převzat vzor, ne infrastruktura |
 
-### 4.3 Doporučení a jeho hranice
+### 4.3 Rozhodnutí a jeho podmínky
 
 Revize 2 opírala volbu SQLite o větu, že primitivum je „cache s úmysly". S entitami na více místech to přestalo platit. Poctivé převážení:
 
@@ -442,30 +448,43 @@ Revize 2 opírala volbu SQLite o větu, že primitivum je „cache s úmysly". S
 | Rychlost | volání funkce | síťový skok, na stejném stroji desetiny milisekundy (odhad) |
 | Self-host | jeden binární soubor, záloha je kopie souboru | další služba k provozu |
 
-Rychlost už mezi nimi nerozhoduje: cíle z kapitoly 5.1 splní obě varianty, protože je určuje odezva poskytovatele. Rozhoduje, kdo ponese odpovědnost za zálohy a dostupnost.
+Fáze 0 to změřila ([`docs/research/phase0/storage.md`](../research/phase0/storage.md)). Výkon nerozhoduje: čtení je u SQLite rychlejší (rozsah p99 1,0 ms proti 3,4 ms u PG, pod zápisem 3,7 proti 11,2 ms), přijetí mutace vychází podobně a ani jeden backend nesplní 10 ms během importu téhož tenanta. Rozhoduje, kdo ponese odpovědnost za zálohy a dostupnost.
 
-**Doporučení má proto dvě větve:**
+**Rozhodnutí uživatele (11. 11. 2026, třetí kolo):** fáze 1 i self-host stojí na **SQLite, sadě souborů na tenanta**. Platí to i pro první hostovanou instanci bez smluvního SLA. PostgreSQL zůstává za úzkým rozhraním úložiště jako pozdější práce, až vznikne hostovaná instance se SLA. Port je podle spiku přímočarý (stejné schéma s `tenant_id`).
 
-- **Výchozí případ je self-host** (rozhodnutí uživatele). Pro něj doporučuji SQLite na tenanta, pod podmínkou, že zálohování je součást fáze 1, ne pozdější doplněk (kapitola 4.4).
-- **Pokud bude prvním produkčním nasazením hostované Musubi pro mnoho uživatelů se závazkem dostupnosti**, doporučuji začít PostgreSQL. Hotová replikace a obnova k bodu v čase mají u autorských dat větší cenu než ušetřený síťový skok.
+Rozhraní úložiště zůstává úzké (řádově 20 operací, návrh v [`docs/plan/phase1.md`](../plan/phase1.md)). Logika slučování se píše proti rozhraní, ne proti SQLite.
 
-Rozhraní úložiště zůstává úzké (řádově 20 operací). Druhý backend už není „nepsat, dokud ho někdo nepotřebuje", ale plánovaná práce: test ve fázi 0 běží na obou variantách a logika slučování se píše proti rozhraní, ne proti SQLite.
+**Soubory tenanta:**
 
-Podoba varianty SQLite:
+| Soubor | Obsah | Trvanlivost |
+| --- | --- | --- |
+| hlavní (`main.db`) | položky, surová vrstva, entity, umístění, indexy, žurnál, kurzory, vodoznak promítnutí `meta.projected` | stránky příjmu `synchronous=NORMAL`; promítnutí mutací a jiná autorská data `FULL` |
+| outbox (`outbox.db`) | mutace, doručení, odchozí zprávy | `synchronous=FULL`, vlastní zámek zapisovatele a vlastní WAL |
 
-- **Datová rovina:** režim WAL, jeden soubor na tenanta, jedno zapisovací spojení a několik čtecích, LRU cache otevřených databází, líná migrace schématu při otevření.
-- **Řídicí rovina:** malá databáze se seznamem tenantů, frontou úloh, umístěním tenantů a adresářem plánovacích adres (kapitola 14.2). Na jednom uzlu také SQLite.
-- **Velká těla:** úložiště objektů nebo souborový systém, adresované hashem.
-- **Škálování do šířky:** směrování tenanta na uzel.
+Řídicí rovina (tenanti, klíče API, účty a šifrované tokeny, fronta úloh, adresář plánovacích adres) je samostatná databáze `control.db`.
 
-**Rozhodnutí má padnout na datech:** test se syntetickým milionem událostí na obou variantách. Měří se propustnost příjmu, p99 dotazu na rozsah, p99 změn od kurzoru, cena transakce s plným fsync a doba obnovy ze zálohy.
+**Podmínky, bez kterých SQLite vychází hůř než PostgreSQL** (storage.md, kapitola 6). Jsou to požadavky na fázi 1:
 
-Hrubý odhad velikosti: 100 000 uživatelů × 5 000 událostí × přibližně 2 KB (kanonická a komprimovaná surová vrstva s indexy) je kolem 1 TB. Kalendářová data nejsou objemový problém. Pošta bude.
+1. **Outbox v samostatném souboru.** Bez něj čeká přijetí během importu téhož tenanta na stránku a reset WAL: p99 205–373 ms místo 7,7–16,1 ms.
+2. **Zdrojem pravdy pro mutace je outbox.** Mutace je přijatá, jakmile je commitnutá tam. Promítnutí do hlavního souboru je idempotentní a vodoznak se posouvá ve stejné transakci. Po pádu se přehrají mutace nad vodoznakem.
+3. **Žádná atomicita přes soubory.** `ATTACH` s transakcí přes oba soubory ji v režimu WAL nedává. Kontrola výchozí revize při přijetí zahrnuje i nepromítnuté mutace a čte entitu a umístění v jedné čtecí transakci.
+4. **Id mutací se nikdy znovu nepoužijí:** `AUTOINCREMENT`, nebo se řádky nad vodoznakem nikdy nemažou. Jinak replay přeskočí mutaci se znovu použitým id.
+5. **Vlastní checkpointer:** `PASSIVE` na pozadí; `TRUNCATE` v zapisovači po stránce příjmu nad prahem (výchozí 64 MB) s čekáním na čtenáře nejvýš 10 ms a back-offem 1 s nebo +32 MB; `journal_size_limit` a vysoký `wal_autocheckpoint` jako pojistka. Přijetí mutace reset nikdy nevolá. Bez checkpointeru narostl WAL na 1,8–3,1 GB, s ním nejvýš na 51–184 MB.
+6. **Omezená délka čtecích transakcí.** Dlouhá čtení (export, záloha) jdou přes backup API nebo `VACUUM INTO`. Nepřetržitý dlouhý čtenář nechal WAL narůst na 3–7 GB.
+7. **Build s `SQLITE_DEFAULT_MEMSTATUS=0`** (4× propustnost souběžného čtení), `busy_timeout` jako první pragma, zápisy `BEGIN IMMEDIATE`, čtecí a zapisovací spojení zvlášť.
+8. **Měřit:** největší WAL, délku `TRUNCATE` a počet neúspěšných resetů na tenanta.
+
+Podoba datové roviny dál: režim WAL, jeden zapisovatel na tenanta, LRU cache otevřených souborů (otevření pod 1 ms), líná migrace schématu při otevření (p99 ~11 ms na první požadavek, ~21 s sekvenčně pro 10 000 tenantů). Velká těla později v úložišti objektů podle hashe. Škálování do šířky směrováním tenanta na uzel.
+
+**Otevřené:** ext4/XFS a serverový disk s PLP fáze 0 neměřila (běželo se na btrfs nodatacow a spotřebitelském NVMe), stejně jako průběžný odvoz WAL a data větší než RAM. Group commit nebo sdílený accept log jsou jen návrh pro případ, že přijetí pod souběhem nebude stačit.
+
+**Velikost:** naměřeno ~4,4 KB na událost bez komprese, tedy ~2,2 TB pro 100 000 uživatelů × 5 000 událostí. Se zstd po řádcích v surové vrstvě 2,3 KB, se slovníkem na tenanta 1,9 KB (syntetická data). Zda komprimovat, se rozhodne ve fázi 1 podle reálných payloadů. Tabulky s těly kolem 1 KB nepoužívají `WITHOUT ROWID`. Kalendářová data nejsou objemový problém. Pošta bude.
 
 ### 4.4 Trvanlivost a zálohy
 
 - **Dvě úrovně potvrzení.** Transakce, která se dotkne entity s více umístěními, umístění, mutace nebo tokenů, se potvrdí až po fsync. Stránky stažených dat triviálních entit se dál zapisují bez čekání na fsync.
-- **Průběžná záloha.** U SQLite odvoz WAL do úložiště objektů nebo na druhý disk s cílem ztratit nejvýš jednotky sekund, k tomu denní snímek. Self-hosterovi bez úložiště objektů stačí snímek do adresáře.
+- **Průběžná záloha.** U SQLite odvoz WAL do úložiště objektů nebo na druhý disk s cílem ztratit nejvýš jednotky sekund, k tomu denní snímek. Odvoz WAL musí spolupracovat s naším checkpointerem a fáze 0 ho neměřila **(neověřeno)**; ve fázi 1 jsou jen snímky. Self-hosterovi bez úložiště objektů stačí snímek do adresáře.
+- **Pořadí zálohy:** backup API vezme nejdřív hlavní soubor, potom outbox. Outbox tak nikdy není starší než vodoznak v hlavním souboru a rozdíl po obnově dorovná replay. Záloha celého uzlu trvala 2–3 s na 5,5 GB (v klidu).
 - **Obnova je příkaz, ne návod:** `musubi-syncd restore`. Test obnovy běží v CI.
 - **Export tenanta** v dokumentovaném formátu, aby provozovatel nebyl na projektu závislý.
 - **Značky u poskytovatelů** (kapitola 12.10) dovolí vazby obnovit i bez zálohy tam, kde je poskytovatel unese.
@@ -491,8 +510,9 @@ Podle rozhodnutí uživatele není cílem lokální replika v klientovi, ale to,
 
 | Operace | Cíl | Co ji omezuje |
 | --- | --- | --- |
-| Dotaz na rozsah, položku nebo změny od kurzoru | p99 pod 10 ms na serveru | lokální index, žádný poskytovatel v cestě |
-| Přijetí zápisu (trvale v outboxu, viditelné v API i v proudu změn) | p99 pod 10 ms | jeden commit |
+| Dotaz na rozsah, položku nebo změny od kurzoru | p99 pod 10 ms na serveru u běžného tenanta; rozsah je stránkovaný a má variantu jen s id | lokální index, žádný poskytovatel v cestě; hustý rozsah (11 761 výskytů) trvá s payloadem 28 ms, jen s id 6,8 ms |
+| Přijetí zápisu (trvale v souboru outboxu) | p99 pod 10 ms mimo import téhož tenanta; **p99 pod 20 ms během importu téhož tenanta** | jeden commit s fsync v souboru outboxu; měřeno 7,7–16,1 ms během importu, 1,7 ms s jedním zapisovatelem, 2,9–12,2 ms při 16 tenantech naráz |
+| Viditelnost přijatého zápisu v API a v proudu změn | po promítnutí do hlavního souboru, typicky hned; během importu téhož tenanta až po rozepsané stránce **(neměřeno)** | zapisovatel tenanta |
 | Potvrzení zápisu poskytovatelem | medián pod 400 ms, p95 pod 1 s | jeden požadavek na teplém spojení; odezva poskytovatele |
 | Změna u poskytovatele → proud změn, s pushem | pod 500 ms od přijetí oznámení | jeden delta požadavek a commit |
 | Změna na jednom umístění → zapsaná na ostatních umístěních | medián pod 1 s od přijetí oznámení, má-li zdrojové umístění push | delta, sloučení do entity, jeden podmíněný zápis na každé další umístění, souběžně |
@@ -501,9 +521,10 @@ Podle rozhodnutí uživatele není cílem lokální replika v klientovi, ale to,
 | První data po připojení účtu | pod 1 s pro okno kolem dneška | jeden až dva požadavky |
 | Úplný úvodní sync | měří se propustnost: tisíce položek za sekundu na účet | velikost stránky a kvóty poskytovatele |
 
-Dvě poctivá omezení:
+Tři poctivá omezení:
 
-- **Čísla závislá na poskytovateli jsou odhady.** Odezvu Googlu, Graphu a iCloudu je nutné změřit ve fázi 0 a cíle podle toho upravit.
+- **Čísla závislá na poskytovateli jsou odhady.** Fáze 0 odezvu poskytovatelů neměřila, protože neměla živé účty. Změří ji živé kontroly na testovacích účtech, pro Google na konci fáze 1. Cíle se podle nich upraví.
+- **Cíl přijetí během importu téhož tenanta je uvolněný na p99 pod 20 ms.** Na sdíleném disku bez PLP nesplní 10 ms ani SQLite, ani PostgreSQL (~11–37 ms). S dlouhým čtenářem stoupne chvost SQLite na 54–83 ms, proto jsou čtecí transakce omezené (kapitola 4.3). Na ext4/XFS a disku s PLP se neměřilo **(neověřeno)**.
 - **Dvě věci pod 1 s dostat nejde.** Zjištění cizí změny u poskytovatele bez pushe je omezené intervalem dotazování. A doba, za kterou poskytovatel oznámení pošle, je mimo naši kontrolu: Graph pro události latenci neuvádí vůbec.
 
 Vlastní režie jádra nad časem stráveným u poskytovatele má být u inkrementálního syncu pod 20 ms.
@@ -511,19 +532,19 @@ Vlastní režie jádra nad časem stráveným u poskytovatele má být u inkreme
 ### 5.2 Síť
 
 - **Teplá spojení.** Jeden sdílený HTTP klient na hostitele poskytovatele, HTTP/2 s multiplexováním, keep-alive, obnovení TLS relace, cache DNS. Zápis ani delta neplatí za navázání spojení.
-- **Největší povolená stránka.** Google events dovoluje až 2 500 položek na stránku (z paměti; výchozí je 250), People API 1 000, Google Tasks 100. Graph řídí hlavička `Prefer: odata.maxpagesize` (strop neověřen). Musubi dnes používá 100 u Googlu i Graphu.
+- **Největší povolená stránka.** Google events dovoluje až 2 500 položek na stránku (výchozí je 250; stránka může být prázdná a mít `nextPageToken`), People API 1 000, Google Tasks 100. Graph řídí hlavička `Prefer: odata.maxpagesize`; strop není dokumentovaný (T3), takže adaptér velikost stránky nepředpokládá. Musubi dnes používá 100 u Googlu i Graphu.
   Příklad: úvodní sync kalendáře s 10 000 událostmi je při stránce 100 položek 100 po sobě jdoucích požadavků, při stránce 2 500 čtyři. Při odezvě kolem 300 ms na požadavek je to rozdíl mezi půl minutou a několika sekundami (odhad).
 - **Jen potřebná pole.** Google `fields`, Graph `$select` tam, kde ho delta dovoluje, u CalDAV jen ETag a data.
 - **Komprese** odpovědí (gzip).
 - **Co nejméně kol.** Nejdřív laciná kontrola (sync token, ctag), drahé čtení až při změně. U CalDAV `sync-collection` a hned `multiget` po dávkách; zda server vrátí data už v odpovědi na `sync-collection`, patří do profilu serveru.
-- **Dávky.** Graph `$batch` (nejvýš 20 požadavků) pro dotažení hlavních událostí sérií a pro hromadné zápisy. Dávkový endpoint Googlu po ověření limitu.
+- **Dávky.** Graph `$batch` (nejvýš 20 požadavků) pro dotažení hlavních událostí sérií a pro hromadné zápisy. Dávkový endpoint Googlu nese nejvýš 1 000 volání, ale do kvóty se počítá jako N požadavků, takže šetří spojení, ne kvótu. People API `batch*Contacts` nejvýš 200 kontaktů.
 - **Obnova tokenu předem.** Token se obnovuje před vypršením a jen jednou na účet, takže žádný požadavek nečeká na obnovu ani neopakuje po `401`.
 - **Cache zjišťování.** Principal, home set a oddílový hostitel iCloudu se ukládají a zneplatní až při přesměrování nebo `404`. Musubi podle vlastního auditu zjišťování opakuje.
 
 ### 5.3 Souběžnost v mezích limitů
 
 - **Mezi účty** plně paralelně. Nad tím společný rozpočet na aplikaci u poskytovatele (Google 10 000 požadavků za minutu na projekt).
-- **Uvnitř účtu** kolekce paralelně až do limitu poskytovatele: Graph 4 souběžné požadavky na schránku, Google 600 požadavků za minutu na uživatele, CalDAV 2–4 spojení podle profilu serveru.
+- **Uvnitř účtu** kolekce paralelně až do limitu poskytovatele: Graph 4 souběžné požadavky na schránku včetně požadavků uvnitř `$batch`, Google 600 požadavků za minutu na uživatele, People API zápisy po jednom, iCloud 2 spojení, obecný CalDAV 2–4 podle profilu serveru.
 - **Adaptivní řízení.** Souběžnost roste, dokud nepřijde `429` nebo `503`, potom klesne a respektuje `Retry-After`.
 - **Stránky jedné kolekce jdou po sobě**, protože je řetězí kurzor. Zpracování je ale proudové: další stránka se stahuje, zatímco se předchozí dekóduje a zapisuje.
 - **Dva pruhy s vyhrazenou kvótou.** Interaktivní práce (zápisy, okno viditelné uživateli, reakce na push) má vyhrazený podíl limitu. Dosyp historie a pojistná srovnání ji nesmí vyhladovět.
@@ -548,8 +569,8 @@ Vlastní režie jádra nad časem stráveným u poskytovatele má být u inkreme
 
 ### 5.6 Cesta zápisu do databáze
 
-- **Jedna transakce na stránku** (stovky až tisíce řádků), připravené dotazy, víceřádkové upserty.
-- **Jeden zapisovatel na tenanta** (aktor), takže žádné soupeření o zámky. Čtenáři běží souběžně díky WAL.
+- **Jedna transakce na stránku** (stovky až tisíce řádků) v hlavním souboru, připravené dotazy, víceřádkové upserty. Mutace jdou do samostatného souboru outboxu (kapitola 4.3), takže přijetí nečeká na stránku příjmu.
+- **Jeden zapisovatel na soubor** (aktor tenanta pro hlavní soubor, přijetí mutací pro outbox), takže žádné soupeření o zámky. Čtenáři běží souběžně díky WAL a jejich transakce mají omezenou délku.
 - **Všechno drahé před transakcí:** dekódování, index výskytů, hashe a komprese se spočítají předem. Transakce jen vkládá.
 - **Dvě úrovně trvanlivosti.** Stažená data se zapisují bez čekání na fsync každé transakce: jdou stáhnout znovu a kurzor je ve stejné transakci, takže po výpadku zůstane stav konzistentní. Mutace, tokeny a všechno, co se týká entit s více umístěními, se zapisuje s plným fsync (kapitola 4.4).
 - **Málo indexů.** Každý index zpomaluje zápis. Nutných je pět: vzdálený klíč, čas výskytu, `seq`, vazba položka–entita a u kontaktů e-mail s telefonem.
@@ -630,7 +651,7 @@ Strukturovaná data na účet a kolekci, vystavená v API, aby aplikace uměla f
 - druhy položek a čtení/zápis;
 - delta: `SyncToken | WindowedDelta | CtagEtag | None`;
 - push: `Webhook | None`;
-- podmíněný zápis: `StrongValidator | Unproven | None`;
+- podmíněný zápis zvlášť pro úpravu a pro smazání a pro každý druh položky (`conditional_update`, `conditional_delete`: `StrongValidator | Unproven | None`). Fáze 0 ukázala, že se liší: Graph DELETE je nepodmíněný a To Do nemá podmíněný zápis vůbec;
 - vytvoření s klientským ID: ano/ne;
 - opakování: `Full | Finite | ReadOnly | None`;
 - zóny: `Iana | WindowsIds | CustomVtimezone`;
@@ -666,8 +687,8 @@ Scénáře jsou jazykově neutrální JSON, takže stávající scénáře Musub
 - **Šifrování tajemství.** Obálkové šifrování: datový klíč na tenanta, zabalený hlavním klíčem z KMS nebo ze souboru (self-host). Tokeny a hesla šifrovaná po polích AEAD šifrou s vazbou na tenanta a účet, aby šifrový text nešel přenést do jiného řádku. Identifikátor klíče u každé hodnoty kvůli rotaci.
 - **Ověřování volajících.** Jádro nemá přihlašování koncových uživatelů: žádná hesla, relace, obnova hesla, 2FA ani e-maily (rozhodnuto). Aplikace své uživatele ověřuje sama a jádru předává jen tenanta. Jádro přijímá:
   - **klíč API vázaný na tenanta** pro servery aplikací. Je náhodný, uložený jen jako hash a má rozsah (čtení, zápis, správa účtů). Dva klíče mohou platit zároveň, aby šel klíč vyměnit bez výpadku;
-  - **krátkodobý token** pro klienty. Vydá ho `POST /v1/tokens` držiteli klíče. Nese tenanta, rozsah (účty, kolekce, čtení nebo zápis) a platnost (návrh: 15 minut). Podepisuje ho instance, takže se ověří bez dotazu do databáze;
-  - **přístupový token z vnějšího IdP** (OIDC, JWT) pro samostatný self-host. Konfigurace vyjmenuje důvěryhodné vydavatele. Jádro načte jejich klíče přes OIDC discovery (JWKS), ověří podpis, `iss`, `aud`, `exp` a `nbf`, přijme jen vyjmenované asymetrické algoritmy a dvojici (vydavatel, `sub`) přiřadí tenantovi. Nového tenanta založí samo, jen když to konfigurace povolí;
+  - **krátkodobý token** pro klienty. Vydá ho `POST /v1/tokens` držiteli klíče. Nese tenanta, rozsah (účty, kolekce, čtení nebo zápis) a platnost (návrh: 15 minut). Podepisuje ho instance klíčem Ed25519, takže se ověří bez dotazu do databáze a bez operace se soukromým klíčem RSA (RUSTSEC-2023-0071, kapitola 8);
+  - **přístupový token z vnějšího IdP** (OIDC, JWT) pro samostatný self-host. Konfigurace vyjmenuje důvěryhodné vydavatele. Jádro načte jejich klíče přes OIDC discovery (JWKS), ověří podpis, `iss`, `aud`, `exp` a `nbf`, přijme jen vyjmenované asymetrické algoritmy a dvojici (vydavatel, `sub`) přiřadí tenantovi. Načítání a cache JWKS jsou náš kód: respektuje `Cache-Control` a při neznámém `kid` obnoví klíče nejvýš jednou s omezením četnosti. Nového tenanta založí samo, jen když to konfigurace povolí;
   - **správcovský klíč instance** z konfigurace. Zakládá tenanty, vydává jejich klíče a potvrzuje plánovací adresy. Data tenantů nečte.
 - **OAuth k poskytovatelům** zůstává v jádru, včetně uložení, obnovy a rotace tokenů. Dva režimy: služba vede tok sama s klientem provozovatele, nebo aplikace předá hotový grant. PKCE, minimální a přírůstkové scope podle druhů dat. Odkaz na připojení vytvoří jen ověřený volající. Parametr `state` je jednorázový, krátkodobý a vázaný na tenanta, takže zpětné volání od poskytovatele jiný průkaz nepotřebuje.
 - **Obnova tokenů.** Jedna obnova na účet najednou. Microsoft refresh token rotuje, nový se musí trvale uložit dřív, než se použije přístupový. `invalid_grant` znamená stav „vyžaduje přihlášení", ne opakování.
@@ -704,9 +725,9 @@ Scénáře jsou jazykově neutrální JSON, takže stávající scénáře Musub
 **Co jazyk změní, až poroste počet účtů:**
 
 1. **Všechna jádra v jednom procesu.** Tokio rozkládá úlohy na všechna jádra a ta sdílejí tytéž omezovače, spojení a cache bez kopírování. Node.js vykonává JavaScript v jednom vlákně. Práci pro CPU je nutné posílat do worker vláken, která paměť nesdílejí a data si kopírují, nebo spustit víc procesů a koordinovat je přes databázi. Musubi dnes běží jako jediný proces a vynucuje to zámkem.
-2. **Paměť na aktora účtu.** Aktor je úloha se stavovým automatem v řádu kilobajtů. 100 000 připojených účtů, z nichž většina spí, vychází na stovky megabajtů. V Node.js nese každý účet objekty, uzávěry a časovače na haldě V8, jejíž úklid se s objemem živých dat prodražuje. Pro self-hostera je to rozdíl mezi malým VPS a větším strojem. Čísla jsou odhad k přeměření ve fázi 0.
+2. **Paměť na aktora účtu.** Aktor je úloha se stavovým automatem v řádu kilobajtů. 100 000 připojených účtů, z nichž většina spí, vychází na stovky megabajtů. V Node.js nese každý účet objekty, uzávěry a časovače na haldě V8, jejíž úklid se s objemem živých dat prodražuje. Pro self-hostera je to rozdíl mezi malým VPS a větším strojem. Čísla jsou odhad; fáze 0 je neměřila a změří je benchmark fáze 1.
 3. **Latence bez pauz garbage collectoru.** Cíl p99 pod 10 ms pro čtení nesnese zastavení celého procesu uprostřed dosypu cizího účtu. Velká halda V8 přináší pauzy v desítkách milisekund (odhad). Rust globální pauzy nemá. Go s konkurenčním GC by tento bod splnilo také.
-4. **Cena parsování, opakování a slučování.** Práce pro CPU jsou: parsování ICS a vCard, rozbalení opakování na sedmiletý horizont, hash a komprese, a nově průmět a rozdíl pro každé umístění entity. V jednom vlákně tato práce blokuje ostatní tenanty, dokud se ručně nerozdělí na kousky. V Rustu běží souběžně na všech jádrech. Na položku čekám rozdíl o řád: desítky mikrosekund proti stovkám mikrosekund až milisekundám (odhad, změřit ve fázi 0 proti dnešním kodekům Musubi).
+4. **Cena parsování, opakování a slučování.** Práce pro CPU jsou: parsování ICS a vCard, rozbalení opakování na sedmiletý horizont, hash a komprese, a nově průmět a rozdíl pro každé umístění entity. V jednom vlákně tato práce blokuje ostatní tenanty, dokud se ručně nerozdělí na kousky. V Rustu běží souběžně na všech jádrech. Na položku čekám rozdíl o řád: desítky mikrosekund proti stovkám mikrosekund až milisekundám (odhad). Fáze 0 změřila parsování v `calcard` na 111–210 MB/s a rozbalení 10 000 sérií v pětiletém okně (3,7 mil. výskytů) na 2,2–3,1 s včetně formátování. Přímé srovnání s kodeky Musubi neproběhlo.
 5. **Jeden statický binární soubor** bez běhového prostředí. U open-source projektu určeného k self-hostu je to polovina instalace.
 6. **Ekosystém pošty a kalendářů.** Stalwart (server pošty, kalendářů a kontaktů v Rustu) vydává své knihovny samostatně.
 7. **Otevřená cesta do klientů.** Kodeky a rekurenci půjde později přeložit pro mobilní platformy a WASM, pokud replika na zařízení někdy vznikne.
@@ -722,18 +743,18 @@ Protiargumenty jsou reálné: pomalejší iterace než v TypeScriptu, těžce z�
 | Async runtime | `tokio` | zralé |
 | HTTP klient | `reqwest` (hyper, rustls) | zralé; opakování a limity vlastní (`governor`) |
 | HTTP server, SSE | `axum`, `tower-http` | zralé |
-| OAuth k poskytovatelům | `oauth2` | zralé; rotace a single-flight vlastní |
-| Ověření tokenů z vnějšího IdP, podpis krátkodobých tokenů | `jsonwebtoken` a vlastní malá cache JWKS; `openidconnect` jen pokud se vyplatí jeho hotové discovery | zralé (z paměti, neověřeno). Knihovna pro relace a přihlášení (`axum-login`) není potřeba: jádro uživatele nepřihlašuje |
+| OAuth k poskytovatelům | `oauth2` 5.0 | zralé; rotace a single-flight vlastní |
+| Ověření tokenů z vnějšího IdP, podpis krátkodobých tokenů | `jsonwebtoken` 11 s backendem `rust_crypto` a vlastní malá cache JWKS; `openidconnect` 4.1 (MIT) jen pokud se ve fázi 8 vyplatí jeho hotové discovery | zralé. Obě knihovny táhnou `rsa` 0.9 s advisory **RUSTSEC-2023-0071** (Marvin, časový postranní kanál při operaci se soukromým klíčem RSA). Ověření podpisu se netýká a krátkodobé tokeny podepisujeme Ed25519, takže soukromý klíč RSA nepoužíváme. `cargo-deny` proto potřebuje dočasnou výjimku, dokud knihovny nepřejdou na `rsa` 0.10 (vydáno 8. 11. 2026). Backend `aws_lc_rs` zamítnut kvůli C a CMake. Zdvojené `p256`/`p384` 0.13/0.14 a `ed25519-dalek` 2/3 potřebují výjimku `multiple-versions`. Knihovna pro relace a přihlášení (`axum-login`) není potřeba: jádro uživatele nepřihlašuje |
 | JSON | `serde`, `serde_json` (`RawValue` pro surová data) | zralé |
-| iCalendar, vCard, JSCalendar, JSContact | `calcard` (Stalwart, Apache-2.0/MIT) | aktivní, ale mladé (0.3.x, 2026), chybí dokumentace builderu. **Ověřit:** bezeztrátové zachování neznámých vlastností a zda upstream umí rozbalení opakování (uvádí ho fork `calcard-next`) |
-| Opakování (RRULE) | `rrule`, případně fork `rrule2` | **největší riziko.** Upstream je pomalý, port na `jiff` je otevřený PR ze září 2026. Zabalit za vlastní modul a počítat s převzetím |
-| Čas a zóny | `jiff` | moderní a správné kolem DST. Neumí vlastní VTIMEZONE: mapovat na IANA podle TZID, surovou definici zachovat |
+| iCalendar, vCard, JSCalendar, JSContact | `calcard` (Stalwart, Apache-2.0/MIT), pinnutý `=0.3.x` za naším adaptérem | ověřeno ve fázi 0 ([calcard.md](../research/phase0/calcard.md)): parsuje 98,9 % korpusu, AST neztrácí data, 111–210 MB/s. **Zápis přes `to_string()` ani cestou JSCalendar/JSContact → iCal/vCard nikdy:** serializace normalizuje. Pro zápis vlastní vrstva záplat surového textu. Čtecí model JSCalendar/JSContact jen s `include_ical_components(true)` a `include_vcard_parameters(true)`. Vlastní VTIMEZONE tiše nerozpozná, proto vlastní detekce přes `build_tz_resolver().resolve()`. `expand_dates` nemá okno a chybuje kolem DST, pro rozbalení se nepoužije |
+| Opakování (RRULE) | převzaté (vendored) jádro `rrule` 0.14 ve vlastním modulu `musubi-recurrence` za hranou nad `jiff` | rozhodnuto ve fázi 0 ([recurrence.md](../research/phase0/recurrence.md)): v korpusu 0 chyb jádra. Jádro dostává jen civilní čas označený jako UTC a zóny nevidí. Upstream se od dubna 2025 nemění, kód udržujeme sami; seznam 12 povinných úprav je v recurrence.md. Záloha: port na jiff `ccope/rust-rrule@50db3e2` za stejnou hranou. `calcard-next` jen jako referenční engine v diferenciálním testu |
+| Čas a zóny | `jiff` s aktualizovatelnou tzdb (systémová, přibalená jako záloha) | moderní a správné kolem DST. `chrono-tz` ne: má zakompilovanou tzdb 2025b, která se od 2026f liší ve 22 zónách. Řetěz řešení TZID: IANA → `X-LIC-LOCATION` → mapa Windows z CLDR → přípona za předponou Mozilly → vlastní VTIMEZONE převedená na POSIX → hlasitá chyba. Surovou definici zachovat |
 | Windows ID ↔ IANA | vlastní malá tabulka z CLDR | Musubi má vendorovaný CLDR 48 |
 | XML | `quick-xml` | zralé |
 | WebDAV, CalDAV klient | **vlastní tenký klient** | `libdav` (pimsync) existuje a je aktivní, ale má copyleft licenci EUPL-1.2, která se s jádrem pod licencí MIT neslučuje. Vlastní klient pro CalDAV i CardDAV jsou nižší tisíce řádků |
 | Zjišťování služby | `hickory-resolver` | zralé |
-| SQLite | `rusqlite` s přibaleným SQLite | zralé; správa mnoha databází vlastní |
-| PostgreSQL (pokud) | `sqlx` nebo `tokio-postgres` | zralé |
+| SQLite | `rusqlite` s přibaleným SQLite, build s `SQLITE_DEFAULT_MEMSTATUS=0` (`LIBSQLITE3_FLAGS`) | zralé; správa mnoha databází, checkpointer a promítnutí outboxu vlastní (kapitola 4.3) |
+| PostgreSQL (později, hostovaná instance se SLA) | `tokio-postgres` (spike použil pipelining a `unnest`) | zralé |
 | Objekty | `object_store` | zralé |
 | Kryptografie | RustCrypto (`aes-gcm`, `chacha20poly1305`), `secrecy`, `zeroize` | zralé |
 | Pozorovatelnost | `tracing`, `opentelemetry`, `metrics` | zralé |
@@ -741,16 +762,16 @@ Protiargumenty jsou reálné: pomalejší iterace než v TypeScriptu, těžce z�
 | Testy | `wiremock`, `insta`, `proptest` | zralé |
 | Později pošta | `mail-parser`, `mail-builder`, `imap-codec`, `jmap-client` | dobrý stav |
 
-Licence jednotlivých závislostí jsem neověřoval po jedné. Tabulka ji uvádí jen tam, kde rozhoduje; před prvním vydáním je projde `cargo-deny`.
+Licence klíčových závislostí ověřila fáze 0 (providers.md, calcard.md, recurrence.md). Převzaté jádro `rrule` potřebuje `LICENSE-MIT`, `LICENSE-APACHE` a copyright „2021 Fredrik Meringdal, Ralph Bisschops". Licence a advisories hlídá `cargo-deny` v CI od fáze 1, ne až před vydáním.
 
 ### Kde budeme psát vlastní
 
-1. **Rekurence**: vlastní modul, diferenciální testy proti `python-dateutil`, `ical.js` a skutečným rozbalením od poskytovatelů.
+1. **Rekurence**: vlastní modul s převzatým jádrem `rrule`, vlastní hranou pro zóny a politikou (povinné okno, strop výskytů). Diferenciální testy ze spiku proti `python-dateutil` a `calcard-next` v CI, `tzcheck` při každé aktualizaci tzdb, později skutečná rozbalení od poskytovatelů.
 2. **CalDAV a CardDAV klient** včetně profilů serverů.
 3. **Klienti Google a Graph**: tenké typované obálky nad pár koncovými body.
-4. **Převod opakování Graph ↔ RRULE** a tabulka zón.
-5. **Záplatování surového iCalendaru** tak, aby se nedotčené části nezměnily ani o bajt.
-6. **Správa SQLite per tenant, průběžná záloha a obnova.**
+4. **Převod opakování Graph ↔ RRULE**, tabulka zón a cache JWKS.
+5. **Záplatování surového iCalendaru a vCard** tak, aby se nedotčené části nezměnily ani o bajt: změna jen hodnoty, odmítnutí řádků s `ENCODING`/`CHARSET`, po každé změně nové parsování a srovnání AST, při nesouladu odmítnutí. Odhad 400–800 řádků **(neověřeno)**. Ve spiku zůstalo beze změny 98,3 % případů iCal a 87,5 % případů vCard `TEL`; zbytek vrstva odmítla.
+6. **Správa SQLite per tenant**: dva soubory, checkpointer, promítnutí outboxu s vodoznakem, snímky a obnova, později průběžný odvoz WAL.
 7. **Průmět, `lift` a třícestné slučování entit** (kapitola 12). Hotová knihovna pro to neexistuje.
 
 ---
@@ -846,20 +867,28 @@ Vlastní audit Musubi (`docs/research/nylas/04-musubi-audit.md`, oddíl 9) jmenu
 
 | Fáze | Obsah | Kritérium hotovo |
 | --- | --- | --- |
-| **0. Rozhodovací testy** (3–4 týdny) | spike Microsoft Graph (kapitola 11.2); srovnání úložišť na obou variantách včetně obnovy ze zálohy; zkouška `calcard` na reálných ICS a vCard; diferenciální test rekurence; kostra benchmarků s falešnými servery; změření odezvy poskytovatelů; změření CPU a paměti proti dnešním kodekům Musubi; ověření skrytých značek, potlačení pozvánek (i po účastnících: `SCHEDULE-AGENT` na iCloudu, samostatný požadavek se `sendUpdates=none` u Googlu), zápisu odpovědi účastníka organizátorem, shody UID pozvánky mezi schránkami a toho, jak poskytovatelé hlásí přesun položky mezi kalendáři | rozhodnutí o úložišti, o knihovně rekurence a o modelu sérií v Graphu podložené čísly; potvrzené nebo upravené cíle z kapitoly 5.1 |
-| **1. Důkaz jádra** | Google Calendar jen čtení: OAuth, zjišťování, proudový úvodní sync, inkrement, watch kanály s pojistným dotazováním, tři vrstvy dat, index výskytů, SSE, základ konformační sady. **Entity a umístění jsou v datech i v API od začátku** (zatím vždy jedno umístění). Zálohování a obnova. Klíče API a krátkodobé tokeny | první data do 1 s od připojení; změna u Googlu v proudu změn do 500 ms od oznámení; dotaz na rozsah p99 pod 10 ms; `kill -9` v libovolném okamžiku bez ztráty a duplicit; obnova ze zálohy projde v CI |
-| **2. Druhý adaptér a celá rodina pro čtení** | obecný CalDAV a CardDAV včetně iCloudu: události, VTODO, kontakty; Google Tasks a People API; adaptivní dotazování | stejná sada testů prochází pro oba adaptéry; rozhraní adaptéru zmrazeno jako v0 |
-| **3. Zápisy** | mutace entity, doručení na jedno umístění, podmíněné zápisy, konflikty, nejisté výsledky pro Google a DAV, pro události, úkoly i kontakty; RSVP a změny organizátora | zápis potvrzený poskytovatelem p95 pod 1 s proti falešnému serveru s realistickou odezvou; scénáře konfliktu a nejistého vytvoření prochází; žádná duplicita při pádu |
-| **4. Více umístění** | materializované entity, průmět a `lift`, rozeslání, příchozí slučování, záznamy o konfliktech, mazání včetně politiky `on_remote_delete` a obnovy z náhrobku, pravidla pro účastníky, připojení a odpojení, značky; Google a DAV; události, úkoly i kontakty | úprava na jednom umístění je na ostatních do 1 s od oznámení; souběžná úprava různých polí se sloučí; stejného pole skončí záznamem o konfliktu; ztrátové umístění nezničí bohatší data (property testy); žádná smyčka mezi dvěma falešnými servery, které normalizují různě; žádná druhá pozvánka; s `propagate` zmizí záznam všude jen na výslovný důkaz a hromadné smazání se pozdrží; pád kdykoli bez duplicit a bez ztráty vazby; obnova ze starší zálohy se dorovná |
+| **0. Rozhodovací testy** — **hotovo** | srovnání úložišť ([storage.md](../research/phase0/storage.md)); zkouška `calcard` ([calcard.md](../research/phase0/calcard.md)); diferenciální test rekurence ([recurrence.md](../research/phase0/recurrence.md)); ověření tvrzení o poskytovatelích z dokumentace a plán živých testů T1–T12 ([providers.md](../research/phase0/providers.md)) | úložiště rozhodnuto (SQLite, kapitola 11.4); knihovna rekurence a calcard rozhodnuty (kapitola 8); cíle z kapitoly 5.1 upravené podle měření; model sérií v Graphu má oporu v dokumentaci, živé potvrzení (T1) před fází 7 |
+| **1. Důkaz jádra** ([plán](../plan/phase1.md)) | Google Calendar jen čtení: OAuth, zjišťování, proudový úvodní sync, inkrement, watch kanály s pojistným dotazováním, tři vrstvy dat, index výskytů, SSE, základ konformační sady. **Entity a umístění jsou v datech i v API od začátku** (zatím vždy jedno umístění). Úložiště SQLite podle podmínek z kapitoly 4.3, zálohování a obnova. Klíče API a krátkodobé tokeny. CI s `cargo-deny` | první data do 1 s od připojení; změna u Googlu v proudu změn do 500 ms od oznámení (proti falešnému serveru); dotaz na rozsah p99 pod 10 ms u běžného tenanta; `kill -9` v libovolném okamžiku bez ztráty a duplicit; obnova ze zálohy projde v CI; WAL omezený checkpointerem; živá kontrola proti testovacímu účtu Google včetně T8 |
+| **2. Druhý adaptér a celá rodina pro čtení** | obecný CalDAV a CardDAV včetně iCloudu: události, VTODO, kontakty; Google Tasks a People API; adaptivní dotazování; předem živé testy T10 a T11 | stejná sada testů prochází pro oba adaptéry; rozhraní adaptéru zmrazeno jako v0 |
+| **3. Zápisy** | soubor outboxu a promítnutí s vodoznakem (kapitola 4.3); mutace entity, doručení na jedno umístění, podmíněné zápisy, konflikty, nejisté výsledky pro Google a DAV, pro události, úkoly i kontakty; RSVP a změny organizátora; předem živý test T9 | zápis potvrzený poskytovatelem p95 pod 1 s proti falešnému serveru s realistickou odezvou; scénáře konfliktu a nejistého vytvoření prochází; žádná duplicita při pádu |
+| **4. Více umístění** | předem živý test T2 (přesuny); materializované entity, průmět a `lift`, rozeslání, příchozí slučování, záznamy o konfliktech, mazání včetně politiky `on_remote_delete` a obnovy z náhrobku, pravidla pro účastníky, připojení a odpojení, značky; Google a DAV; události, úkoly i kontakty | úprava na jednom umístění je na ostatních do 1 s od oznámení; souběžná úprava různých polí se sloučí; stejného pole skončí záznamem o konfliktu; ztrátové umístění nezničí bohatší data (property testy); žádná smyčka mezi dvěma falešnými servery, které normalizují různě; žádná druhá pozvánka; s `propagate` zmizí záznam všude jen na výslovný důkaz a hromadné smazání se pozdrží; pád kdykoli bez duplicit a bez ztráty vazby; obnova ze starší zálohy se dorovná |
 | **5. Pravidla synchronizace** | model pravidla, vyhodnocení v transakci, jednosměrná a obousměrná pravidla, filtr, maska „Obsazeno", dosyp s náhledem, změna, vypnutí a odebrání pravidla, výjimky, pojistka hromadného vytváření, API (kapitola 13) | A → B spolu s B → A se ustálí bez smyčky a bez duplicit; řetěz A → B, B → C nepustí záznam z A do C; po odebrání pravidla s `placements=delete` nezůstane u poskytovatele žádná kopie; maskovaná kopie neobsahuje žádný text zdroje ani po úpravě zdroje; změna u poskytovatele se podle pravidla propíše **bez připojené aplikace**; náhled sedí s výsledkem dosypu; restart uprostřed dosypu bez duplicit |
-| **6. Plánování mezi tenanty** | vestavěný poskytovatel `local` a schránka pozvánek; plánovací adresy a adresář; zprávy REQUEST, REPLY, CANCEL a REFRESH; outbox → inbox; zápis místních účastníků k poskytovateli s potlačením jeho pošty, kde to jde; spojení pozvánky doručené dvěma cestami; jedna cesta odpovědi; známí odesílatelé, žádosti, blokování, limity; smazání schůzky s výslovným oznámením (kapitola 14) | pozvánka je u místního příjemce do 1 s; pozvaný vidí právě jednu pozvánku, ať přišla jednou nebo dvěma cestami a v jakémkoli pořadí; seznam účastníků u poskytovatele je úplný; na CalDAV serveru s `SCHEDULE-AGENT` nedostane místní účastník žádný e-mail a vnější účastník dostane právě jednu pozvánku; odpověď má jednu cestu a dojde organizátorovi; pozvánka od neznámého odesílatele není v kalendáři, dokud ji příjemce nepřijme; smazání kopie schůzku nezruší a smazání entity organizátorem bez `notify_attendees` se odmítne; opakované a přeházené doručení je bez účinku; cizí tenant nezmění ani nezruší cizí schůzku; po obnově kteréhokoli tenanta ze starší zálohy se obě strany dorovnají; pád mezi zápisem příjemce a potvrzením bez duplicit |
-| **7. Microsoft** | Graph kalendář, To Do a kontakty; subscriptions; série podle výsledku spiku; Outlook jako umístění a jako cíl pravidel | jedna položka na sérii, nebo přiznané omezení podle kapitoly 11.2; matice schopností generovaná z testů |
+| **6. Plánování mezi tenanty** | předem živý test T12 (iCloud); vestavěný poskytovatel `local` a schránka pozvánek; plánovací adresy a adresář; zprávy REQUEST, REPLY, CANCEL a REFRESH; outbox → inbox; zápis místních účastníků k poskytovateli s potlačením jeho pošty, kde to jde; spojení pozvánky doručené dvěma cestami; jedna cesta odpovědi; známí odesílatelé, žádosti, blokování, limity; smazání schůzky s výslovným oznámením (kapitola 14) | pozvánka je u místního příjemce do 1 s; pozvaný vidí právě jednu pozvánku, ať přišla jednou nebo dvěma cestami a v jakémkoli pořadí; seznam účastníků u poskytovatele je úplný; na CalDAV serveru s `SCHEDULE-AGENT` nedostane místní účastník žádný e-mail a vnější účastník dostane právě jednu pozvánku; odpověď má jednu cestu a dojde organizátorovi; pozvánka od neznámého odesílatele není v kalendáři, dokud ji příjemce nepřijme; smazání kopie schůzku nezruší a smazání entity organizátorem bez `notify_attendees` se odmítne; opakované a přeházené doručení je bez účinku; cizí tenant nezmění ani nezruší cizí schůzku; po obnově kteréhokoli tenanta ze starší zálohy se obě strany dorovnají; pád mezi zápisem příjemce a potvrzením bez duplicit |
+| **7. Microsoft** | předem živé testy T1 a T3–T7 na pracovním i osobním účtu; Graph kalendář, To Do a kontakty; subscriptions; série podle výsledku T1; Outlook jako umístění a jako cíl pravidel | jedna položka na sérii, nebo přiznané omezení podle kapitoly 11.2; matice schopností generovaná z testů |
 | **8. Vydání 1.0** | agregované free/busy; ověřování tokenů z vnějšího IdP (OIDC) pro samostatný self-host; dokumentace, návody pro poskytovatele, pravidla stability API; Musubi převedené na musubi-sync | cizí vývojář zprovozní instanci a připojí účet podle dokumentace bez pomoci |
 | **9. Sdílení kalendáře ke čtení** | jednosměrné pravidlo s cílem v odebírané interní kolekci jiného tenanta; souhlas a odvolání (kapitola 14.10) | příjemce vidí změny do 1 s; odvolání odebere kolekci i kopie z ní vytvořené; maska platí i přes hranici tenanta |
 | **10. Federace** (podmíněná) | plánovací zprávy mezi servery v rozsahu z kapitoly 15.6. **Staví se, jen když ji chtějí aspoň dva provozovatelé mezi sebou** | scénáře s falešným partnerem: podvržený podpis, cizí doména organizátora, přehraná zpráva, cíl v soukromé síti, přesměrování, příliš velké tělo, neznámá verze a nepovolená doména jsou odmítnuty; nepřijatý odesílatel se nedostane do žádného kalendáře; odvolání partnera zastaví provoz okamžitě; **externí bezpečnostní revize bez otevřených závažných nálezů** |
 | **11. E-mail** | Gmail API, Graph mail, IMAP, JMAP; úložiště objektů, fulltext | jádro se nemění, přibývají druhy a adaptéry |
 | **12. Sdílení kalendáře se zápisem** | vzdálená mutace s autoritou u vlastníka, oprávnění, odvolání, konflikty přes hranici tenanta (kapitola 14.10). Pořadí vůči fázím 10 a 11 je volné; podmínkou je osvědčená fáze 9 | zápis příjemce je u vlastníka i u jeho poskytovatelů do 1 s; odvolání zastaví zápisy okamžitě; souběžná úprava obou stran skončí sloučením nebo záznamem o konfliktu u vlastníka |
 | Později, volitelně | vlastní e-mailové pozvánky (iMIP) po fázi 11; free/busy mezi tenanty se souhlasem; protinávrh času; zprávy z chatovacích aplikací; lokální replika v klientovi; CalDAV nebo JMAP fasáda | — |
+
+**Co se z fáze 0 přesunulo.** Fáze 0 neměla živé účty, proto proběhla jen dokumentační část. Přesunuto:
+
+- **živé testy T1–T12** z [providers.md](../research/phase0/providers.md#plány-živých-testů). Každý běží těsně před fází, která na něm stojí (tabulka výše). Spouští je uživatel na vlastních testovacích účtech;
+- **model sérií v Graphu** (T1). Blokuje jen fázi 7;
+- **odezva poskytovatelů** (kapitola 5.1). Google změří živá kontrola na konci fáze 1, ostatní před jejich fází;
+- **srovnání CPU a paměti s kodeky Musubi.** Benchmarky fáze 1 změří paměť aktora a cenu kodeku, srovnání s Musubi je volitelné;
+- **úložiště na ext4/XFS a disku s PLP.** Změří se ve fázi 1 na cílovém stroji, pokud bude k dispozici **(neověřeno)**.
 
 Proč v tomto pořadí:
 
@@ -876,9 +905,9 @@ Proč v tomto pořadí:
 
 Vývoj probíhá v repozitáři `f-tuma/musubi-sync`. Doporučuji ho otevřít nejpozději s fází 1 pod označením 0.x. Pozdní otevření hotového kódu přináší méně zpětné vazby na rozhraní adaptéru.
 
-### 11.2 Spike Microsoft Graph ve fázi 0
+### 11.2 Spike Microsoft Graph: dokumentace ve fázi 0, živé testy před fází 7
 
-Na Graphu stojí dvě věci: model jedné položky na sérii a možnost umístit opakovaný záznam do Outlooku. Proto se ověřuje před první řádkou jádra.
+Na Graphu stojí dvě věci: model jedné položky na sérii a možnost umístit opakovaný záznam do Outlooku. Dokumentační část proběhla ve fázi 0 ([providers.md](../research/phase0/providers.md), G1–G14). Živá část potřebuje pracovní i osobní účet, proto se přesunula na začátek fáze 7. Jádro na ní nestojí, jen adaptér Graphu.
 
 Co říká dokumentace v1.0 (ověřeno z webu):
 
@@ -888,14 +917,22 @@ Co říká dokumentace v1.0 (ověřeno z webu):
 - Výpis `/me/events` vrací samostatné události a hlavní události sérií.
 - `occurrenceId` se v příkladu vyskytuje, ale v tabulce vlastností v1.0 chybí.
 
-Co má spike ověřit živě, na pracovním i osobním účtu:
+Co fáze 0 z dokumentace doplnila:
+
+- Výjimky a zrušené výskyty vrací jen GET hlavní události podle ID; zrušený výskyt je znám jen datem (`OID.{masterId}.{yyyy-mm-dd}`).
+- Pole `uid` (společné pro sérii) je jen v betě. `iCalUId` hlavní události je jediný stabilní klíč ve v1.0.
+- `calendarView/delta` ve v1.0 funguje jen pro primární kalendář. Sekundární kalendáře potřebují subscription a dotazování.
+- Neměnná ID vyžadují hlavičku `Prefer: IdType="ImmutableId"` u každého požadavku i u subscription. API pro přesun neexistuje.
+- Bod 6 je zodpovězen negativně: Graph potlačení pozvánek nemá a obchvat přes `isDraft` a MAPI vlastnosti zamítáme. EWS končí 1. 4. 2027.
+
+Co má ověřit živě test T1 (a souvisící T2–T7), na pracovním i osobním účtu:
 
 1. Vrací `$expand=exceptionOccurrences` všechny výjimky se všemi potřebnými poli? Jak se chová série se stovkami výjimek (stránkování, limity)?
 2. Jde z `cancelledOccurrences` a z `originalStart` výjimek spolehlivě odvodit původní začátek výskytu, včetně celodenních událostí a změny zóny?
 3. Jak se bez `events/delta` dozvíme, **která** série se změnila: z oznámení subscription, nebo jen z `calendarView/delta` jako signálu? Kolik požadavků stojí jedna změněná série, a jde je sdružit přes `$batch`?
 4. Je `iCalUId` hlavní události stálý při přesunu mezi kalendáři a shodný u kopií téže schůzky v jiných schránkách?
 5. Vytvoří zápis série s výjimkami u Outlooku to, co jsme poslali (pořadí: hlavní událost, potom úpravy výskytů)?
-6. Jde potlačit rozeslání pozvánek, nebo je kopie bez účastníků jediná bezpečná cesta?
+6. ~~Jde potlačit rozeslání pozvánek?~~ Z dokumentace ne; kopie bez účastníků je jediná bezpečná cesta (T4 krok 3 jen pro záznam).
 
 Rozhodnutí podle výsledku:
 
@@ -910,21 +947,23 @@ Beta `events/delta` se sleduje, ale návrh na ní nestojí.
 ### 11.3 Hlavní rizika
 
 1. **Správnost více umístění.** Slučování, smyčky a mazání přes několik poskytovatelů je nejjemnější část projektu a nemá hotový vzor. Zmírnění: čisté funkce, property testy invariantů, scénáře se dvěma falešnými servery, pojistka proti kmitání, mazání se ve výchozím stavu nepropisuje.
-2. **Zdvojené nebo nechtěné pozvánky.** Chyba je vidět u cizích lidí a nejde vzít zpět. U Googlu a Microsoftu jde pozvánka místnímu účastníkovi záměrně dvěma cestami; chyba ve spojení by znamenala dvě pozvánky v kalendáři. Zmírnění: účastníci jen na hlavním umístění, brána hlavního umístění, spojení podle dvojice (organizátor, UID), jedna cesta odpovědi, potlačení pošty poskytovatele tam, kde to jde, testy „jedna pozvánka" v konformační sadě.
+2. **Zdvojené nebo nechtěné pozvánky.** Chyba je vidět u cizích lidí a nejde vzít zpět. U Googlu, Microsoftu a podle fáze 0 i u iCloudu jde pozvánka místnímu účastníkovi záměrně dvěma cestami; chyba ve spojení by znamenala dvě pozvánky v kalendáři. Zmírnění: účastníci jen na hlavním umístění, brána hlavního umístění, spojení podle dvojice (organizátor, UID), jedna cesta odpovědi, potlačení pošty poskytovatele tam, kde to jde, testy „jedna pozvánka" v konformační sadě.
 3. **Ztráta autorských dat.** Vazby, pravidla a pravdu entity nikdo znovu nestáhne. Zmírnění: zálohování ve fázi 1, plný fsync, značky u poskytovatelů, test obnovy.
 4. **Rozeslané smazání.** S politikou `propagate` se mylně odvozené smazání rozšíří na všechny poskytovatele. Zmírnění: jen výslovný důkaz, pojistka hromadného mazání s ověřením přímým čtením, úprava vyhrává nad smazáním, náhrobek s lhůtou na obnovu, výchozí hodnota zůstává `detach`.
 5. **Automatické zápisy pravidel.** Pravidlo zapisuje bez toho, aby se někdo díval: špatný filtr zaplní cizí kalendář a plné zrcadlení do sdíleného kalendáře zveřejní osobní data. Zmírnění: náhled s počty před založením, upozornění na sdílený cíl, pojistka hromadného vytváření, odebrání pravidla, které po sobě uklidí.
-6. **E-mail navíc a odpověď u poskytovatele.** U Googlu a Microsoftu dostane místní účastník vedle pozvánky v jádru i e-mail poskytovatele. Zda jde odpověď místního účastníka zapsat do položky organizátora, je neověřeno; kde to nejde, vnější účastníci ji neuvidí. Zmírnění: ověření ve fázi 0, schopnost v popisu adaptéru (kapitola 14.6).
+6. **E-mail navíc a odpověď u poskytovatele.** U Googlu, Microsoftu a iCloudu dostane místní účastník vedle pozvánky v jádru i e-mail poskytovatele. Fáze 0 riziko rozšířila: Graph potlačení nemá (ověřeno), iCloud `SCHEDULE-AGENT=CLIENT` podle jediné sekundární zkoušky ignoruje a při smazání neposílá zrušení. Odpověď místního účastníka do položky organizátora jde u Googlu zapsat, ale s vedlejším účinkem resetu; u Graphu je to neověřené a výchozí schopnost je `false`, takže vnější účastníci uvidí „čeká". Zmírnění: kopie bez účastníků u Graphu a iCloudu, schopnost v popisu adaptéru (kapitola 14.6), živé testy T4, T9 a T12.
 7. **Bezpečnost federace.** Vlastní protokol mezi servery bez standardu a bez interoperability. Zmírnění: zúžený rozsah, vypnuto ve výchozím stavu, seznam povolených partnerů, externí revize jako podmínka, stavět až na skutečnou poptávku.
-8. **Správnost opakování.** Zmírnění: vlastní modul, diferenciální testy.
-9. **Model sérií v Graphu.** Zmírnění: spike ve fázi 0 se dvěma záložními modely.
-10. **Bezeztrátový zápis zpět.** Záplatování surového iCalendaru a vCard je jemná práce. Zmírnění: property testy, odmítnutí nepodporovaných tvarů před zápisem.
+8. **Správnost opakování.** Fáze 0 riziko zmenšila (0 chyb jádra v korpusu), ale převzaté jádro udržujeme sami a hrana pro zóny je zatím prototyp. Zmírnění: vlastní modul, 12 povinných úprav z recurrence.md, diferenciální testy a fuzzing v CI, `tzcheck` při aktualizaci tzdb.
+9. **Model sérií v Graphu.** Dokumentace model podporuje, živé potvrzení chybí. Zmírnění: živý test T1 na začátku fáze 7 se dvěma záložními modely; jádro na výsledku nestojí.
+10. **Bezeztrátový zápis zpět.** Záplatování surového iCalendaru a vCard je jemná práce a serializace `calcard` normalizuje. Korpus spiku je syntetický a reálné payloady poskytovatelů jsme neviděli. Zmírnění: vlastní vrstva záplat s kontrolou AST po každé změně, property testy, odmítnutí nepodporovaných tvarů (`ENCODING`, `CHARSET`) před zápisem, harness spiku nad anonymizovanými reálnými payloady.
 11. **Latence mimo naši kontrolu.** Doručení oznámení poskytovatelem a poskytovatelé bez pushe. U více umístění to znamená, že změna z iCloudu dorazí na ostatní až po intervalu dotazování. Zmírnění: měřit a zveřejnit skutečná čísla po poskytovatelích.
-12. **Registrace aplikací u poskytovatelů.** U open-source projektu si ji dělá každý provozovatel sám. Ověření aplikace u Googlu pro citlivé scope je pro jednotlivce překážka; bez něj platí omezení počtu uživatelů a varovná obrazovka (z paměti, přesné limity neověřeny). Zmírnění: podrobný návod, minimální scope.
+12. **Registrace aplikací u poskytovatelů.** U open-source projektu si ji dělá každý provozovatel sám. Ověření aplikace u Googlu pro citlivé scope je pro jednotlivce překážka; bez něj platí strop 100 nových uživatelů celkem a varovná obrazovka (ověřeno ve fázi 0). Zmírnění: podrobný návod, minimální scope.
 13. **Dosažitelnost webhooků u self-hostu.** Bez veřejné adresy zbývá dotazování, tedy horší latence. Volitelné relé je možné, ale znamená provozovat službu.
 14. **Rychlost vývoje v Rustu a rozpínání rozsahu.** Více umístění, kontakty, pravidla a plánování mezi tenanty rozsah před vydáním 1.0 znatelně zvětšily: přibyly dvě fáze. Zmírnění: úzké milníky s měřitelnými kritérii; sdílení kalendářů, federace, vlastní e-mailové pozvánky a fasády vědomě až po 1.0 nebo mimo.
 15. **Pohyblivé standardy.** JSCalendar 2.0 a JMAP Calendars nejsou vydané. Zmírnění: verze schématu a přepočet ze surové vrstvy.
-16. **Kvóty.** Bez pushe strop v tisících uživatelů na projekt Google. Rozeslání a pravidla navíc násobí počet zápisů počtem umístění.
+16. **Kvóty.** Bez pushe strop v tisících uživatelů na projekt Google. Rozeslání a pravidla navíc násobí počet zápisů počtem umístění. Google Calendar má pro nové projekty denní práh 1 000 000 požadavků na projekt s ohlášeným účtováním a kvóty People API nejsou veřejné.
+17. **Provoz SQLite.** WAL roste bez vlastního checkpointeru na GB a dlouhý čtenář ho nafoukne i s ním. Přijetí během importu téhož tenanta má chvost kolem 10–16 ms. ext4/XFS, disk s PLP, odvoz WAL a data větší než RAM jsou neměřené. Zmírnění: podmínky z kapitoly 4.3 jako požadavky fáze 1, metriky WAL na tenanta, crash testy `kill -9`, PostgreSQL za úzkým rozhraním jako úniková cesta.
+18. **Advisory v závislostech.** RUSTSEC-2023-0071 (`rsa` 0.9) táhnou `jsonwebtoken` i `openidconnect`. Soukromý klíč RSA nepoužíváme, ale `cargo-deny` potřebuje dočasnou výjimku. Zmírnění: výjimka s datem revize, přechod na `rsa` 0.10, až ho knihovny přijmou.
 
 ### 11.4 Rozhodnutí
 
@@ -934,7 +973,7 @@ Beta `events/delta` se sleduje, ale návrh na ní nestojí.
 - Jeden záznam může žít na více místech a jádro tento model vlastní.
 - Cílem je rychlost primitiva pod 1 s na operaci; lokální replika v klientovi je volitelná budoucí práce.
 - Kontakty (CardDAV, People API, Graph contacts) jsou v první vlně.
-- Ověření Graphu je ve fázi 0.
+- Ověření Graphu je ve fázi 0. Dokumentační část proběhla; živé testy se přesunuly před fázi 7 (kapitola 11.1).
 - **Tenant je jeden člověk.** Sdílené tenanty nejsou. Lidé na stejném serveru spolu jednají plánováním mezi tenanty v jádru (kapitola 14).
 - **Data aplikací** (štítky, poznámky, pole známá jen aplikaci) žijí nad jádrem, v databázi aplikace s klíčem `entity.id`. Jádro drží jen vazby entita–umístění. Spojení a rozdělení entit oznamuje proud změn, aby si aplikace svá data přepojila.
 - **Smazání na jednom místě:** výchozí stav je „zaniká jen to umístění". „Smazat všude" je plnohodnotné nastavení na záznamu i na pravidle (`on_remote_delete: propagate`) s pojistkami z kapitoly 12.7.
@@ -961,17 +1000,21 @@ Beta `events/delta` se sleduje, ale návrh na ní nestojí.
 - **Federace:** verdikt z kapitoly 15.6 je přijat. Zúžený rozsah (jen plánovací zprávy, ve výchozím stavu vypnutá, jen vyjmenovaní partneři, podpisy RFC 9421, souhlas příjemce), fáze 10 po vydání 1.0, externí bezpečnostní revize jako podmínka a stavba až na poptávku aspoň dvou provozovatelů.
 - **Přechod Musubi** proběhne najednou ve fázi 8 (kapitola 11.1): nová verze Musubi nad musubi-sync, ne postupné nahrazování po poskytovatelích. Otázky vlastních kalendářů Musubi (kapitola 14.5) a členství v kalendářích se rozhodnou v rámci fáze 8.
 
+**Rozhodnuto uživatelem (11. 11. 2026, třetí kolo):**
+
+- **Úložiště:** SQLite, jeden soubor na tenanta (přesněji hlavní soubor a soubor outboxu), pro fázi 1 i self-host. PostgreSQL zůstává za úzkým rozhraním úložiště jako pozdější práce pro hostovanou instanci se SLA. Podmínky ze [storage.md](../research/phase0/storage.md) jsou požadavky (kapitola 4.3): samostatný soubor outboxu jako zdroj pravdy, promítnutí podle vodoznaku, žádná atomicita přes soubory, id mutací se nikdy znovu nepoužijí, vlastní checkpointer `PASSIVE` s omezeným `TRUNCATE`, `journal_size_limit`, `SQLITE_DEFAULT_MEMSTATUS=0`, omezené čtecí transakce. Cíl přijetí během importu téhož tenanta je poctivě uvolněný na p99 pod 20 ms (kapitola 5.1). Měření na ext4 a disku s PLP zůstává otevřené.
+
 **Zbývá rozhodnout:**
 
-1. **Úložiště.** SQLite na tenanta, nebo PostgreSQL. Uživatel počká na čísla z testu ve fázi 0; výstup bude v `docs/research/phase0/storage.md`.
-2. **Hostovaná instance nebo relé webhooků** provozované projektem: rozhodne se později; koordinátor uživateli tehdy předloží možnosti.
+1. **Hostovaná instance nebo relé webhooků** provozované projektem: rozhodne se později; koordinátor uživateli tehdy předloží možnosti.
 
 **Platí doporučení, dokud nikdo nenamítne:**
 
 - **Veřejné API:** vlastní REST s proudem změn, ne JMAP od začátku.
 - **Historie:** poslední stav, žurnál změn a záznamy o konfliktech; žádná auditní historie verzí.
 - **Úkoly z iCloudu** v první verzi nejsou.
-- **Série v Graphu:** rozhodne spike ve fázi 0; cíl je jedna položka na sérii ve v1.0.
+- **Série v Graphu:** rozhodne živý test T1 na začátku fáze 7; cíl je jedna položka na sérii ve v1.0 a dokumentace ho podporuje.
+- **Komprese surové vrstvy** (zstd po řádcích): rozhodne se ve fázi 1 podle reálných payloadů; bez ní ~4,4 KB na událost, s ní ~2,3 KB.
 
 ---
 
@@ -1090,8 +1133,8 @@ Automatické vracení v druhém případě nedoporučuji. Znamenalo by kompenza�
 **Idempotence:**
 
 - *Mutace:* idempotency klíč od aplikace.
-- *Vytvoření na umístění:* vzdálené ID se rezervuje už v transakci přijetí: ID události zvolené klientem (Google), URL odvozené z ID umístění (CalDAV, CardDAV), `transactionId` (Graph).
-- *People API a Google Tasks* klientské ID nepřijímají (z paměti, neověřeno). Nejistý výsledek se tam řeší pozorováním podle značky nebo obsahu.
+- *Vytvoření na umístění:* vzdálené ID se rezervuje už v transakci přijetí: ID události zvolené klientem (Google, base32hex 5–1024 znaků), URL odvozené z ID umístění (CalDAV, CardDAV). `transactionId` u Graphu je jen pomocník pro rychlé opakování: okno deduplikace není dokumentované (T5), takže nejistý výsledek po delší době řeší pozorování podle obsahu a značky, ne nový POST.
+- *People API a Google Tasks* klientské ID v dokumentaci nemají (ověřeno ve fázi 0; u Tasks to živě potvrdí T10). Nejistý výsledek se tam řeší pozorováním podle značky nebo obsahu.
 - *Změna:* podmíněný zápis a stavové doručení, takže opakování je neškodné.
 - *Pád mezi přijetím u poskytovatele a commitem:* po restartu přijde `412`, načte se stav, průmět se shoduje a umístění se jen označí jako `synced`.
 
@@ -1141,7 +1184,7 @@ S `propagate` tedy platí: smazání v aplikaci nebo u kteréhokoli poskytovatel
 
 1. **Jen výslovný důkaz:** náhrobek v deltě, nebo `404`/`410` při přímém čtení položky. Nikdy nepřítomnost ve čtení.
 2. **Ztráta přístupu není smazání.** Odhlášený účet, odebrané oprávnění ani zmizelá kolekce rozeslání nespustí.
-3. **Přesun není smazání.** Přesun položky do jiného kalendáře téhož účtu může v deltě vypadat jako smazání a vytvoření. Rozeslání proto počká na konec celého kola delty účtu a položky spáruje podle vzdáleného ID nebo UID. Jak který poskytovatel přesun hlásí, je **neověřeno** a ověří se ve fázi 0.
+3. **Přesun není smazání.** Přesun položky do jiného kalendáře téhož účtu může v deltě vypadat jako smazání a vytvoření. Rozeslání proto počká na konec celého kola delty účtu a položky spáruje podle vzdáleného ID nebo UID. Graph nemá API pro přesun a s `ImmutableId` si ID přesun ve schránce drží; párování proto vyžaduje sledovat všechny kalendáře schránky. U Googlu se čeká `cancelled` ve zdroji a stejné `id` v cíli. Obojí potvrdí živý test T2 před fází 4.
 4. **Pojistka hromadného mazání.** Víc smazání z jednoho účtu v krátké době (návrh: víc než 20 za 5 minut, nebo desetina kolekce) rozeslání pozdrží. Každá položka se ověří přímým čtením a aplikace dostane záznam. Teprve potom se rozesílá.
 5. **Úprava vyhrává nad smazáním.** Mazání na ostatních umístěních je podmíněný zápis. Když ho poskytovatel odmítne, protože se položka mezitím změnila, rozeslání se zastaví, entita žije dál na zbylých umístěních a aplikace dostane záznam o konfliktu.
 6. **Schůzky.** Smazání **kopie** schůzky, která má další účastníky, odstraní jen tu kopii. Schůzku nikdy nezruší ani neodmítne, ani s `propagate` (rozhodnuto). Aplikace dostane záznam.
@@ -1191,15 +1234,15 @@ Omezení první verze:
 
 - **Jedna entita je na jednom umístění jedna položka.** Rozklad záznamu na víc položek u slabšího poskytovatele (série bez RDATE plus samostatné události pro mimořádné termíny) není.
 - **Hierarchie podúkolů se mezi různými modely nepropisuje.** Google Tasks a CalDAV mají podúkol jako samostatnou položku s odkazem na rodiče, Graph jako vložený checklist. Vazba rodič–potomek se propisuje jen mezi poskytovateli se samostatnými položkami.
-- **Opakované záznamy v Outlooku** závisí na výsledku spiku ve fázi 0 (kapitola 11.2).
+- **Opakované záznamy v Outlooku** závisí na živém testu T1 na začátku fáze 7 (kapitola 11.2).
 
 ### 12.9 Účastníci a pozvánky
 
 Poskytovatel rozesílá pozvánky sám, jakmile organizátor uloží událost s účastníky:
 
 - Google podle parametru `sendUpdates` (`all`, `externalOnly`, `none`); platí pro celý požadavek, ne pro jednotlivého účastníka;
-- Graph při vytvoření události s účastníky; parametr pro potlačení podle mé znalosti nemá **(neověřeno)**;
-- CalDAV server s implicitním plánováním podle RFC 6638. Parametr `SCHEDULE-AGENT` u účastníka umí pozvánku potlačit; podpora na iCloudu je **neověřená**.
+- Graph při vytvoření události s účastníky; parametr pro potlačení nemá (ověřeno ve fázi 0);
+- CalDAV server s implicitním plánováním podle RFC 6638. Parametr `SCHEDULE-AGENT` u účastníka umí pozvánku potlačit. iCloud ho podle jediné sekundární zkoušky ignoruje a při smazání neposílá CANCEL (T12), proto se k němu chováme jako ke Graphu.
 
 Tatáž schůzka uložená s účastníky do tří kalendářů by znamenala tři pozvánky od tří organizátorů a tři oddělená vlákna odpovědí. Pravidla:
 
@@ -1233,7 +1276,7 @@ Každá položka už je triviální entita, takže připojení existující polo
 - Graph: rozšířená vlastnost nebo otevřené rozšíření (obojí dokumentace u událostí uvádí);
 - CalDAV a CardDAV: X- vlastnost;
 - People API: `clientData`;
-- Google Tasks takové pole nemá (z paměti, neověřeno).
+- Google Tasks takové pole nemá (ověřeno ve fázi 0). People API ho má (`clientData`), Google Calendar `extendedProperties.private`.
 
 Značka slouží k obnově vazeb po ztrátě databáze, k rozpoznání vlastní kopie viděné přes jiný účet a k tomu, aby se kopie pravidla nestala zdrojem jiného pravidla (kapitola 13.3). Nese jen neprůhledné ID entity. Uživatel zápis značky povolil. Nevýhoda zůstává: vidí ji jiné aplikace s přístupem k témuž kalendáři.
 
@@ -1400,7 +1443,7 @@ Pojistky:
 | Cizí pozvánka | kopie následuje organizátora | stejně; úprava kopie se vrací (kapitola 12.9) |
 | Úkoly a kontakty | rovnocenné umístění se směrem `out` | rovnocenné umístění |
 
-Jednosměrné kopie nejsou autorská data. Po ztrátě databáze je obnoví nové vyhodnocení pravidla a značky u poskytovatelů zabrání duplicitám. Kde poskytovatel značku neunese (Google Tasks, z paměti), duplicita po ztrátě databáze hrozí.
+Jednosměrné kopie nejsou autorská data. Po ztrátě databáze je obnoví nové vyhodnocení pravidla a značky u poskytovatelů zabrání duplicitám. Kde poskytovatel značku neunese (Google Tasks, ověřeno ve fázi 0), duplicita po ztrátě databáze hrozí.
 
 ### 13.5 Maska „Obsazeno"
 
@@ -1520,7 +1563,7 @@ Tenant má **plánovací adresy**. Jsou to e-mailové adresy ve tvaru `mailto:`,
 | Zdroj adresy | Ověření |
 | --- | --- |
 | e-mail připojeného účtu Google nebo Microsoft | ověřený údaj z přihlášení přes OAuth |
-| adresy účtu iCloud | vlastnost `calendar-user-address-set` ze serveru Applu **(neověřeno)** |
+| adresy účtu iCloud | vlastnost `calendar-user-address-set` ze serveru Applu **(neověřeno, T12 krok 1)**. iCloud podle sekundárního zdroje přepisuje vlastní adresy v `ORGANIZER` a `ATTENDEE` na cestu principalu s parametrem `EMAIL=`; normalizace adres ji převede na e-mail a považuje za vlastní adresu |
 | místní identita `jmeno@domena-serveru` | přiděluje instance |
 | e-mail z tokenu důvěryhodného IdP s `email_verified` | ověřil ho IdP provozovatele; zapíná konfigurace |
 | cokoli jiného, včetně adres z obecného CalDAV serveru | **neplatí samo.** CalDAV server si zvolil uživatel a může o sobě tvrdit libovolnou adresu. Adresu musí potvrdit provozovatel nebo aplikace správcovským voláním |
@@ -1594,7 +1637,7 @@ Místní účastník se proto zapisuje **také do seznamu účastníků u poskyt
 
 | Účastník | Hlavní umístění organizátora | Zápis u poskytovatele | Kdo doručuje | Co pozvaný vidí |
 | --- | --- | --- | --- | --- |
-| místní | CalDAV server s plánováním (RFC 6638) | ano, s `SCHEDULE-AGENT=CLIENT` | jen jádro | jednu pozvánku, žádný e-mail |
+| místní | CalDAV server s plánováním (RFC 6638), který `SCHEDULE-AGENT` dodržuje (iCloud ne, viz níže) | ano, s `SCHEDULE-AGENT=CLIENT` | jen jádro | jednu pozvánku, žádný e-mail |
 | místní | Google nebo Microsoft | ano | jádro i poskytovatel | jednu pozvánku: obě doručení se u něj spojí (kapitola 14.7). E-mail od poskytovatele přijde |
 | místní | kolekce bez plánování (interní kolekce, CalDAV bez RFC 6638) | ano; server bez plánování nic nerozesílá | jen jádro | jednu pozvánku |
 | vnější | poskytovatel s plánováním | ano | poskytovatel e-mailem | pozvánku od poskytovatele |
@@ -1606,10 +1649,10 @@ Místní účastník se proto zapisuje **také do seznamu účastníků u poskyt
 
 **Potlačení pošty poskytovatele:**
 
-- CalDAV: parametr `SCHEDULE-AGENT=CLIENT` u účastníka říká serveru, aby ho nezval (RFC 6638, ověřeno). Odpověď tohoto účastníka pak do položky zapisuje jádro. Zda parametr dodržuje iCloud, je **neověřeno**.
-- Google: `sendUpdates` platí pro celý požadavek, ne pro jednotlivého účastníka (ověřeno). Účastníkovi s účtem Google navíc Google událost do kalendáře vloží i bez e-mailu (z paměti).
-- Graph: potlačení nemá **(neověřeno)**.
-- Ke zkoušce ve fázi 0: přidat místního účastníka u Googlu samostatným požadavkem se `sendUpdates=none`. Ušetřilo by to první e-mail; pozdější změny schůzky by mu Google oznámil stejně. Návrh na tom nestojí.
+- CalDAV: parametr `SCHEDULE-AGENT=CLIENT` u účastníka říká serveru, aby ho nezval (RFC 6638, ověřeno). Odpověď tohoto účastníka pak do položky zapisuje jádro. iCloud ho podle jediné sekundární zkoušky ignoruje (T12), proto má profil `suppress_per_attendee: false` a místní účastník se k němu zapisuje jako u Graphu.
+- Google: `sendUpdates` platí pro celý požadavek, ne pro jednotlivého účastníka (ověřeno). Zda se událost účastníkovi s účtem Google objeví v kalendáři i bez e-mailu, řídí jeho nastavení „Add invitations to my calendar" (ověřeno ve fázi 0).
+- Graph: potlačení nemá (ověřeno ve fázi 0). Obchvat přes `isDraft` a MAPI vlastnosti zamítáme. EWS končí 1. 4. 2027.
+- Ke zkoušce v živém testu T9 (před fází 3): přidat místního účastníka u Googlu samostatným požadavkem se `sendUpdates=none`. Ušetřilo by to první e-mail; pozdější změny schůzky by mu Google oznámil stejně. Návrh na tom nestojí.
 
 Návrh je bezpečný i tam, kde potlačení selže. Když server parametr ignoruje, pozvánka přijde dvěma cestami a příjemce si ji spojí. Selhání znamená e-mail navíc, ne druhou pozvánku v kalendáři.
 
@@ -1622,7 +1665,7 @@ Návrh je bezpečný i tam, kde potlačení selže. Když server parametr ignoru
 
 Stav účastníka v entitě organizátora je jedno pole. Obě cesty do něj ústí a pro téhož účastníka nikdy neběží zároveň.
 
-**Neověřeno:** zda organizátor smí u Googlu (`attendees[].responseStatus`) a v Graphu zapsat stav odpovědi účastníka. Kde to nejde, vidí odpověď místního účastníka místní lidé a aplikace, ale vnější účastníci u něj vidí „čeká". Schopnost je v popisu adaptéru (kapitola 6.2) a ověří se ve fázi 0.
+**Zápis odpovědi organizátorem:** u Googlu je `attendees[].responseStatus` zapisovatelné (ověřeno ve fázi 0), ale zápis může účastníkům s některými nastaveními vrátit odpověď na `needsAction` a nad 200 pozvaných se nepropaguje (T9 krok 4). U Graphu to dokumentace neříká, výchozí schopnost je `false` (T4). Kde to nejde, vidí odpověď místního účastníka místní lidé a aplikace, ale vnější účastníci u něj vidí „čeká". Schopnost je v popisu adaptéru (kapitola 6.2).
 
 **Cena, kterou je poctivé říct:**
 
@@ -1633,7 +1676,7 @@ Stav účastníka v entitě organizátora je jedno pole. Obě cesty do něj úst
 
 U Googlu a Microsoftu je to běžný stav, ne výjimka: pozvánka dorazí do schránky jádra a přes poskytovatele i do kalendáře pozvaného, pokud ho má u jádra připojený.
 
-Pravidlo na straně příjemce: **v tenantu existuje nejvýš jedna pozvánka pro dvojici (adresa organizátora, UID).** REQUEST nese UID hlavního umístění organizátora, tedy totéž UID, pod kterým schůzku rozesílá jeho poskytovatel. U Graphu se dvojice opírá o `iCalUId`; jeho shodu mezi schránkami ověřuje spike (kapitola 11.2, bod 4).
+Pravidlo na straně příjemce: **v tenantu existuje nejvýš jedna pozvánka pro dvojici (adresa organizátora, UID).** REQUEST nese UID hlavního umístění organizátora, tedy totéž UID, pod kterým schůzku rozesílá jeho poskytovatel. U Graphu se dvojice opírá o `iCalUId`; dokumentace jeho shodu mezi schránkami netvrdí a ověří ji živý test T1 krok 5 před fází 7 (kapitola 11.2, bod 4).
 
 Když má tenant položku ve schránce i položku u poskytovatele se stejnou dvojicí:
 
@@ -1652,7 +1695,7 @@ Korelace mezi **různými** příjemci se nemění: Borisova a Cyrilova pozvánk
 
 SQLite na tenanta znamená, že transakce přes dva tenanty neexistuje. Doručení ji nepotřebuje:
 
-1. **Odesílatel:** zpráva je v outboxu jeho databáze, zapsaná v transakci mutace s plným fsync. Patří k autorským datům.
+1. **Odesílatel:** zpráva je v souboru outboxu jeho tenanta, zapsaná v transakci přijetí mutace s plným fsync. Patří k autorským datům.
 2. **Dispečer** (úloha v řídicí rovině) najde v adresáři tenanta příjemce a předá zprávu jeho zapisovateli.
 3. **Příjemce:** jeho jediný zapisovatel ve vlastní transakci vloží zprávu do inboxu, idempotentně podle `id`, a zpracuje ji do entity.
 4. **Potvrzení:** odesílatel označí zprávu jako doručenou.
@@ -1665,7 +1708,7 @@ Jsou to dvě transakce, každá v jednom tenantu, s doručením „aspoň jednou
 | Velikost | outbox drží poslední zprávu na dvojici (UID, příjemce), inbox poslední REQUEST na dvojici (organizátor, UID). Obojí je omezené počtem schůzek |
 | Adresář | řídicí rovina; jediná data, která se čtou napříč tenanty. Věta „žádné dotazy napříč tenanty" z kapitoly 4.1 platí dál pro datovou rovinu |
 | Příjemce byl smazán | trvalé odmítnutí; účastník dostane `delivery: undeliverable` |
-| Smazání tenanta | nejdřív CANCEL pro schůzky, které organizuje, a odmítnutí těch, kam je pozvaný; potom se odeberou jeho adresy a smaže soubor |
+| Smazání tenanta | nejdřív CANCEL pro schůzky, které organizuje, a odmítnutí těch, kam je pozvaný; potom se odeberou jeho adresy a smažou jeho soubory |
 | PostgreSQL | outbox a inbox jsou tabulky; i tak dvě oddělené transakce, aby obě varianty úložiště měly stejné chování |
 
 **Obnova ze zálohy.** Tenant obnovený ze starší zálohy může mít nižší `sequence`, než ostatní už viděli. Proto:
@@ -1897,6 +1940,8 @@ Moje doporučení: **navrhnout zprávy z kapitoly 14 tak, aby federaci unesly** 
 
 ## Zdroje
 
+Výsledky fáze 0 s vlastními zdroji a reprodukovatelnými příkazy: [providers.md](../research/phase0/providers.md), [storage.md](../research/phase0/storage.md), [calcard.md](../research/phase0/calcard.md), [recurrence.md](../research/phase0/recurrence.md). Kde se tvrzení v návrhu opírá o ně, mají přednost před seznamem níže.
+
 Poskytovatelé:
 
 - Microsoft Graph, event: delta (v1.0): https://learn.microsoft.com/en-us/graph/api/event-delta?view=graph-rest-1.0
@@ -1964,6 +2009,6 @@ Plánování a federace:
 - Mastodon, CVE-2024-23832: https://github.com/mastodon/mastodon/security/advisories/GHSA-3fjr-858r-92rw , https://www.openwall.com/lists/oss-security/2024/02/02/4
 - Musubi, čteno v repozitáři: `docs/adr/ADR-005-federation-gateway.md`, `packages/docs/src/content/docs/architecture/federation.mdx`, `apps/api/src/federation_origin.ts`, `federation_peer.ts`, `federation_tokens.ts`, `handlers/federation.ts`
 
-Bez ověření na webu, z předchozí znalosti: úložné backendy Stalwartu, architektura Evolution Data Server a Apple CalendarAgent, synchronizace Linearu, Rust v Thunderbirdu, Cronofy a Aurinko nad rámec výzkumu v `docs/research/nylas/`. Pro kapitolu 12 rovněž z předchozí znalosti: rozesílání pozvánek při uložení události s účastníky (Google `sendUpdates`, Graph, CalDAV podle RFC 6638), skrytá pole pro značky (`extendedProperties`, `clientData`), vytvoření s klientským ID, licence DAVx⁵ a Nanga a nástroje pro zrcadlení kalendářů. Ověřují se ve fázi 0. Hodnoty `sendUpdates` a `SCHEDULE-AGENT` jsou od revize 4 ověřené.
+Bez ověření na webu, z předchozí znalosti: úložné backendy Stalwartu, architektura Evolution Data Server a Apple CalendarAgent, synchronizace Linearu, Rust v Thunderbirdu, Cronofy a Aurinko nad rámec výzkumu v `docs/research/nylas/`. Pro kapitolu 12 rovněž z předchozí znalosti: rozesílání pozvánek při uložení události s účastníky (Google `sendUpdates`, Graph, CalDAV podle RFC 6638), skrytá pole pro značky (`extendedProperties`, `clientData`), vytvoření s klientským ID, licence DAVx⁵ a Nanga a nástroje pro zrcadlení kalendářů. Fáze 0 ověřila vše kromě nástrojů pro zrcadlení ([providers.md](../research/phase0/providers.md)). Hodnoty `sendUpdates` a `SCHEDULE-AGENT` jsou od revize 4 ověřené.
 
 Pro kapitoly 13 až 15 z předchozí znalosti, bez ověření: obsah RFC 5546, 6047, 9421 a 9530 (v této revizi jsem je nečetl, cituji je podle čísla); federace Matrixu (podpisy, klíče, spam pozvánkami); podpisy v ActivityPub a WebFinger; kalendářový spam přes iMIP a volba Googlu „jen od známých odesílatelů"; chování Googlu při `sendUpdates=none`; potlačení pozvánek v Graphu; `SCHEDULE-AGENT` a `calendar-user-address-set` na iCloudu; jak poskytovatelé hlásí přesun položky mezi kalendáři; jak je podepsaná federace kalendářů v Nextcloudu. Čísla označená „návrh" (limity, lhůty, prahy pojistek) jsou můj odhad k doladění, ne měření. Od revize 5 navíc bez ověření: zda organizátor smí u Googlu a v Graphu zapsat stav odpovědi účastníka; zda samostatný požadavek se `sendUpdates=none` u Googlu ušetří první e-mail; jak se servery chovají k `SCHEDULE-AGENT=CLIENT`; stav a rozhraní knihoven `jsonwebtoken` a `openidconnect`.
