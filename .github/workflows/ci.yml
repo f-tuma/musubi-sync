@@ -51,7 +51,7 @@ jobs:
       - run: cargo test --workspace --locked
       # K1: only an optimized build writes fast enough to reach the WAL hard
       # limit and exercise the TRUNCATE path; the test asserts it in release.
-      - run: cargo test -p musubi-store-sqlite --release --locked --test import
+      - run: cargo test -p musubi-store-sqlite --release --locked --test import -- --nocapture
 
   deny:
     runs-on: ubuntu-24.04
