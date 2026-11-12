@@ -446,7 +446,7 @@ Měří je `musubi-testkit` (binárka `bench`) proti `musubi-syncd` a falešném
 | B4 | změny od kurzoru | `/changes` po 500 | p99 pod 10 ms |
 | B5 | vlastní režie inkrementu | čas syncu minus čas strávený u falešného serveru | pod 20 ms |
 | B6 | WAL | import 50 000 událostí se souběžnými čtenáři | největší WAL pod 256 MB |
-| B7 | paměť aktora | 10 000 spících účtů, RSS na účet | nahlásit; rozpočet se stanoví po prvním měření |
+| B7 | paměť aktora | 10 000 spících účtů, RSS na účet | nahlásit; návrh z K7: pod 512 KiB na spící účet a žádné vlákno na účet ani tenanta |
 | B8 | cena kodeku | `decode` na událost, mikrobenchmark | nahlásit a hlídat regresi |
 | B9 | rekurence | 10 000 sérií v okně 2026–2031 (fáze 0: 2,2–3,1 s) | hlídat regresi |
 
@@ -455,6 +455,24 @@ Provedení (K7):
 - `bench` spouští sestavenou binárku `musubi-syncd` (vedle sebe, nebo `--syncd`) jako podproces a falešný server v sobě; `--only B1,B3` vybere část. `--smoke` běží v malém měřítku a hlídá řádově: selže až nad desetinásobkem rozpočtu. Plné rozpočty hlídá noc.
 - B3 nepoužívá seed falešného serveru (ten soustředí události do ±30 dní), ale vlastního tenanta: 4 950 jednotlivých událostí rozložených do ±2,5 roku a 50 otevřených týdenních sérií.
 - B8 a B9 jsou benchmarky crates (`cargo bench -p musubi-google -p musubi-recurrence --benches`, `MUSUBI_BENCH_SMOKE=1` pro malé měřítko), protože `musubi-testkit` nesmí záviset na `musubi-google` ani `musubi-recurrence`. B9 používá syntetickou sadu (denní, týdenní, měsíční a roční pravidla ve třech zónách a plovoucí čas), ne korpus fáze 0, a hlídá horní mez fáze 0.
+
+Výsledky (K7, plný běh na nečinném stroji, 20 jader, release):
+
+| # | Naměřeno | Rozpočet |
+| --- | --- | --- |
+| B1 | nejhorší z 5: 160 ms | pod 1 s |
+| B2 | nejhorší z 20: 307 ms (p50 304 ms; 150 ms je zpoždění `COALESCE`, 150 ms odezva falešného serveru) | pod 500 ms |
+| B3 | p99 z 500: týden 1,0 ms (jen id 0,7 ms), měsíc 3,7 ms (jen id 1,2 ms) | pod 10 ms |
+| B4 | p99 z 500: 1,0 ms | pod 10 ms |
+| B5 | p99 z 20: 5,3 ms (p50 3,1 ms) | pod 20 ms |
+| B6 | největší WAL 41 MB; import 7,7 s; čtenáři p99 15 ms, max 25 ms | pod 256 MB |
+| B7 | 320 KiB na spící účet (10 000 účtů: 11 → 3 140 MiB); vlákna 24 → 73, žádné vlákno zapisovače | nahlásit |
+| B8 | 1,42 µs na událost | nahlásit |
+| B9 | 0,70 s (2 349 408 výskytů) | pod 3,1 s |
+
+- **B5 před opravou chybělo:** p99 50–57 ms. Webhook v `musubi-syncd` zařazoval push úlohu přímo do řídicího úložiště, takže čekala po `COALESCE` ještě na další tik pruhu (50 ms). Webhook teď volá `Engine::on_push` a `enqueue` pruh probudí, když je úloha splatná do 1 s; delší úlohy najde tik.
+- **B7 a vlákna:** dřív měl každý tenant vlastní vlákno zapisovače navždy. Zapisovač se teď po `Config::writer_idle` (30 s) bez práce zastaví a další zápis ho spustí znovu (test: restartovaný zapisovač nic neztratí). Zbylá vlákna nerostou s počtem účtů: 20 pracovních vláken runtime a blokovací pool tokio (strop 512, nečinné vlákno končí po 10 s; tiky pruhů jich pár drží zahřátých). Návrh rozpočtu: pod 512 KiB RSS na spící účet a počet vláken omezený runtime, ne počtem účtů; `bench` už teď selže, když po spánku zůstane vlákno zapisovače. Navazující práce: připojení 10 000 účtů trvalo 377 s (úplné čtení po jednom), měřit znovu s K8.
+- **Úklid WAL napříč tenanty:** sdílené vlákno checkpointů zdrží PASSIVE ostatních tenantů o 0,3–0,5 s za pomalý `TRUNCATE`. V B2 a B3 (jeden tenant) se to neprojeví; dopad na čtenáře během importu ukazuje B6.
 
 Přijetí zápisu (p99 pod 10 ms, během importu téhož tenanta pod 20 ms) se měří až ve fázi 3, se souborem outboxu. Odezvu Googlu změří K8.
 

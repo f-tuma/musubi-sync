@@ -86,7 +86,8 @@ fn import_keeps_wal_bounded() {
     // Release (CI runs this test so too) outpaces the background PASSIVE and
     // resets the WAL; a debug build is too slow to get there.
     if cfg!(not(debug_assertions)) {
-        // Most resets succeed, also on a slow CI disk.
+        // Resets happen and are counted. Not "most succeed": on a CI disk
+        // nearly all can fail (failures/truncates 8/8, 7/8, 3/10 seen in K7).
         assert!(
             st.truncates > 0 && st.reset_failures <= st.truncates,
             "{st:?}"
