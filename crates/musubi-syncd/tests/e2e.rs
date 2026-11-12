@@ -177,3 +177,80 @@ async fn google_account_syncs_end_to_end_and_removal_stops_its_channel() {
     .await
     .expect("the stream ends");
 }
+
+/// Starts a sign-in and consents at the fake; returns the callback URL.
+async fn consent(n: &Node, admin: &str) -> String {
+    let (s, v) = n
+        .call(
+            "POST",
+            "/v1/accounts",
+            Some(admin),
+            Some(json!({ "provider": "google" })),
+        )
+        .await;
+    assert_eq!(s, 201, "{v}");
+    let consent = n
+        .http
+        .get(v["authorization_url"].as_str().expect("url"))
+        .send()
+        .await
+        .expect("consent");
+    consent.headers()["location"]
+        .to_str()
+        .expect("ascii")
+        .to_owned()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tenant_deletion_outlives_its_request_and_refuses_new_sign_ins() {
+    let n = Node::start().await;
+    let _engine = n.app.engine().start();
+    n.google
+        .apply(&musubi_testkit::google::Change::AddCalendar {
+            entry: json!({ "id": "second" }),
+        });
+    let t = n.tenant().await;
+    let (admin, _) = n.key(t, "admin").await;
+    let callback = consent(&n, &admin).await;
+    let (s, v) = n.call("GET", &callback, None, None).await;
+    assert_eq!(s, 200, "{v}");
+    until("both channels", async || {
+        (n.google.channels().len() == 2).then_some(())
+    })
+    .await;
+    let late = consent(&n, &admin).await;
+
+    // Each Google call now takes a second: the deletion stops two channels
+    // one after the other, the late callback redeems its code meanwhile.
+    n.google.set_latency(Duration::from_secs(1));
+    let started = Instant::now();
+    let gave_up = n
+        .http
+        .delete(n.url(&format!("/v1/admin/tenants/{t}")))
+        .bearer_auth(ADMIN_KEY)
+        .timeout(Duration::from_millis(300))
+        .send()
+        .await;
+    assert!(gave_up.is_err(), "the client gives up first: {gave_up:?}");
+    let (s, v) = n.call("GET", &late, None, None).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the callback finished during the deletion"
+    );
+    assert_eq!(s, 404, "a tenant being deleted gets no account: {v}");
+
+    until("the deletion", async || {
+        let (s, _) = n
+            .call(
+                "GET",
+                &format!("/v1/admin/tenants/{t}/stats"),
+                Some(ADMIN_KEY),
+                None,
+            )
+            .await;
+        (s == 404).then_some(())
+    })
+    .await;
+    assert!(n.google.channels().is_empty(), "channels still live");
+    assert!(n.app.control().accounts(t).expect("accounts").is_empty());
+}

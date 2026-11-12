@@ -27,7 +27,7 @@ use musubi_model::{
     AccountId, CollectionId, ControlStore, Event, Provider, Seq, Storage, StoreError, SyncError,
     TenantId, TenantStore, TokenVault,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 mod ingest;
 mod jobs;
@@ -91,6 +91,8 @@ pub struct Config {
     pub background_concurrency: usize,
     /// How often an idle scheduler looks for due jobs.
     pub tick: Duration,
+    /// A tenant writer without a write for this long stops its thread.
+    pub writer_idle: Duration,
 }
 
 const DAY: Duration = Duration::from_secs(86_400);
@@ -114,6 +116,7 @@ impl Default for Config {
             sync_concurrency: 16,
             background_concurrency: 4,
             tick: Duration::from_millis(50),
+            writer_idle: Duration::from_secs(30),
         }
     }
 }
@@ -139,9 +142,9 @@ struct Inner<S: Storage, C> {
     clock: Arc<dyn Clock>,
     sink: CommitSink,
     config: Config,
-    // shortcut: writer threads live as long as the engine; stop idle ones once
-    // tenants per process number in the thousands.
     writers: Mutex<HashMap<TenantId, Arc<Writer<S::Tenant>>>>,
+    /// Wakes a lane (by [`lane_ix`]) before its next tick.
+    wake: [Notify; 2],
     // shortcut: in-process only; two engine processes on one control store could
     // run two jobs of one collection at once. Upgrade to a lease per collection then.
     locks: Mutex<HashMap<CollectionId, Arc<tokio::sync::Mutex<()>>>>,
@@ -195,6 +198,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 sink,
                 config,
                 writers: Default::default(),
+                wake: Default::default(),
                 locks: Default::default(),
                 account_locks: Default::default(),
                 accounts: Default::default(),
@@ -304,12 +308,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                         gone_ok(self.drop_channel(&cx, ch).await)?;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(%account, error = %e, "cannot stop push channels");
+                // Without a grant the channels cannot be stopped; they expire.
+                // Any other failure retries the removal, which keeps the tokens.
+                Err(EngineError::Sync(SyncError::ReauthRequired)) => {
+                    tracing::warn!(%account, "no grant to stop push channels with");
                     for ch in channels {
                         gone_ok(self.ctl(move |c| c.delete_channel(&ch.sub.channel)).await)?;
                     }
                 }
+                Err(e) => return Err(e),
             }
         }
         gone_ok(self.ctl(move |c| c.delete_account(account)).await)?;
@@ -325,6 +332,12 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// unlinked files behind it) is released. Call after removing its accounts.
     pub fn forget_tenant(&self, tenant: TenantId) {
         self.writers().remove(&tenant);
+    }
+
+    /// Tenants with a running writer thread; an idle one stops after
+    /// [`Config::writer_idle`].
+    pub fn active_writers(&self) -> usize {
+        self.writers().len()
     }
 
     /// Runs due jobs one at a time, sync lane first, until none is due.
@@ -347,6 +360,19 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             self.execute(job).await;
             ran += 1;
         }
+    }
+
+    /// Queues a delta of every collection with a push channel. Call once at
+    /// startup: notifications sent while the node was down are lost (Google
+    /// does not retry them). Returns how many were queued.
+    pub async fn catch_up(&self) -> Result<usize, EngineError> {
+        let channels = self.ctl(|c| c.channels_expiring(Timestamp::MAX)).await?;
+        let now = self.now();
+        for ch in &channels {
+            self.enqueue(Self::push_job(ch.tenant, ch.account, ch.collection, now))
+                .await?;
+        }
+        Ok(channels.len())
     }
 
     /// Starts the scheduler: each lane leases due jobs up to its concurrency.
@@ -390,7 +416,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     Err(e) => tracing::warn!(?lane, error = %e, "leasing jobs failed"),
                 }
             }
-            tokio::time::sleep(self.inner.config.tick).await;
+            let wake = self.inner.wake[lane_ix(lane)].notified();
+            let _ = tokio::time::timeout(self.inner.config.tick, wake).await;
         }
     }
 
@@ -450,7 +477,22 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 
     async fn enqueue(&self, spec: JobSpec) -> Result<(), EngineError> {
-        self.ctl(move |c| c.enqueue(&spec).map(drop)).await
+        let (lane, due) = (spec.lane, spec.due);
+        self.ctl(move |c| c.enqueue(&spec).map(drop)).await?;
+        // A job due soon (a coalesced push) runs when due, not up to a tick
+        // later; later jobs are found by the tick.
+        let wait = due.duration_since(self.now());
+        if wait <= jiff::SignedDuration::from_secs(1) {
+            let wait = Duration::try_from(wait).unwrap_or_default();
+            let inner = Arc::downgrade(&self.inner);
+            tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                if let Some(inner) = inner.upgrade() {
+                    inner.wake[lane_ix(lane)].notify_one();
+                }
+            });
+        }
+        Ok(())
     }
 
     async fn account(&self, account: AccountId) -> Result<Option<AccountRecord>, EngineError> {
@@ -510,8 +552,24 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             // Another caller won the race; this handle is dropped unused.
             return Ok(w.clone());
         }
+        let inner = Arc::downgrade(&self.inner);
+        let retire = move |id| {
+            let Some(inner) = inner.upgrade() else { return };
+            let mut writers = inner.writers.lock().unwrap_or_else(|e| e.into_inner());
+            // Only the map holds it: no write is between getting it and its reply
+            // (a queued command holds a handle too, even if its caller was
+            // cancelled), and the next one must take this lock to get it.
+            if writers
+                .get(&tenant)
+                .is_some_and(|w| w.id == id && Arc::strong_count(w) == 1)
+            {
+                writers.remove(&tenant);
+            }
+        };
+        let idle = self.inner.config.writer_idle;
         let w = Arc::new(
-            Writer::spawn(tenant, store, self.inner.sink.clone()).map_err(StoreError::Io)?,
+            Writer::spawn(tenant, store, self.inner.sink.clone(), idle, retire)
+                .map_err(StoreError::Io)?,
         );
         writers.insert(tenant, w.clone());
         Ok(w)
@@ -541,6 +599,13 @@ async fn blocking<R: Send + 'static>(
     }
 }
 
+fn lane_ix(lane: Lane) -> usize {
+    match lane {
+        Lane::Sync => 0,
+        Lane::Background => 1,
+    }
+}
+
 fn after(t: Timestamp, d: Duration) -> Timestamp {
     t.saturating_add(d).unwrap_or(Timestamp::MAX)
 }
@@ -555,4 +620,125 @@ fn gone_ok(r: Result<(), EngineError>) -> Result<(), EngineError> {
 
 fn sync_dedup(collection: CollectionId) -> String {
     format!("sync:{collection}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+    use musubi_model::provider::{Access, RemoteCollection};
+    use musubi_model::store::DiscoveryWrite;
+    use musubi_model::{CollectionRef, EntityKind};
+    use musubi_store_sqlite::{SqliteControl, SqliteStorage};
+    use musubi_testkit::{CanonicalCodec, FakeProvider, ManualClock, MemoryVault};
+
+    use super::*;
+
+    const TENANT: TenantId = TenantId::from_u128(0x7e);
+
+    fn collection(name: String) -> RemoteCollection {
+        RemoteCollection {
+            remote: CollectionRef(name.clone()),
+            kind: EntityKind::Event,
+            name,
+            time_zone: None,
+            access: Access::Owner,
+            primary: false,
+        }
+    }
+
+    /// Writes cancelled at random moments while the writer keeps retiring:
+    /// never two writer threads at once, heads only go up, nothing confirmed
+    /// is lost.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn idle_writer_retiring_under_cancelled_writes_stays_single() {
+        let dir = std::env::temp_dir().join(format!(
+            "musubi-writer-race-{}-{}",
+            std::process::id(),
+            Timestamp::now().as_nanosecond()
+        ));
+        let storage = Arc::new(SqliteStorage::new(&dir.join("tenants"), 4).unwrap());
+        storage.create_tenant(TENANT).unwrap();
+        let control = Arc::new(SqliteControl::open(&dir.join("control.db")).unwrap());
+        let (last, backwards) = (
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let sink: CommitSink = {
+            let (last, backwards) = (last.clone(), backwards.clone());
+            Arc::new(move |_, head: Seq| {
+                if last.fetch_max(head.0, Ordering::SeqCst) >= head.0 {
+                    backwards.store(true, Ordering::SeqCst);
+                }
+            })
+        };
+        let engine: Engine<SqliteStorage, CanonicalCodec> = Engine::new(
+            storage.clone(),
+            Arc::new(FakeProvider::new()),
+            control,
+            Arc::new(MemoryVault::default()),
+            Arc::new(ManualClock::new(Timestamp::now())),
+            sink,
+            Config {
+                writer_idle: Duration::from_millis(1),
+                ..Config::default()
+            },
+        );
+        static INSIDE: AtomicUsize = AtomicUsize::new(0);
+        static OVERLAP: AtomicBool = AtomicBool::new(false);
+        let put = |name: String, slow: bool| {
+            engine.write(TENANT, move |s| {
+                if INSIDE.fetch_add(1, Ordering::SeqCst) > 0 {
+                    OVERLAP.store(true, Ordering::SeqCst);
+                }
+                if slow {
+                    // Still running when a second writer would start.
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                let out = s.apply_discovery(&DiscoveryWrite {
+                    account: AccountId::from_u128(1),
+                    collections: vec![collection(name)],
+                    complete: false,
+                });
+                INSIDE.fetch_sub(1, Ordering::SeqCst);
+                out
+            })
+        };
+        let mut rng = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut confirmed = Vec::new();
+        for i in 0..600 {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            // Around the moment the idle writer retires.
+            std::thread::sleep(Duration::from_micros(500 + rng % 1000));
+            // Sent, then dropped by its caller before it ran.
+            let cancelled = tokio::time::timeout(Duration::ZERO, put(format!("x{i}"), true));
+            if let Ok(res) = cancelled.await {
+                res.unwrap();
+                confirmed.push(format!("x{i}"));
+            }
+            // Started next to the cancelled one if its writer was retired.
+            std::thread::sleep(Duration::from_micros(300));
+            put(format!("c{i}"), false).await.unwrap();
+            confirmed.push(format!("c{i}"));
+        }
+        assert!(!OVERLAP.load(Ordering::SeqCst), "two writers ran at once");
+        assert!(
+            !backwards.load(Ordering::SeqCst),
+            "a commit head went backwards"
+        );
+        let have: std::collections::HashSet<String> = storage
+            .open(TENANT)
+            .unwrap()
+            .collections()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.remote.remote.0)
+            .collect();
+        for name in &confirmed {
+            assert!(have.contains(name), "{name} confirmed but lost");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

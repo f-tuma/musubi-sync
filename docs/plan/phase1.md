@@ -418,12 +418,21 @@ Viz K3. Je to jediný „poskytovatel" v CI. Scénáře jsou jazykově neutráln
   - klient, který četl `/changes` před pádem, po pádu nepřeskočí žádnou změnu;
   - žádná úloha ve frontě nezůstala pronajatá navždy.
 - PR: 20 vražd. Noc: 1 000 vražd a nahlášený seed každé chyby.
+- **Provedení (K7):** test `musubi-syncd/tests/crash.rs`, harness (podproces, náhodný generátor, klient API) v `musubi_testkit::harness`. Sudá kola vraždí v náhodném okamžiku 0–1,5 s zátěže, lichá kola střídají body `apply-page`, `truncate`, `commit-sse` a `backup`, každé dvacáté kolo vraždí hned po požadavku na nový watch kanál (obnova kanálu se pozná u falešného serveru, bod v procesu nepotřebuje). Po každé vraždě uzel nic nebudí kromě vlastního doběhnutí při startu; pak se ověří všech pět invariantů a sledující klient `/changes` a SSE.
+- **Body vraždy jen v testu:** body jsou za cargo feature `crash-points` (`musubi-syncd` → `musubi-store-sqlite`), která je ve výchozím stavu vypnutá. Vyžaduje ji jen testovací cíl `crash` (`required-features`), takže `cargo build --release` ani běžné `cargo test` kód bodů vůbec nepřeloží. Proměnné `MUSUBI_CRASH_AT=<bod>[:<n>]` a `MUSUBI_WAL_HARD` (nižší limit WAL, aby malá data došla k `TRUNCATE`) čte jen kód za touto feature.
+- **Noc:** `MUSUBI_SYNCD_CRASH_RUNS=50` běhů po 20 vraždách; každý neúspěšný běh vypíše seed a kolo, `MUSUBI_CRASH_SEED=<seed> MUSUBI_SYNCD_CRASH_RUNS=1` přehraje jeho plán (načasování vraždy samo reprodukovatelné není).
+- **Co crash testy našly v enginu (opraveno v K7):**
+  - změna u Googlu po snímku úplného čtení nebo před otevřením kanálu čekala na hodinové dotazování: po úplném čtení a po novém kanálu teď do 150 ms (`COALESCE`) následuje inkrement;
+  - oznámení během výpadku uzlu se ztratila: `Engine::catch_up` při startu zařadí push úlohu pro každý kanál;
+  - pronajaté úlohy po pádu čekaly na vypršení pronájmu a mohly zůstat dvakrát: `release_leases` při otevření uzlu uvolní pronájmy a sloučí duplicitní úlohy podle `dedup`;
+  - úloha úplného čtení zabitá mezi commitem `finish` a naplánováním dalšího syncu nechala kolekci bez kanálu i bez úlohy navždy: taková úloha teď pokračuje inkrementem, který naplánování dodělá.
 
 ### 6.4 Záloha a obnova v CI
 
 - Během běžícího syncu se udělá `musubi-syncd backup`, uzel se zastaví, adresář dat se smaže a `musubi-syncd restore` ho obnoví.
 - Po startu se odpovědi `range` a `changes` rovnají stavu k okamžiku zálohy a engine potom dožene změny falešného serveru bez duplicit.
 - Test počítá s pořadím `main.db` → `outbox.db`, i když `outbox.db` ve fázi 1 neexistuje.
+- **Provedení (K7):** test `musubi-syncd/tests/backup.rs` v běžném `cargo test`. Záloha běží, zatímco inkrement visí na odezvě falešného serveru 5 s, a test ověří, že během zálohy žádný commit nedopadl. Obnovený uzel odpovídá jako v okamžiku zálohy, pak dožene novou změnu; prefix žurnálu zůstane a sedí počty položek proti falešnému serveru. Záloha tenanta obsahuje jen `main.db`.
 
 ### 6.5 Benchmarky
 
@@ -431,15 +440,39 @@ Měří je `musubi-testkit` (binárka `bench`) proti `musubi-syncd` a falešném
 
 | # | Cíl (kapitola 5.1) | Jak | Rozpočet |
 | --- | --- | --- | --- |
-| B1 | první data po připojení | odezva falešného serveru 150 ms na požadavek; čas od dokončení OAuth po první záznam v `/changes` | pod 1 s |
+| B1 | první data po připojení | odezva falešného serveru 150 ms na požadavek; čas od návratu z OAuth (callback včetně výměny tokenu) po první událost (entitu) v `/changes`; změny kolekcí z discovery se nepočítají | pod 1 s |
 | B2 | změna → proud změn s pushem | čas od odeslání oznámení po událost v SSE | pod 500 ms |
 | B3 | dotaz na rozsah | tenant 5 000 událostí a 50 sérií, okno 1 týden a 1 měsíc; varianta s payloadem i jen s id; hustý rozsah se jen hlásí (fáze 0: 28 ms, jen id 6,8 ms) | p99 pod 10 ms |
 | B4 | změny od kurzoru | `/changes` po 500 | p99 pod 10 ms |
 | B5 | vlastní režie inkrementu | čas syncu minus čas strávený u falešného serveru | pod 20 ms |
 | B6 | WAL | import 50 000 událostí se souběžnými čtenáři | největší WAL pod 256 MB |
-| B7 | paměť aktora | 10 000 spících účtů, RSS na účet | nahlásit; rozpočet se stanoví po prvním měření |
+| B7 | paměť aktora | 10 000 spících účtů, RSS na účet | nahlásit; návrh z K7: pod 512 KiB na spící účet a žádné vlákno na účet ani tenanta |
 | B8 | cena kodeku | `decode` na událost, mikrobenchmark | nahlásit a hlídat regresi |
 | B9 | rekurence | 10 000 sérií v okně 2026–2031 (fáze 0: 2,2–3,1 s) | hlídat regresi |
+
+Provedení (K7):
+
+- `bench` spouští sestavenou binárku `musubi-syncd` (vedle sebe, nebo `--syncd`) jako podproces a falešný server v sobě; `--only B1,B3` vybere část. `--smoke` běží v malém měřítku a hlídá řádově: selže až nad desetinásobkem rozpočtu. Plné rozpočty hlídá noc.
+- B3 nepoužívá seed falešného serveru (ten soustředí události do ±30 dní), ale vlastního tenanta: 4 950 jednotlivých událostí rozložených do ±2,5 roku a 50 otevřených týdenních sérií.
+- B8 a B9 jsou benchmarky crates (`cargo bench -p musubi-google -p musubi-recurrence --benches`, `MUSUBI_BENCH_SMOKE=1` pro malé měřítko), protože `musubi-testkit` nesmí záviset na `musubi-google` ani `musubi-recurrence`. B9 používá syntetickou sadu (denní, týdenní, měsíční a roční pravidla ve třech zónách a plovoucí čas), ne korpus fáze 0, a hlídá horní mez fáze 0.
+
+Výsledky (K7, plný běh na nečinném stroji, 20 jader, release):
+
+| # | Naměřeno | Rozpočet |
+| --- | --- | --- |
+| B1 | nejhorší z 5: 464 ms (dřív 160 ms: měřilo se až po výměně tokenu a do první změny kolekce) | pod 1 s |
+| B2 | nejhorší z 20: 307 ms (p50 304 ms; 150 ms je zpoždění `COALESCE`, 150 ms odezva falešného serveru) | pod 500 ms |
+| B3 | p99 z 500: týden 1,0 ms (jen id 0,7 ms), měsíc 3,7 ms (jen id 1,2 ms) | pod 10 ms |
+| B4 | p99 z 500: 1,0 ms | pod 10 ms |
+| B5 | p99 z 20: 5,3 ms (p50 3,1 ms) | pod 20 ms |
+| B6 | největší WAL 41 MB; import 7,7 s; čtenáři p99 15 ms, max 25 ms | pod 256 MB |
+| B7 | 320 KiB na spící účet (10 000 účtů: 11 → 3 140 MiB); vlákna 24 → 73, žádné vlákno zapisovače | nahlásit |
+| B8 | 1,42 µs na událost | nahlásit |
+| B9 | 0,70 s (2 349 408 výskytů) | pod 3,1 s |
+
+- **B5 před opravou chybělo:** p99 50–57 ms. Webhook v `musubi-syncd` zařazoval push úlohu přímo do řídicího úložiště, takže čekala po `COALESCE` ještě na další tik pruhu (50 ms). Webhook teď volá `Engine::on_push` a `enqueue` pruh probudí, když je úloha splatná do 1 s; delší úlohy najde tik. První noční běh na sdíleném runneru (4 jádra) pak měl p99 z 20 vzorků 42,6 ms při p50 3,4 ms; lokálně ani na 4 zatížených jádrech se to nezopakovalo. p99 z 20 je prostě nejhorší vzorek, proto B5 teď měří 200 vzorků (lokálně p99 4,7 ms).
+- **B7 a vlákna:** dřív měl každý tenant vlastní vlákno zapisovače navždy. Zapisovač se teď po `Config::writer_idle` (30 s) bez práce zastaví a další zápis ho spustí znovu (test: restartovaný zapisovač nic neztratí). Zbylá vlákna nerostou s počtem účtů: 20 pracovních vláken runtime a blokovací pool tokio (strop 512, nečinné vlákno končí po 10 s; tiky pruhů jich pár drží zahřátých). Návrh rozpočtu: pod 512 KiB RSS na spící účet a počet vláken omezený runtime, ne počtem účtů; `bench` už teď selže, když po spánku zůstane vlákno zapisovače. Navazující práce: připojení 10 000 účtů trvalo 377 s (úplné čtení po jednom), měřit znovu s K8.
+- **Úklid WAL napříč tenanty:** sdílené vlákno checkpointů zdrží PASSIVE ostatních tenantů o 0,3–0,5 s za pomalý `TRUNCATE`. V B2 a B3 (jeden tenant) se to neprojeví; dopad na čtenáře během importu ukazuje B6.
 
 Přijetí zápisu (p99 pod 10 ms, během importu téhož tenanta pod 20 ms) se měří až ve fázi 3, se souborem outboxu. Odezvu Googlu změří K8.
 
@@ -473,10 +506,10 @@ GitHub Actions, workflow `.github/workflows/ci.yml`, akce připnuté na SHA, cac
 | clippy | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PR, `main` |
 | test | `cargo test --workspace --locked` (včetně kontraktních testů, zálohy a obnovy, krátkých crash testů) | PR, `main` |
 | deny | `cargo deny check` (licence, advisories, bans, sources) přes `EmbarkStudios/cargo-deny-action` | PR, `main`, denně |
-| bench-smoke | `cargo run -p musubi-testkit --bin bench --release --locked -- --smoke` | PR |
+| bench-smoke | `cargo build --release --locked -p musubi-syncd -p musubi-testkit --bins`, `target/release/bench --smoke` a benchmarky crates B8, B9 v malém měřítku | PR |
 | nightly | dlouhé crash testy, plné benchmarky, fuzz rekurence | v noci |
 
-Od K0 jsou bench-smoke a nightly zástupné joby, které jen vypíšou, že jsou zástupné: binárku `bench` přidá K7, noční obsah K1 a K7. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Fuzz rekurence (K2) běží v nočním jobu `fuzz-recurrence`. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
+Od K0 byly bench-smoke a nightly zástupné joby; K7 je nahradil. Job test navíc pouští 20 vražd celé binárky (`cargo test -p musubi-syncd --features crash-points --release --locked --test crash`), nightly 1 000 a plné benchmarky. K1 do nightly přidal `kill -9` uprostřed `apply_page` s 1000 koly (`MUSUBI_CRASH_ROUNDS`), v PR běží 200. Fuzz rekurence (K2) běží v nočním jobu `fuzz-recurrence`. Toolchain instaluje `rustup toolchain install` z `rust-toolchain.toml`, bez další akce.
 
 `deny.toml`:
 
@@ -514,3 +547,4 @@ Rozhodnuto (koordinátor, 11. 11. 2026): soubor outboxu se implementuje ve fázi
 2. **Testovací účet Google, projekt GCP a veřejná adresa pro webhook** pro K8.
 3. **Uid zrušeného výskytu importované série.** Rozhodnuto (koordinátor, 11. 11. 2026, K5): vazbu na sérii nese `RemoteObject::master: Option<RemoteKey>` (Google `recurringEventId`). `Correlation` tvar nemění; `Correlation.uid` je neprůhledný klíč série daný poskytovatelem (remote key předlohy: vlastní klíč u předlohy a samostatné události, `master` u výjimky), **ne** iCalUID. Úložiště se nemění, páruje dál podle (kolekce, uid, recurrence_id). Zrušený výskyt je živá položka bez řádků výskytů, která potlačí výskyt předlohy; živě se neukáže.
 4. **Přeskok vpřed u drahých sérií (oprava 12 z `recurrence.md`, odložena).** `TooExpensive` dnes znamená „v tomto okně nerozbalitelné". Známé případy: `FREQ=MINUTELY` (nebo `SECONDLY`) se starým DTSTART, kde okno leží za rozpočtem 1 000 000 vygenerovaných okamžiků, a nemožné pravidlo jako `BYMONTH=2;BYMONTHDAY=30` daleko od DTSTART (jádro skončí po `MAX_ITER_LOOP` = 100 000 prázdných period, `was_limited`). Otázka: zda a kdy doplnit přeskok na začátek okna; do té doby to K5 hlásí, nemlčí.
+5. **Osiřelý kanál Google po pádu (K7).** Pád mezi `subscribe` a `put_channel` (obnova kanálu i `ensure_channel`) nechá kanál u Googlu běžet do vypršení (≤ 7 dní). Data se neztratí, jen chodí zbytečné notifikace. Návrh opravy: před `subscribe` uložit id čekajícího kanálu a při startu zbytky zastavit (`stop`).

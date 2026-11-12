@@ -17,6 +17,10 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
+[features]
+# Test-only kill points for the whole-binary crash test (src/crash.rs).
+crash-points = []
+
 [dev-dependencies]
 # `hooks` for the progress handler that counts VM steps in a unit test.
 rusqlite = { workspace = true, features = ["hooks"] }

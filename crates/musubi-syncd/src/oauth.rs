@@ -195,6 +195,11 @@ pub(crate) async fn callback(
 
     let rec = app
         .run(move |a| {
+            // Held until the account exists, so a deletion lists it.
+            let deleting = a.deleting();
+            if deleting.contains(&pending.tenant) {
+                return Err(StoreError::NotFound.into());
+            }
             a.storage.open(pending.tenant)?;
             let found = match pending.account {
                 Some(id) => {

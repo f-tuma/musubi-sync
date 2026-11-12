@@ -24,10 +24,13 @@ serde_json.workspace = true
 # PKCE S256 and id_token encoding of the authorization-code grant.
 base64.workspace = true
 sha2.workspace = true
-tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync"] }
+# Whole-binary harness (src/harness.rs) and the `bench` binary: the HTTP client
+# side of musubi-syncd, with the ring provider reqwest's rustls takes.
+reqwest.workspace = true
+rustls.workspace = true
+# Data directories of the `bench` nodes.
+tempfile.workspace = true
 
 [lints]
 workspace = true

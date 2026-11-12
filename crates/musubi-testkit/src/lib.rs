@@ -10,9 +10,11 @@
 //! [`MemoryVault`], [`CanonicalCodec`] and [`event_object`].
 //!
 //! [`google`] is the in-process fake Google Calendar HTTP server (K3) that
-//! the Google adapter's transport tests run against.
+//! the Google adapter's transport tests run against. [`harness`] runs the
+//! whole `musubi-syncd` binary over it (crash tests, the `bench` binary).
 
 pub mod google;
+pub mod harness;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::future::Future;

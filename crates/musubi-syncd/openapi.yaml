@@ -329,7 +329,10 @@ paths:
       description: |
         Each account is removed first: its watch channels are stopped at
         Google while its tokens still exist, then the tokens are deleted.
-        Open streams of the tenant end.
+        Open streams of the tenant end. Sign-ins of the tenant that finish
+        meanwhile are refused (`404`). The request has no timeout (one Google
+        call per channel), and the deletion completes even if the client
+        disconnects; a failed one (`500`) can be repeated.
       parameters:
         - $ref: "#/components/parameters/Id"
       responses:

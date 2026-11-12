@@ -466,6 +466,28 @@ async fn expired_cursor_reads_everything_again_without_duplicates() {
 }
 
 #[tokio::test]
+async fn full_read_again_on_an_existing_channel_is_followed_by_a_delta() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.control.channels(TENANT, Some(ACCOUNT)).unwrap().len(), 1);
+    h.fake.expire_cursors();
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().full_reads, 2);
+    // After the second full read's snapshot; the channel already exists, so
+    // a notification deferred to the read would wait for the push poll.
+    h.put_at("b", 2);
+    let deltas = h.fake.calls().deltas;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().deltas, deltas + 1);
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
 async fn ten_notifications_within_150_ms_cost_one_delta() {
     let h = H::new();
     h.put_at("a", 1);
@@ -486,6 +508,120 @@ async fn ten_notifications_within_150_ms_cost_one_delta() {
     h.advance(Duration::from_millis(60));
     assert_eq!(h.engine.run_until_idle().await.unwrap(), 1);
     assert_eq!(h.fake.calls().deltas, deltas + 1);
+}
+
+#[tokio::test]
+async fn idle_writer_stops_and_the_next_write_restarts_it_losing_nothing() {
+    let h = H::with(|c| c.writer_idle = Duration::from_millis(50));
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    until(|| h.engine.active_writers() == 0).await;
+    let before = h.journal();
+
+    // Each sync finds the writer stopped or running; either way nothing is lost.
+    let channel = h.control.channels(TENANT, Some(ACCOUNT)).unwrap().remove(0);
+    for (key, day) in [("b", 2), ("c", 3)] {
+        h.put_at(key, day);
+        h.engine.on_push(&channel).await.unwrap();
+        h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+        h.engine.run_until_idle().await.unwrap();
+    }
+    assert_eq!(h.live("cal1", &["a", "b", "c"]), ["a", "b", "c"]);
+    let after = h.journal();
+    assert_eq!(after[..before.len()], before[..]);
+    let seqs: Vec<_> = after.iter().map(|c| c.seq.0).collect();
+    assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1), "{seqs:?}");
+    until(|| h.engine.active_writers() == 0).await;
+}
+
+#[tokio::test]
+async fn coalesced_push_runs_when_due_not_at_the_next_tick() {
+    let h = H::with(|c| c.tick = Duration::from_secs(10));
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    let channel = h.control.channels(TENANT, Some(ACCOUNT)).unwrap().remove(0);
+    let deltas = h.fake.calls().deltas;
+
+    // The lanes take their first look now and then wait a tick (10 s).
+    let _running = h.engine.start();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    h.put_at("b", 2);
+    h.engine.on_push(&channel).await.unwrap();
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    // `until` gives up after 5 s, long before the tick.
+    until(|| h.fake.calls().deltas == deltas + 1).await;
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
+async fn change_before_the_channel_opened_arrives_without_a_notification() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake.hold(Op::Subscribe);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().subscribe == 1).await;
+    // The full read is over and the channel does not exist yet: Google
+    // sends nothing for this one.
+    h.put_at("b", 2);
+    h.fake.release(Op::Subscribe);
+    run.await.unwrap().unwrap();
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a"]);
+
+    let deltas = h.fake.calls().deltas;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().deltas, deltas + 1);
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
+async fn catch_up_reads_what_changed_while_the_node_was_down() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    // The notification for this one went to a dead node.
+    h.put_at("b", 2);
+
+    let engine = h.restart();
+    assert_eq!(engine.catch_up().await.unwrap(), 1, "one channel");
+    let deltas = h.fake.calls().deltas;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().deltas, deltas + 1);
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
+async fn full_read_cut_off_after_its_end_still_schedules_the_collection() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake.hold(Op::Subscribe);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    // The full read has ended and committed; the process dies in its
+    // `synced`, before a channel or the next poll exists.
+    until(|| h.fake.calls().subscribe == 1).await;
+    run.abort();
+    let _ = run.await;
+    h.fake.release(Op::Subscribe);
+
+    let engine = h.restart();
+    h.advance(h.config.lease_for + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.control.channels(TENANT, Some(ACCOUNT)).unwrap().len(), 1);
+    h.put_at("b", 2);
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
 }
 
 #[tokio::test]
@@ -945,6 +1081,54 @@ async fn removing_an_account_stops_its_channels_before_its_tokens_go() {
     h.advance(h.config.rediscover_every * 2);
     engine.run_until_idle().await.unwrap();
     assert_eq!(h.fake.calls(), calls);
+}
+
+#[tokio::test]
+async fn removal_keeps_channels_and_tokens_when_a_refresh_fails_transiently() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    // An expired access token: the removal refreshes it first, and that fails.
+    let mut tokens = h.vault.load(ACCOUNT).unwrap().unwrap();
+    tokens.access_until = h.clock_now();
+    h.vault.store(ACCOUNT, &tokens).unwrap();
+    h.fake
+        .fail(Op::Refresh, SyncError::Transient("network".into()));
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap_err();
+    assert_eq!(h.fake.channels().len(), 1, "still live at the provider");
+    assert_eq!(h.control.channels(TENANT, Some(ACCOUNT)).unwrap().len(), 1);
+    assert_eq!(h.state(), Some(AccountState::Removing));
+
+    // The resumed removal stops the channel with the kept tokens.
+    h.advance(h.config.lease_for + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.state(), None);
+    assert!(h.fake.channels().is_empty());
+}
+
+#[tokio::test]
+async fn removal_without_a_grant_forgets_the_channels() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    let mut tokens = h.vault.load(ACCOUNT).unwrap().unwrap();
+    tokens.access_until = h.clock_now();
+    h.vault.store(ACCOUNT, &tokens).unwrap();
+    h.fake.fail(Op::Refresh, SyncError::ReauthRequired);
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap();
+    assert_eq!(h.state(), None);
+    assert!(
+        h.control
+            .channels(TENANT, Some(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+    // Nothing can stop it at the provider; it expires there.
+    assert_eq!(h.fake.calls().unsubscribe, 0);
 }
 
 #[tokio::test]

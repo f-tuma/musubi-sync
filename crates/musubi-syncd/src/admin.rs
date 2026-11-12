@@ -51,12 +51,28 @@ pub(crate) async fn create_tenant(State(app): State<Arc<App>>, caller: Caller) -
 /// Each account is removed through the engine first: it stops the account's
 /// watch channels at Google while the account's tokens still exist, then
 /// deletes them. Only then go the tenant's rows, store and commit channel.
+///
+/// The tenant is marked first, so an OAuth callback finishing meanwhile does
+/// not add an account after the listing. The work runs in its own task: a
+/// client that gives up does not cut it short.
 pub(crate) async fn delete_tenant(
     State(app): State<Arc<App>>,
     caller: Caller,
     UrlPath(id): UrlPath<TenantId>,
 ) -> Result<StatusCode, ApiError> {
     caller.admin()?;
+    tokio::spawn(async move {
+        app.deleting().insert(id);
+        let res = remove_tenant(&app, id).await;
+        app.deleting().remove(&id);
+        res
+    })
+    .await
+    .map_err(|e| ApiError::internal(&e))??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_tenant(app: &Arc<App>, id: TenantId) -> Result<(), ApiError> {
     let accounts = app.run(move |a| Ok(a.control.accounts(id)?)).await?;
     for acc in accounts {
         app.engine
@@ -73,8 +89,7 @@ pub(crate) async fn delete_tenant(
             Err(e) => Err(e.into()),
         }
     })
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
+    .await
 }
 
 #[derive(Deserialize)]
@@ -204,6 +219,9 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
     private_new_file(Path::new(dest)).map_err(io)?;
     conn.execute("VACUUM INTO ?1", [dest])
         .map_err(|e| ApiError::internal(&e))?;
+    // `control.db` copied, the tenants not yet.
+    #[cfg(feature = "crash-points")]
+    musubi_store_sqlite::crash::point("backup", true);
 
     let mut n = 0;
     for t in tenant_dirs(&app.data_dir.join("tenants")).map_err(|e| ApiError::internal(&e))? {

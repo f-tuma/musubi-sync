@@ -27,5 +27,9 @@ proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
 musubi-testkit.workspace = true
 
+[[bench]]
+name = "decode"
+harness = false
+
 [lints]
 workspace = true

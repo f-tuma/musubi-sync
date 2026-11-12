@@ -34,9 +34,17 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "ansi"] }
 zeroize.workspace = true
 
+[features]
+# Test-only kill points for tests/crash.rs; never enabled in release builds.
+crash-points = ["musubi-store-sqlite/crash-points"]
+
 [dev-dependencies]
 musubi-testkit.workspace = true
 tempfile.workspace = true
+
+[[test]]
+name = "crash"
+required-features = ["crash-points"]
 
 [lints]
 workspace = true

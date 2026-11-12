@@ -444,13 +444,13 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             return self.finish(rec, cx, &col, r).await;
         }
         let wants_full = col.cursor.is_none() || col.status.coverage != Coverage::Full;
-        if background {
-            if wants_full {
-                let r = self.full_read(tenant, cx, &col).await?;
-                self.finish(rec, cx, &col, r).await?;
-            }
-            return Ok(());
+        if background && wants_full {
+            let r = self.full_read(tenant, cx, &col).await?;
+            return self.finish(rec, cx, &col, r).await;
         }
+        // A background job with no full read left is one whose finish
+        // committed before a crash took its `synced`: the delta below
+        // schedules what that would have.
         if wants_full {
             if col.status.coverage == Coverage::None {
                 self.window_read(tenant, cx, &col).await?;
@@ -654,12 +654,16 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             s.error = None;
         })
         .await?;
-        let pushed = self.ensure_channel(rec, cx, col).await?;
+        let push = self.ensure_channel(rec, cx, col).await?;
         let c = &self.inner.config;
-        let every = if pushed {
-            c.poll_every_push
-        } else {
-            c.poll_every
+        let every = match push {
+            // A full read ends at its own snapshot, and a sync job arriving
+            // during it only deferred to it; a new channel missed what changed
+            // before it existed. One delta now picks both up.
+            _ if full => crate::COALESCE,
+            Push::Opened => crate::COALESCE,
+            Push::Existing => c.poll_every_push,
+            Push::None => c.poll_every,
         };
         let mut job = sync_job(rec.tenant, rec.id, col.id, Lane::Sync, now);
         job.due = after(now, every);
@@ -677,40 +681,40 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         self.enqueue(job).await
     }
 
-    /// Opens a push channel for the collection unless one exists. Returns
-    /// whether the collection has one; failing to open one only means polling.
+    /// Opens a push channel for the collection unless one exists; failing
+    /// to open one only means polling.
     async fn ensure_channel(
         &self,
         rec: &AccountRecord,
         cx: &AccountCx,
         col: &CollectionState,
-    ) -> Result<bool, EngineError> {
+    ) -> Result<Push, EngineError> {
         let (Some(push), Some(callback)) =
             (self.inner.provider.push(), &self.inner.config.callback)
         else {
-            return Ok(false);
+            return Ok(Push::None);
         };
         let (tenant, account, id) = (rec.tenant, rec.id, col.id);
         let channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
         if channels.iter().any(|c| c.collection == id) {
-            return Ok(true);
+            return Ok(Push::Existing);
         }
         match push.subscribe(cx, &col.remote.remote, callback).await {
             Ok(sub) => {
-                self.put_channel(
-                    cx,
-                    ChannelRecord {
-                        tenant,
-                        account,
-                        collection: id,
-                        sub,
-                    },
-                )
-                .await
+                let ch = ChannelRecord {
+                    tenant,
+                    account,
+                    collection: id,
+                    sub,
+                };
+                Ok(match self.put_channel(cx, ch).await? {
+                    true => Push::Opened,
+                    false => Push::None,
+                })
             }
             Err(e) => {
                 tracing::warn!(collection = %id, error = %e, "push channel not opened; polling");
-                Ok(false)
+                Ok(Push::None)
             }
         }
     }
@@ -881,6 +885,16 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             .unwrap_or_else(|e| e.into_inner());
         locks.entry(id).or_default().clone()
     }
+}
+
+/// A collection's push channel after [`Engine::ensure_channel`].
+enum Push {
+    /// None: the collection is polled.
+    None,
+    /// It had one already.
+    Existing,
+    /// Opened just now.
+    Opened,
 }
 
 fn sync_job(

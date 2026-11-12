@@ -18,6 +18,8 @@
 //! (see [`storage`]); `changes.seq` is `AUTOINCREMENT`.
 
 mod control;
+#[cfg(feature = "crash-points")]
+pub mod crash;
 mod schema;
 mod storage;
 mod tenant;
