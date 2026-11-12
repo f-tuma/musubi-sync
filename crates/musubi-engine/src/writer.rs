@@ -3,6 +3,7 @@
 //! writer retires, so sleeping tenants hold no thread; the next write starts
 //! a new one.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
@@ -18,7 +19,7 @@ type Reply = Box<dyn FnOnce() + Send>;
 type Command<T> = Box<dyn FnOnce(&mut T) -> Reply + Send>;
 
 /// Handle to a tenant's writer thread. The thread ends when the last handle is
-/// dropped, once it has run the commands already sent.
+/// dropped; queued commands hold one, so they always run first.
 pub(crate) struct Writer<T> {
     tx: mpsc::Sender<Command<T>>,
     /// Tells this writer from a later one of the same tenant.
@@ -48,6 +49,10 @@ impl<T: TenantStore + 'static> Writer<T> {
                     let cmd = match rx.recv_timeout(idle) {
                         Ok(cmd) => cmd,
                         Err(RecvTimeoutError::Timeout) => {
+                            // Widens the gap a command can be sent in, so the
+                            // writer stress test hits it.
+                            #[cfg(test)]
+                            std::thread::sleep(Duration::from_millis(1));
                             retire(id);
                             continue;
                         }
@@ -70,16 +75,20 @@ impl<T: TenantStore + 'static> Writer<T> {
         Ok(Self { tx, id })
     }
 
-    /// Runs `f` on the writer thread and returns its result.
+    /// Runs `f` on the writer thread and returns its result. The command holds
+    /// a handle until its reply, so the writer is not retired while it is
+    /// queued, even when its caller is cancelled.
     pub(crate) async fn run<R: Send + 'static>(
-        &self,
+        self: &Arc<Self>,
         f: impl FnOnce(&mut T) -> Result<R, StoreError> + Send + 'static,
     ) -> Result<R, EngineError> {
         let (tx, rx) = oneshot::channel();
+        let handle = self.clone();
         let cmd: Command<T> = Box::new(move |store| {
             let out = f(store);
             Box::new(move || {
                 let _ = tx.send(out);
+                drop(handle);
             })
         });
         self.tx.send(cmd).map_err(|_| EngineError::Stopped)?;

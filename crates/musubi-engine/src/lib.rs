@@ -556,8 +556,9 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let retire = move |id| {
             let Some(inner) = inner.upgrade() else { return };
             let mut writers = inner.writers.lock().unwrap_or_else(|e| e.into_inner());
-            // Only the map holds it: no write is between getting it and its reply,
-            // and the next one must take this lock to get it.
+            // Only the map holds it: no write is between getting it and its reply
+            // (a queued command holds a handle too, even if its caller was
+            // cancelled), and the next one must take this lock to get it.
             if writers
                 .get(&tenant)
                 .is_some_and(|w| w.id == id && Arc::strong_count(w) == 1)
@@ -619,4 +620,125 @@ fn gone_ok(r: Result<(), EngineError>) -> Result<(), EngineError> {
 
 fn sync_dedup(collection: CollectionId) -> String {
     format!("sync:{collection}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+    use musubi_model::provider::{Access, RemoteCollection};
+    use musubi_model::store::DiscoveryWrite;
+    use musubi_model::{CollectionRef, EntityKind};
+    use musubi_store_sqlite::{SqliteControl, SqliteStorage};
+    use musubi_testkit::{CanonicalCodec, FakeProvider, ManualClock, MemoryVault};
+
+    use super::*;
+
+    const TENANT: TenantId = TenantId::from_u128(0x7e);
+
+    fn collection(name: String) -> RemoteCollection {
+        RemoteCollection {
+            remote: CollectionRef(name.clone()),
+            kind: EntityKind::Event,
+            name,
+            time_zone: None,
+            access: Access::Owner,
+            primary: false,
+        }
+    }
+
+    /// Writes cancelled at random moments while the writer keeps retiring:
+    /// never two writer threads at once, heads only go up, nothing confirmed
+    /// is lost.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn idle_writer_retiring_under_cancelled_writes_stays_single() {
+        let dir = std::env::temp_dir().join(format!(
+            "musubi-writer-race-{}-{}",
+            std::process::id(),
+            Timestamp::now().as_nanosecond()
+        ));
+        let storage = Arc::new(SqliteStorage::new(&dir.join("tenants"), 4).unwrap());
+        storage.create_tenant(TENANT).unwrap();
+        let control = Arc::new(SqliteControl::open(&dir.join("control.db")).unwrap());
+        let (last, backwards) = (
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let sink: CommitSink = {
+            let (last, backwards) = (last.clone(), backwards.clone());
+            Arc::new(move |_, head: Seq| {
+                if last.fetch_max(head.0, Ordering::SeqCst) >= head.0 {
+                    backwards.store(true, Ordering::SeqCst);
+                }
+            })
+        };
+        let engine: Engine<SqliteStorage, CanonicalCodec> = Engine::new(
+            storage.clone(),
+            Arc::new(FakeProvider::new()),
+            control,
+            Arc::new(MemoryVault::default()),
+            Arc::new(ManualClock::new(Timestamp::now())),
+            sink,
+            Config {
+                writer_idle: Duration::from_millis(1),
+                ..Config::default()
+            },
+        );
+        static INSIDE: AtomicUsize = AtomicUsize::new(0);
+        static OVERLAP: AtomicBool = AtomicBool::new(false);
+        let put = |name: String, slow: bool| {
+            engine.write(TENANT, move |s| {
+                if INSIDE.fetch_add(1, Ordering::SeqCst) > 0 {
+                    OVERLAP.store(true, Ordering::SeqCst);
+                }
+                if slow {
+                    // Still running when a second writer would start.
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                let out = s.apply_discovery(&DiscoveryWrite {
+                    account: AccountId::from_u128(1),
+                    collections: vec![collection(name)],
+                    complete: false,
+                });
+                INSIDE.fetch_sub(1, Ordering::SeqCst);
+                out
+            })
+        };
+        let mut rng = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut confirmed = Vec::new();
+        for i in 0..600 {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            // Around the moment the idle writer retires.
+            std::thread::sleep(Duration::from_micros(500 + rng % 1000));
+            // Sent, then dropped by its caller before it ran.
+            let cancelled = tokio::time::timeout(Duration::ZERO, put(format!("x{i}"), true));
+            if let Ok(res) = cancelled.await {
+                res.unwrap();
+                confirmed.push(format!("x{i}"));
+            }
+            // Started next to the cancelled one if its writer was retired.
+            std::thread::sleep(Duration::from_micros(300));
+            put(format!("c{i}"), false).await.unwrap();
+            confirmed.push(format!("c{i}"));
+        }
+        assert!(!OVERLAP.load(Ordering::SeqCst), "two writers ran at once");
+        assert!(
+            !backwards.load(Ordering::SeqCst),
+            "a commit head went backwards"
+        );
+        let have: std::collections::HashSet<String> = storage
+            .open(TENANT)
+            .unwrap()
+            .collections()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.remote.remote.0)
+            .collect();
+        for name in &confirmed {
+            assert!(have.contains(name), "{name} confirmed but lost");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
