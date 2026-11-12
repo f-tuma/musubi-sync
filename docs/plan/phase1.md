@@ -388,6 +388,18 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
 - **Závisí na:** K7.
 - **Souběžně:** nic.
 
+### K9. Uzavření známých nedodělků před fází 2
+
+- **Cíl:** opravit, co zbylo z K6–K8, každé s testem, který bez opravy selže.
+- **Hotovo:**
+  - osiřelý kanál Google po pádu (kapitola 9, bod 5);
+  - `serve` skončí na SIGINT i SIGTERM: otevřená spojení (stream `/v1/stream`) přeruší po 5 s, běžící práci počká nejvýš dalších 5 s; test pošle signál binárce s otevřeným streamem;
+  - kolekce jen pro úplné čtení zůstane taková, dokud delta neprojde: úplné čtení, které skončí až po termínu nového pokusu o deltu (24 h), už nehlásí chybu ani neodkládá; nepovedený pokus nastaví další den;
+  - soubory zálohy tenanta vznikají rovnou s právy `0600` (dřív je `backup` až dodatečně měnil);
+  - SSE navázané s `Last-Event-ID` = hlava − 1 dostane hlavu a pak každý další commit jednou (jen test, chování bylo správné);
+  - trvalou chybu poskytovatele loguje jen engine (s úlohou a kolekcí), adaptér Google už ne.
+- **Už hotové dřív (beze změny):** odebrání tolerující NotFound a test `removal_during_a_discovery`, nízké nálezy kroku 2 K6 (1)–(4), odebrání tenanta z `CommitBus`, adresář dat `0700` a `VACUUM INTO` do souboru `0600`.
+
 ## 6. Testovací strategie
 
 ### 6.1 Vrstvy
