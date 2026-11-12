@@ -78,17 +78,19 @@ fn import_keeps_wal_bounded() {
     );
     assert_eq!(st.items, EVENTS as u64);
     assert!(reads > 0);
-    // The 256 MB autocheckpoint fuse would pass any run, and the bodies alone
-    // are over 200 MB, so this proves the resets keep the WAL down. CI peaks
-    // at 133-150 MB (41 MB locally); 192 MB leaves room for a slow runner.
-    assert!(
-        st.wal_max_bytes <= 192 << 20,
-        "largest WAL {} bytes",
-        st.wal_max_bytes
-    );
     // Release (CI runs this test so too) outpaces the background PASSIVE and
-    // resets the WAL; a debug build is too slow to get there.
+    // resets the WAL; a debug build is too slow to get there, so its WAL peak
+    // is a race between the writer and the PASSIVE on the runner's disk (236 MB
+    // seen on CI in K8a). Both checks hold only in release.
     if cfg!(not(debug_assertions)) {
+        // The 256 MB autocheckpoint fuse would pass any run, and the bodies alone
+        // are over 200 MB, so this proves the resets keep the WAL down. CI peaks
+        // at 133-150 MB (41 MB locally); 192 MB leaves room for a slow runner.
+        assert!(
+            st.wal_max_bytes <= 192 << 20,
+            "largest WAL {} bytes",
+            st.wal_max_bytes
+        );
         // Resets happen. Their failures are not bounded: on a CI disk they
         // reach or pass the successes (failures/truncates 8/8, 7/8, 3/10, 9/7
         // seen in K7); the WAL bound above is what matters.

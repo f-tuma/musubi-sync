@@ -552,9 +552,10 @@ async fn coalesced_push_runs_when_due_not_at_the_next_tick() {
     h.put_at("b", 2);
     h.engine.on_push(&channel).await.unwrap();
     h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
-    // `until` gives up after 5 s, long before the tick.
-    until(|| h.fake.calls().deltas == deltas + 1).await;
-    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+    // `until` gives up after 5 s, long before the tick. Wait for the commit,
+    // not the request: the page lands after the fake has counted the delta.
+    until(|| h.live("cal1", &["a", "b"]) == ["a", "b"]).await;
+    assert_eq!(h.fake.calls().deltas, deltas + 1);
 }
 
 #[tokio::test]

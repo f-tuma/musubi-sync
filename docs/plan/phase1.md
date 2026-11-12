@@ -494,6 +494,8 @@ Kroky:
 7. Zaznamenat odpovědi (bez osobních dat) pro fixtures K3 a velikost surových těl pro rozhodnutí o kompresi.
 8. Ověřit předpoklady adaptéru K4: jaký stav vrací Google na prošlý nebo odmítnutý `pageToken` uloženého kurzoru (K4 čte 400 jako `CursorExpired`) a zda `originalStartTime` přichází i bez `timeZone` (K4 pak čte čas v Etc/UTC; korelace porovnává okamžiky).
 
+9. **K8a:** odebírat veřejný kalendář svátků (např. `cs.czech#holiday@group.v.calendar.google.com`). Ze záznamu serveru zapsat status a tělo odpovědi na `events.watch`, na deltu se `syncToken` a zda poslední stránka úplného čtení nese `nextSyncToken`. Adaptér je teď loguje: „events.list: cursor expired“, „permanent provider error“ a „last events.list page without nextSyncToken“. Potvrdit nebo opravit odchylky „Quirks“ ve `crates/musubi-testkit/FIDELITY.md` **(neověřeno)**. Ověřit, že kolekce nepadá do smyčky: má `error` s odkladem a watch se po odmítnutí znovu zkouší nejdřív za den.
+
 Výsledek se zapíše do `docs/research/phase1/live-google.md` a podle něj se upraví čísla v kapitole 5.1 návrhu.
 
 ## 7. CI

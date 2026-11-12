@@ -190,6 +190,19 @@ impl Fault {
     }
 }
 
+/// A way one calendar departs from normal behaviour, for [`FakeGoogle::quirk`].
+/// Each models a suspected cause of a loop seen live on a subscribed holiday
+/// calendar (FIDELITY.md, "Quirks"); none is confirmed against Google yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Quirk {
+    /// `events.watch` answers `400 pushNotSupportedForRequestedResource`.
+    RefuseWatch,
+    /// Every `syncToken`, even one issued a moment ago, answers `410 fullSyncRequired`.
+    ExpireEverySyncToken,
+    /// The last page of a read carries no `nextSyncToken`.
+    NoSyncToken,
+}
+
 /// A change to the fake's data; also the JSON form of scripted scenarios.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -299,6 +312,7 @@ struct Calendar {
     events: BTreeMap<String, Ev>,
     /// Sync tokens below this version are expired.
     min_sync: u64,
+    quirks: Vec<Quirk>,
     /// Version of the last change (calendar etag, `updated`).
     changed: u64,
     resource_id: String,
@@ -457,6 +471,15 @@ impl FakeGoogle {
     /// Faults are checked in the order they were added.
     pub fn fail(&self, endpoint: Endpoint, fault: Fault, times: u32) {
         self.inner.lock().faults.push((endpoint, fault, times));
+    }
+
+    /// Makes `calendar` behave as `quirk` from now on. Unknown calendars are ignored.
+    pub fn quirk(&self, calendar: &str, quirk: Quirk) {
+        let mut s = self.inner.lock();
+        let id = s.resolve(calendar);
+        if let Some(c) = s.calendars.get_mut(&id) {
+            c.quirks.push(quirk);
+        }
     }
 
     /// Changes the per-response delay.
@@ -692,6 +715,7 @@ impl State {
                 entry,
                 events: BTreeMap::new(),
                 min_sync: 0,
+                quirks: Vec::new(),
                 changed: self.version,
                 resource_id: format!("fake-resource-{n}"),
             },
@@ -1268,7 +1292,9 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
             let pos: PageToken = decode(t)
                 .filter(|t: &PageToken| t.cal == cal_id)
                 .ok_or_else(|| bad_request("Invalid page token"))?;
-            if pos.delta.is_some_and(|(since, _)| since < c.min_sync) {
+            let stale =
+                |since| since < c.min_sync || c.quirks.contains(&Quirk::ExpireEverySyncToken);
+            if pos.delta.is_some_and(|(since, _)| stale(since)) {
                 return Err(gone());
             }
             pos
@@ -1281,6 +1307,7 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
             }
             let tok: SyncToken = decode(t)
                 .filter(|t: &SyncToken| t.cal == cal_id && t.v >= c.min_sync)
+                .filter(|_| !c.quirks.contains(&Quirk::ExpireEverySyncToken))
                 .ok_or_else(gone)?;
             PageToken {
                 cal: cal_id.clone(),
@@ -1370,7 +1397,7 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
             ..pos
         };
         body["nextPageToken"] = json!(encode(&next));
-    } else {
+    } else if !c.quirks.contains(&Quirk::NoSyncToken) {
         let v = pos.delta.map_or(pos.snapshot, |(_, until)| until);
         body["nextSyncToken"] = json!(encode(&SyncToken { cal: cal_id, v }));
     }
@@ -1470,6 +1497,14 @@ async fn watch(
     let Some(c) = s.calendars.get(&cal_id) else {
         return not_found();
     };
+    if c.quirks.contains(&Quirk::RefuseWatch) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "push",
+            "pushNotSupportedForRequestedResource",
+            "Push notifications are not supported by this resource.",
+        );
+    }
     if s.channels.contains_key(&id) {
         return bad_request("Channel id not unique");
     }

@@ -203,3 +203,23 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   scripted** with `FakeGoogle::fail`. Organic quotas are not modelled.
 - `Config::latency` is added before the fault check, so a scripted error
   is just as slow as a success.
+
+## Quirks
+
+A subscribed public holiday calendar (`accessRole: reader`) put the engine
+into a full-read loop against real Google (12. 11. 2026). The response bodies
+were not logged, so the cause is unknown. `FakeGoogle::quirk` makes one
+calendar behave in each of the suspected ways. Each is **unverified; confirm
+in K8**. The adapter now logs the status and the first 300 bytes of the body
+for each case, so K8 can record Google's actual answer.
+
+- `Quirk::RefuseWatch`: `events.watch` answers `400 push
+  pushNotSupportedForRequestedResource`. Google refuses watches on some
+  calendars it does not own; the status and reason are **unverified; confirm
+  in K8**.
+- `Quirk::ExpireEverySyncToken`: every `syncToken` answers `410
+  fullSyncRequired`, even the one the full read just returned. That Google
+  does this for any calendar is **unverified; confirm in K8**.
+- `Quirk::NoSyncToken`: the last page of a read has no `nextSyncToken`.
+  Google documents one on every last page; whether it is missing for some
+  calendars is **unverified; confirm in K8**.
