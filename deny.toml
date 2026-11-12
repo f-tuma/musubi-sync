@@ -52,6 +52,9 @@ skip = [
     # ring 0.17 pins windows-sys 0.52; everything else (tokio, rustls-platform-verifier)
     # is on 0.61. ring is the rustls provider by decision (no aws-lc-rs). K4.
     { crate = "windows-sys@0.52", reason = "ring 0.17 still uses windows-sys 0.52" },
+    # ring 0.17 uses getrandom 0.2; tempfile (data directories of the musubi-testkit
+    # `bench` binary, K7) uses 0.4. Drop when ring moves on.
+    { crate = "getrandom@0.2", reason = "ring 0.17 still uses getrandom 0.2" },
 ]
 
 [sources]
