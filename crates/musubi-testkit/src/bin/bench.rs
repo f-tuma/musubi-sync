@@ -304,7 +304,8 @@ async fn b2(o: &Opts) -> Vec<Row> {
 /// B5: notification → SSE with an instant fake, minus the coalescing window:
 /// the engine's own cost of one increment (the fake's own time included).
 async fn b5(o: &Opts) -> Vec<Row> {
-    let v: Vec<_> = push_to_sse(o, Duration::ZERO, if o.smoke { 5 } else { 20 })
+    // 200 so the p99 is not simply the worst sample of a noisy runner.
+    let v: Vec<_> = push_to_sse(o, Duration::ZERO, if o.smoke { 5 } else { 200 })
         .await
         .into_iter()
         .map(|d| d.saturating_sub(COALESCE))
