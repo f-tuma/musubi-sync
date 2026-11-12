@@ -515,6 +515,27 @@ async fn idle_writer_stops_and_the_next_write_restarts_it_losing_nothing() {
 }
 
 #[tokio::test]
+async fn coalesced_push_runs_when_due_not_at_the_next_tick() {
+    let h = H::with(|c| c.tick = Duration::from_secs(10));
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    let channel = h.control.channels(TENANT, Some(ACCOUNT)).unwrap().remove(0);
+    let deltas = h.fake.calls().deltas;
+
+    // The lanes take their first look now and then wait a tick (10 s).
+    let _running = h.engine.start();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    h.put_at("b", 2);
+    h.engine.on_push(&channel).await.unwrap();
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    // `until` gives up after 5 s, long before the tick.
+    until(|| h.fake.calls().deltas == deltas + 1).await;
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
 async fn change_before_the_channel_opened_arrives_without_a_notification() {
     let h = H::new();
     h.put_at("a", 1);

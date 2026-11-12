@@ -27,7 +27,7 @@ use musubi_model::{
     AccountId, CollectionId, ControlStore, Event, Provider, Seq, Storage, StoreError, SyncError,
     TenantId, TenantStore, TokenVault,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 mod ingest;
 mod jobs;
@@ -143,6 +143,8 @@ struct Inner<S: Storage, C> {
     sink: CommitSink,
     config: Config,
     writers: Mutex<HashMap<TenantId, Arc<Writer<S::Tenant>>>>,
+    /// Wakes a lane (by [`lane_ix`]) before its next tick.
+    wake: [Notify; 2],
     // shortcut: in-process only; two engine processes on one control store could
     // run two jobs of one collection at once. Upgrade to a lease per collection then.
     locks: Mutex<HashMap<CollectionId, Arc<tokio::sync::Mutex<()>>>>,
@@ -196,6 +198,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 sink,
                 config,
                 writers: Default::default(),
+                wake: Default::default(),
                 locks: Default::default(),
                 account_locks: Default::default(),
                 accounts: Default::default(),
@@ -413,7 +416,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     Err(e) => tracing::warn!(?lane, error = %e, "leasing jobs failed"),
                 }
             }
-            tokio::time::sleep(self.inner.config.tick).await;
+            let wake = self.inner.wake[lane_ix(lane)].notified();
+            let _ = tokio::time::timeout(self.inner.config.tick, wake).await;
         }
     }
 
@@ -473,7 +477,22 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 
     async fn enqueue(&self, spec: JobSpec) -> Result<(), EngineError> {
-        self.ctl(move |c| c.enqueue(&spec).map(drop)).await
+        let (lane, due) = (spec.lane, spec.due);
+        self.ctl(move |c| c.enqueue(&spec).map(drop)).await?;
+        // A job due soon (a coalesced push) runs when due, not up to a tick
+        // later; later jobs are found by the tick.
+        let wait = due.duration_since(self.now());
+        if wait <= jiff::SignedDuration::from_secs(1) {
+            let wait = Duration::try_from(wait).unwrap_or_default();
+            let inner = Arc::downgrade(&self.inner);
+            tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                if let Some(inner) = inner.upgrade() {
+                    inner.wake[lane_ix(lane)].notify_one();
+                }
+            });
+        }
+        Ok(())
     }
 
     async fn account(&self, account: AccountId) -> Result<Option<AccountRecord>, EngineError> {
@@ -576,6 +595,13 @@ async fn blocking<R: Send + 'static>(
         Ok(r) => r,
         Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(_) => Err(EngineError::Stopped),
+    }
+}
+
+fn lane_ix(lane: Lane) -> usize {
+    match lane {
+        Lane::Sync => 0,
+        Lane::Background => 1,
     }
 }
 
