@@ -489,6 +489,32 @@ async fn ten_notifications_within_150_ms_cost_one_delta() {
 }
 
 #[tokio::test]
+async fn idle_writer_stops_and_the_next_write_restarts_it_losing_nothing() {
+    let h = H::with(|c| c.writer_idle = Duration::from_millis(50));
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    until(|| h.engine.active_writers() == 0).await;
+    let before = h.journal();
+
+    // Each sync finds the writer stopped or running; either way nothing is lost.
+    let channel = h.control.channels(TENANT, Some(ACCOUNT)).unwrap().remove(0);
+    for (key, day) in [("b", 2), ("c", 3)] {
+        h.put_at(key, day);
+        h.engine.on_push(&channel).await.unwrap();
+        h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+        h.engine.run_until_idle().await.unwrap();
+    }
+    assert_eq!(h.live("cal1", &["a", "b", "c"]), ["a", "b", "c"]);
+    let after = h.journal();
+    assert_eq!(after[..before.len()], before[..]);
+    let seqs: Vec<_> = after.iter().map(|c| c.seq.0).collect();
+    assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1), "{seqs:?}");
+    until(|| h.engine.active_writers() == 0).await;
+}
+
+#[tokio::test]
 async fn change_before_the_channel_opened_arrives_without_a_notification() {
     let h = H::new();
     h.put_at("a", 1);

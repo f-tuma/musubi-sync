@@ -91,6 +91,8 @@ pub struct Config {
     pub background_concurrency: usize,
     /// How often an idle scheduler looks for due jobs.
     pub tick: Duration,
+    /// A tenant writer without a write for this long stops its thread.
+    pub writer_idle: Duration,
 }
 
 const DAY: Duration = Duration::from_secs(86_400);
@@ -114,6 +116,7 @@ impl Default for Config {
             sync_concurrency: 16,
             background_concurrency: 4,
             tick: Duration::from_millis(50),
+            writer_idle: Duration::from_secs(30),
         }
     }
 }
@@ -139,8 +142,6 @@ struct Inner<S: Storage, C> {
     clock: Arc<dyn Clock>,
     sink: CommitSink,
     config: Config,
-    // shortcut: writer threads live as long as the engine; stop idle ones once
-    // tenants per process number in the thousands.
     writers: Mutex<HashMap<TenantId, Arc<Writer<S::Tenant>>>>,
     // shortcut: in-process only; two engine processes on one control store could
     // run two jobs of one collection at once. Upgrade to a lease per collection then.
@@ -328,6 +329,12 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// unlinked files behind it) is released. Call after removing its accounts.
     pub fn forget_tenant(&self, tenant: TenantId) {
         self.writers().remove(&tenant);
+    }
+
+    /// Tenants with a running writer thread; an idle one stops after
+    /// [`Config::writer_idle`].
+    pub fn active_writers(&self) -> usize {
+        self.writers().len()
     }
 
     /// Runs due jobs one at a time, sync lane first, until none is due.
@@ -526,8 +533,23 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             // Another caller won the race; this handle is dropped unused.
             return Ok(w.clone());
         }
+        let inner = Arc::downgrade(&self.inner);
+        let retire = move |id| {
+            let Some(inner) = inner.upgrade() else { return };
+            let mut writers = inner.writers.lock().unwrap_or_else(|e| e.into_inner());
+            // Only the map holds it: no write is between getting it and its reply,
+            // and the next one must take this lock to get it.
+            if writers
+                .get(&tenant)
+                .is_some_and(|w| w.id == id && Arc::strong_count(w) == 1)
+            {
+                writers.remove(&tenant);
+            }
+        };
+        let idle = self.inner.config.writer_idle;
         let w = Arc::new(
-            Writer::spawn(tenant, store, self.inner.sink.clone()).map_err(StoreError::Io)?,
+            Writer::spawn(tenant, store, self.inner.sink.clone(), idle, retire)
+                .map_err(StoreError::Io)?,
         );
         writers.insert(tenant, w.clone());
         Ok(w)

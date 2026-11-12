@@ -546,9 +546,24 @@ async fn b7(o: &Opts) -> Vec<Row> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let connect = t0.elapsed();
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Asleep for real: past the engine's writer idle stop (30 s) and tokio's
+    // blocking-pool keep-alive (10 s).
+    tokio::time::sleep(Duration::from_secs(40)).await;
     let (rss, threads) = (n.proc_status("VmRSS:"), n.proc_status("Threads:"));
     let per = rss.saturating_sub(base_rss) as f64 / accounts as f64;
+    // Sleeping tenants hold no writer thread; the rest is the runtime's
+    // workers and blocking pool (at most 512), whatever the account count.
+    let mut names = std::collections::BTreeMap::<String, usize>::new();
+    let tasks = std::fs::read_dir(format!("/proc/{}/task", n.daemon.pid())).expect("/proc");
+    for t in tasks.flatten() {
+        let comm = std::fs::read_to_string(t.path().join("comm")).unwrap_or_default();
+        *names.entry(comm.trim().to_owned()).or_default() += 1;
+    }
+    let writers: usize = names
+        .iter()
+        .filter(|(k, _)| k.starts_with("musubi-writer"))
+        .map(|(_, v)| v)
+        .sum();
     vec![Row {
         id: "B7",
         what: format!(
@@ -558,8 +573,8 @@ async fn b7(o: &Opts) -> Vec<Row> {
             connect.as_secs_f64()
         ),
         value: format!("{per:.1} KiB"),
-        budget: "report (no budget yet)".into(),
-        ok: true,
+        budget: format!("report; no writer thread left (found {writers}), threads {names:?}"),
+        ok: writers == 0,
     }]
 }
 
