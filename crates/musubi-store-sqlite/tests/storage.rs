@@ -203,6 +203,15 @@ fn hot_backup_restores_the_snapshot() {
         "{started:?} {info:?} {ended:?} after {pages} pages"
     );
     assert_eq!(info.files, [out.path().join("main.db")]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&info.files[0])
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "created private, whatever the umask");
+    }
 
     let restored_dir = TempDir::new();
     let dst = main_db(restored_dir.path(), TENANT);

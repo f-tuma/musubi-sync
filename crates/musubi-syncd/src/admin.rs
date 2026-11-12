@@ -228,13 +228,8 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
         let out = to.join("tenants").join(t.to_string());
         private_dir(&out).map_err(io)?;
         match app.storage.backup(t, &out) {
-            Ok(_) => {
-                // The store names its files; the `0700` directory covers them until then.
-                for f in fs::read_dir(&out).map_err(io)? {
-                    set_mode(&f.map_err(io)?.path(), 0o600).map_err(io)?;
-                }
-                n += 1;
-            }
+            // The store creates its files `0600`.
+            Ok(_) => n += 1,
             // Deleted meanwhile.
             Err(StoreError::NotFound) => fs::remove_dir(&out).map_err(io)?,
             Err(e) => return Err(e.into()),
