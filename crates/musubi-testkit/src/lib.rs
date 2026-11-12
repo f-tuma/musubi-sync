@@ -88,6 +88,8 @@ pub enum Op {
     Refresh,
     /// [`PushSource::subscribe`].
     Subscribe,
+    /// [`PushSource::unsubscribe`].
+    Unsubscribe,
 }
 
 /// How many times each call reached the provider (failed ones included).
@@ -234,7 +236,7 @@ impl FakeProvider {
         }
     }
 
-    /// Calls of `op` (`Discover` or `Subscribe`) from now on are counted, then
+    /// Calls of `op` (`Discover`, `Subscribe` or `Unsubscribe`) from now on are counted, then
     /// wait until [`FakeProvider::release`].
     pub fn hold(&self, op: Op) {
         self.lock()
@@ -291,6 +293,7 @@ impl FakeProvider {
             Op::Fetch => c.fetch += 1,
             Op::Refresh => c.refresh += 1,
             Op::Subscribe => c.subscribe += 1,
+            Op::Unsubscribe => c.unsubscribe += 1,
         }
         match s.failures.get_mut(&op).and_then(VecDeque::pop_front) {
             Some(e) => Err(e),
@@ -761,8 +764,9 @@ impl PushSource for FakeProvider {
     /// Like Google: any resource id of the channel's collection stops it; an
     /// unknown channel or a wrong resource changes nothing and is `Ok`.
     async fn unsubscribe(&self, _cx: &AccountCx, sub: &Subscription) -> Result<(), SyncError> {
+        self.enter(Op::Unsubscribe)?;
+        self.gate(Op::Unsubscribe).await;
         let mut s = self.lock();
-        s.calls.unsubscribe += 1;
         if s.channels.get(&sub.channel).map(fake_resource) == Some(sub.resource.clone()) {
             s.channels.remove(&sub.channel);
         }

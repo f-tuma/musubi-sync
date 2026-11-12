@@ -1435,3 +1435,55 @@ async fn failed_delta_probe_after_a_day_rearms_full_reads_only() {
     assert_eq!((calls.full_reads, calls.deltas), (6, 3), "no delta");
     assert!(h.collection("cal1").unwrap().status.error.is_none());
 }
+
+#[tokio::test]
+async fn subscribe_that_made_no_channel_leaves_no_pending_row() {
+    for err in [
+        SyncError::RateLimited { retry_after: None },
+        SyncError::ReauthRequired,
+    ] {
+        let h = H::new();
+        h.put_at("a", 1);
+        h.fake.fail(Op::Subscribe, err);
+        h.connect_and_sync().await;
+        assert_eq!(channel_rows(&h).0, Vec::<ChannelId>::new());
+        assert!(h.fake.channels().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn removal_resumed_after_a_crash_still_stops_a_pending_channel() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.fake
+        .lose_subscribe_reply(SyncError::Transient("timeout".into()));
+    h.advance(Duration::from_secs(16 * 3600 + 1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.channels().len(), 2);
+    let (pending, open) = channel_rows(&h);
+    assert_eq!((pending.len(), open.len()), (1, 1));
+
+    // The process dies while the second channel is being stopped.
+    let before = h.fake.calls().unsubscribe;
+    h.fake.hold(Op::Unsubscribe);
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    let remove = tokio::spawn(async move { engine.remove_account(ACCOUNT).await });
+    until(|| h.fake.calls().unsubscribe == before + 1).await;
+    h.fake.release(Op::Unsubscribe);
+    h.fake.hold(Op::Unsubscribe);
+    until(|| h.fake.calls().unsubscribe == before + 2).await;
+    remove.abort();
+    let _ = remove.await;
+    h.fake.release(Op::Unsubscribe);
+    assert_eq!(
+        channel_rows(&h),
+        (vec![], open),
+        "the pending one went first"
+    );
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap();
+    assert!(h.fake.channels().is_empty(), "{:?}", h.fake.channels());
+    assert_eq!(channel_rows(&h), (vec![], vec![]));
+}

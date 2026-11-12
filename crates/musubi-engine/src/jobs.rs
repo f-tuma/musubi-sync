@@ -432,7 +432,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         cx: &AccountCx,
         chs: &[ChannelRecord],
     ) -> Result<(), EngineError> {
-        for ch in chs {
+        // Pending rows first: they borrow an open row's resource, so a crash
+        // between the two must not leave a pending row behind alone.
+        let (pending, open): (Vec<_>, Vec<_>) = chs.iter().partition(|ch| ch.open().is_none());
+        for ch in pending.into_iter().chain(open) {
             let sub = match &ch.state {
                 ChannelState::Open(s) => Some(s.clone()),
                 ChannelState::Pending(id) => chs
@@ -506,8 +509,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let res = push.subscribe(cx, &col.remote.remote, callback, &id).await;
         match &res {
             Ok(sub) => self.stop_pending(cx, push, chs, sub).await?,
-            Err(SyncError::Permanent(_)) => self.ctl(move |c| c.delete_channel(&id)).await?,
-            // The channel may be open: the row stays until it is stopped.
+            // Refused or not tried: no channel was made.
+            Err(
+                SyncError::Permanent(_)
+                | SyncError::RateLimited { .. }
+                | SyncError::ReauthRequired
+                | SyncError::Unauthorized,
+            ) => self.ctl(move |c| c.delete_channel(&id)).await?,
+            // The channel may be open (lost reply, timeout, 5xx): the row
+            // stays until it is stopped.
             Err(_) => {}
         }
         Ok(res)
