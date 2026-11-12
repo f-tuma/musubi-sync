@@ -32,6 +32,8 @@ pub struct World {
     pub read: String,
     /// Fake requests before the last (re)start.
     pub mark: usize,
+    /// When the last (re)start began, in microseconds.
+    pub started: i64,
 }
 
 impl World {
@@ -54,6 +56,7 @@ impl World {
             admin: String::new(),
             read: String::new(),
             mark: 0,
+            started: 0,
         };
         w.serve(env);
         w.tenant = w.api.tenant().await;
@@ -71,6 +74,7 @@ impl World {
     pub fn serve(&mut self, env: &[(&str, String)]) {
         self.kill();
         self.mark = self.fake.requests().len();
+        self.started = jiff::Timestamp::now().as_microsecond();
         let config = self.config.clone();
         self.node = Some(tokio::task::block_in_place(|| {
             Daemon::serve(Path::new(BIN), &config, env)
@@ -305,7 +309,8 @@ pub fn journal(db: &Connection) -> Vec<Change> {
 /// Store invariants of plan 6.3 that hold at rest: one item per remote key,
 /// a live entity behind every live item and a live item behind every live
 /// entity, `entities.seq` the entity's last journal entry, and no job lease
-/// expired or longer than the engine's 60 s term.
+/// expired, longer than the engine's 60 s term, or taken before the last
+/// restart.
 pub fn check_store(w: &World) {
     let db = w.main_db();
     let count = |sql: &str| -> i64 { db.query_row(sql, [], |r| r.get(0)).expect(sql) };
@@ -347,18 +352,26 @@ pub fn check_store(w: &World) {
     let ctl = w.control_db();
     let leases: i64 = ctl
         .query_row(
+            // A lease from before the restart ends before `started` + 60 s;
+            // one taken after it, at or after that.
             "SELECT count(*) FROM jobs WHERE lease IS NOT NULL
-             AND (lease_until < ?1 - 1000000 OR lease_until > ?1 + 61000000)",
-            [now],
+             AND (lease_until < ?1 - 1000000 OR lease_until > ?1 + 61000000
+                  OR lease_until < ?2 + 60000000)",
+            [now, w.started],
             |r| r.get(0),
         )
         .expect("jobs");
-    assert_eq!(leases, 0, "jobs with an expired or overlong lease");
+    assert_eq!(
+        leases, 0,
+        "jobs with an expired, overlong or pre-restart lease"
+    );
 }
 
-/// A client polling `/v1/changes` from 0 through every crash.
+/// A client reading `/v1/changes` from 0 through every crash: by polling, or
+/// only when `/v1/stream` announces a new head.
 pub struct Follower {
     pub seen: Arc<Mutex<Seen>>,
+    sse: bool,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -367,49 +380,50 @@ pub struct Seen {
     pub cursor: u64,
     pub log: BTreeMap<u64, Change>,
     pub errors: Vec<String>,
+    /// The last head the stream announced and the client read up to.
+    pub announced: u64,
 }
 
 impl Follower {
+    /// Polls `/v1/changes`.
     pub fn spawn(api: Api, key: String) -> Self {
         let seen = Arc::new(Mutex::new(Seen::default()));
         let s = seen.clone();
         let task = tokio::spawn(async move {
             loop {
-                let since = s.lock().expect("seen").cursor;
-                let more = match api.changes(&key, since, 1000).await {
-                    Ok((200, v)) => {
-                        let page: ChangesPage = serde_json::from_value(v).expect("changes page");
-                        let mut s = s.lock().expect("seen");
-                        for c in page.changes {
-                            if c.seq.0 <= s.cursor {
-                                let e = format!("seq {} after cursor {}", c.seq.0, s.cursor);
-                                s.errors.push(e);
-                            }
-                            s.cursor = c.seq.0;
-                            s.log.insert(c.seq.0, c);
-                        }
-                        page.more
-                    }
-                    Ok((status, v)) if status != 503 => {
-                        s.lock()
-                            .expect("seen")
-                            .errors
-                            .push(format!("since {since}: {status} {v}"));
-                        false
-                    }
-                    // The node is down or restarting.
-                    _ => false,
-                };
-                if !more {
+                if read_page(&api, &key, &s).await != Some(true) {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             }
         });
-        Self { seen, task }
+        Self {
+            seen,
+            sse: false,
+            task,
+        }
+    }
+
+    /// Follows `/v1/stream`, reconnecting with `Last-Event-ID` after every
+    /// crash, and reads `/v1/changes` up to each announced head.
+    pub fn sse(api: Api, key: String) -> Self {
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        let s = seen.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                follow_stream(&api, &key, &s).await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        Self {
+            seen,
+            sse: true,
+            task,
+        }
     }
 
     /// Everything the client read is still in the journal, unchanged, and
-    /// the client has read up to the journal's end.
+    /// the client has read up to the journal's end (announced by the stream,
+    /// for an SSE client).
     pub fn check(&self, journal: &[Change]) {
         let s = self.seen.lock().expect("seen");
         assert!(s.errors.is_empty(), "follower: {:?}", s.errors);
@@ -426,6 +440,15 @@ impl Follower {
             journal.len(),
             "the client skipped journal entries"
         );
+        if self.sse {
+            assert_eq!(s.announced, head(journal), "the stream skipped the head");
+        }
+    }
+
+    /// Whether the client has read up to `head` (and, over SSE, heard of it).
+    pub fn at(&self, head: u64) -> bool {
+        let s = self.seen.lock().expect("seen");
+        s.cursor == head && (!self.sse || s.announced == head)
     }
 
     pub fn cursor(&self) -> u64 {
@@ -436,6 +459,84 @@ impl Follower {
 impl Drop for Follower {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+/// Reads one page of `/v1/changes` after the client's cursor: whether more
+/// follow, `None` while the node is down.
+async fn read_page(api: &Api, key: &str, s: &Mutex<Seen>) -> Option<bool> {
+    let since = s.lock().expect("seen").cursor;
+    match api.changes(key, since, 1000).await {
+        Ok((200, v)) => {
+            let page: ChangesPage = serde_json::from_value(v).expect("changes page");
+            let mut s = s.lock().expect("seen");
+            for c in page.changes {
+                if c.seq.0 <= s.cursor {
+                    let e = format!("seq {} after cursor {}", c.seq.0, s.cursor);
+                    s.errors.push(e);
+                }
+                s.cursor = c.seq.0;
+                s.log.insert(c.seq.0, c);
+            }
+            Some(page.more)
+        }
+        Ok((status, v)) if status != 503 => {
+            let e = format!("since {since}: {status} {v}");
+            s.lock().expect("seen").errors.push(e);
+            Some(false)
+        }
+        // The node is down or restarting.
+        _ => None,
+    }
+}
+
+/// One connection of an SSE client; returns when the node drops it.
+async fn follow_stream(api: &Api, key: &str, s: &Mutex<Seen>) {
+    let error = |e: String| s.lock().expect("seen").errors.push(e);
+    let last = s.lock().expect("seen").announced;
+    let mut req = api
+        .http
+        .get(format!("{}/v1/stream", api.base))
+        .bearer_auth(key);
+    if last > 0 {
+        req = req.header("last-event-id", last.to_string());
+    }
+    let Ok(mut resp) = req.send().await else {
+        return;
+    };
+    match resp.status().as_u16() {
+        200 => {}
+        503 => return,
+        status => return error(format!("stream after {last}: {status}")),
+    }
+    let mut buf = String::new();
+    while let Ok(Some(chunk)) = resp.chunk().await {
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(i) = buf.find("\n\n") {
+            let ev: String = buf.drain(..i + 2).collect();
+            // Keep-alive comments carry no id.
+            let Some(id) = ev.lines().find_map(|l| l.strip_prefix("id: ")) else {
+                continue;
+            };
+            let id: u64 = id.trim().parse().expect("event id");
+            let last = s.lock().expect("seen").announced;
+            // Without `Last-Event-ID` the stream starts at the current head.
+            if last > 0 && id <= last {
+                error(format!("stream announced {id} after {last}"));
+            }
+            while s.lock().expect("seen").cursor < id {
+                match read_page(api, key, s).await {
+                    None => return,
+                    Some(false) if s.lock().expect("seen").cursor < id => {
+                        let cursor = s.lock().expect("seen").cursor;
+                        return error(format!("stream announced {id}, journal ends at {cursor}"));
+                    }
+                    Some(_) => {}
+                }
+            }
+            // Only a head read up to counts: a reconnect resends any later one.
+            s.lock().expect("seen").announced = id;
+        }
     }
 }
 

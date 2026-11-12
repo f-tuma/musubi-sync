@@ -24,7 +24,7 @@ use musubi_testkit::harness::{ADMIN_KEY, CRASH_MARK, Rng};
 use serde_json::json;
 
 /// Named crash points; `renewal` is a kill right after the node asked the
-/// fake for a new channel.
+/// fake to replace a stored channel.
 const POINTS: [&str; 4] = ["apply-page", "truncate", "commit-sse", "backup"];
 
 #[derive(Debug, Clone, Copy)]
@@ -142,7 +142,10 @@ async fn run(
         ..google::Config::default()
     };
     let mut w = World::start(fake, &env()).await;
-    let follower = Follower::spawn(w.api.clone(), w.read.clone());
+    let followers = [
+        Follower::spawn(w.api.clone(), w.read.clone()),
+        Follower::sse(w.api.clone(), w.read.clone()),
+    ];
     let backups = w.dir.path().join("backups");
 
     for r in 0..kills {
@@ -184,12 +187,30 @@ async fn run(
                         .filter(|q| q.contains("/events/watch"))
                         .count()
                 };
-                let before = watches();
+                // A Mutex makes the connection usable across the awaits.
+                let ctl = Mutex::new(w.control_db());
+                let stored = || {
+                    ctl.lock()
+                        .expect("control db")
+                        .query_row("SELECT count(*) FROM channels", [], |r| r.get::<_, i64>(0))
+                        .expect("channels")
+                };
+                // Only a renewal subscribes while the node has a channel
+                // stored; a first channel is opened with none.
                 let deadline = Instant::now() + Duration::from_secs(150);
-                while watches() == before && Instant::now() < deadline {
+                let (mut before, mut had) = (watches(), stored() > 0);
+                let mut renewed = false;
+                while Instant::now() < deadline {
+                    let now = watches();
+                    if now > before && had {
+                        renewed = true;
+                        break;
+                    }
+                    before = now;
+                    had = stored() > 0;
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
-                (watches() > before).then_some("renewal")
+                renewed.then_some("renewal")
             }
         };
         w.kill();
@@ -201,27 +222,29 @@ async fn run(
         // Nothing wakes the node but its own startup catch-up.
         w.serve(&env());
         w.converge(Duration::from_secs(90), |_| true).await;
-        let journal = settle(&w, &follower).await;
+        let journal = settle(&w, &followers).await;
         check_store(&w);
-        follower.check(&journal);
+        for f in &followers {
+            f.check(&journal);
+        }
     }
 }
 
-/// Waits until the follower has read the whole journal and the journal stood
-/// still for a moment; returns the journal.
-async fn settle(w: &World, f: &Follower) -> Vec<musubi_model::Change> {
+/// Waits until the followers have read the whole journal and the journal
+/// stood still for a moment; returns the journal.
+async fn settle(w: &World, followers: &[Follower]) -> Vec<musubi_model::Change> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = 0;
     loop {
         let j = w.journal();
         let h = head(&j);
-        if h == last && f.cursor() == h {
+        if h == last && followers.iter().all(|f| f.at(h)) {
             return j;
         }
+        let at: Vec<_> = followers.iter().map(Follower::cursor).collect();
         assert!(
             Instant::now() < deadline,
-            "follower at {} of {h}\n{}",
-            f.cursor(),
+            "followers at {at:?} of {h}\n{}",
             w.node().tail(40)
         );
         last = h;
