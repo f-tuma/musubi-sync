@@ -826,3 +826,55 @@ async fn a_token_that_outlives_its_tenant_cannot_start_a_connection() {
         .await;
     assert_eq!(s, 404, "{v}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stream_resumed_one_before_the_head_gets_the_head_and_what_follows() {
+    let n = Node::start().await;
+    let a = n.tenant().await;
+    let (key, _) = n.key(a, "read").await;
+    let acc = account(&n, a, 5);
+    let (col, _) = n.write(a, acc, "cal", vec![event("e1", "1", 1)]);
+    let commit = |uid: &str, day| {
+        let head = n
+            .app
+            .storage()
+            .open(a)
+            .expect("open")
+            .apply_page(&common::page(col, vec![event(uid, "1", day)]))
+            .expect("page");
+        n.app.bus().notify(a, head);
+        head
+    };
+    let open = async |last: u64| {
+        let r = n
+            .http
+            .get(n.url("/v1/stream"))
+            .bearer_auth(&key)
+            .header("Last-Event-ID", last.to_string())
+            .send()
+            .await
+            .expect("stream");
+        assert_eq!(r.status(), 200);
+        (r, String::new())
+    };
+    let wait = Duration::from_secs(5);
+    let cursor = |ev: Option<Value>| ev.expect("event")["cursor"].as_u64().expect("cursor");
+
+    let head = commit("e2", 2);
+    let (mut s, mut buf) = open(head.0 - 1).await;
+    assert_eq!(cursor(next_event(&mut s, &mut buf, wait).await), head.0);
+    let later = commit("e3", 3);
+    assert_eq!(cursor(next_event(&mut s, &mut buf, wait).await), later.0);
+
+    // Commits while the client was away: it gets the head they reached, once.
+    let away = [commit("e4", 4), commit("e5", 5)][1];
+    let (mut s, mut buf) = open(head.0 - 1).await;
+    assert_eq!(cursor(next_event(&mut s, &mut buf, wait).await), away.0);
+    let last = commit("e6", 6);
+    assert_eq!(cursor(next_event(&mut s, &mut buf, wait).await), last.0);
+    assert_eq!(
+        next_event(&mut s, &mut buf, Duration::from_millis(300)).await,
+        None,
+        "nothing twice"
+    );
+}
