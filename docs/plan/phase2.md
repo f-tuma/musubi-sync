@@ -182,7 +182,7 @@ Google dál vrací jen `upserts`. Jeden kanál pro obě cesty (seznam ETagů u c
 
 - `AccountCx.token: SecretString` se nahradí `AccountCx.credential: Credential`, `enum Credential { Bearer(SecretString), Basic { username: String, password: SecretString } }`.
 - `AccountTokens` zůstane jako varianta: `enum Credentials { OAuth(AccountTokens), Basic { username, password } }`, ale jen v paměti. `TokenVault::load` a `store` pracují s `Credentials` a zapečetí je do `accounts.tokens` (AES-256-GCM, AAD s tenantem a účtem) takto:
-  - `OAuth` přesně ve formátu fáze 1 (`Plain { refresh, access, until }`, AAD `musubi-tokens-v1`), bez značky varianty. Binárka fáze 1 ho po návratu zpět přečte (kapitola 4.4);
+  - `OAuth` přesně ve formátu fáze 1 (`Plain { refresh, access, until }`, AAD `musubi-tokens-v1`), bez značky varianty. Migrace tak stávající účty Google nepřepisuje (kapitola 4.4);
   - `Basic` jako `{ username, password }` pod jiným AAD (`musubi-basic-v1`), takže ho žádná verze nesplete s OAuth;
   - kterou variantu číst, určí `accounts.provider` (`google` → OAuth, `dav` a `icloud` → Basic), ne obsah blobu.
 - `Provider::refresh` se přesune do `trait TokenRefresh` a `Provider` dostane `fn oauth(&self) -> Option<&dyn TokenRefresh>` s výchozím `None`, stejně jako `push()`. DAV ho nemá. Engine u účtu bez `oauth()` nikdy neobnovuje; adaptér DAV mapuje `401` rovnou na `ReauthRequired`.
@@ -194,7 +194,8 @@ Google dál vrací jen `upserts`. Jeden kanál pro obě cesty (seznam ETagů u c
 - `Discovery` dostane `endpoint: Option<Endpoint>`: adaptér vrátí aktualizovaný stav (nalezený principal a home sety) a engine ho uloží (`ControlStore::set_endpoint`).
 - `SyncError` dostane `Rediscover`: kolekce nebo principal vrátí `404`, nebo přesměruje na jinou adresu uvnitř povolených originů účtu (kapitola 5.5). Engine zařadí `Discover` účtu a úlohu kolekce odloží za něj. Přesměrování mimo povolené originy je `ReauthRequired` s důvodem `endpoint_moved`, ne nové zjišťování.
 - `Discovery` dostane `unauthorized: Vec<EntityKind>`: druhy, ke kterým účet nemá oprávnění (Google bez scope pro Tasks nebo People, kapitola 6.1). Kolekce těchto druhů se nemažou. Engine seznam uloží do `accounts.missing` (kapitola 4.3), odkud ho čte pohled na účet.
-- `SyncError` dostane `MissingScope { kind }`: `changes()` nebo `fetch()` narazily na chybějící oprávnění k druhu (Google `403 insufficientPermissions`), třeba proto, že ho uživatel mezitím odebral. Engine kolekci označí chybou `missing_scope`, nezkouší ji znovu a zařadí `Discover`, který `accounts.missing` doplní. Není to `Unauthorized`: obnova tokenu nepomůže.
+- `SyncError` dostane `MissingScope { kind }`: `changes()` nebo `fetch()` narazily na chybějící oprávnění k druhu (Google `403` s `insufficientPermissions` nebo `ACCESS_TOKEN_SCOPE_INSUFFICIENT`, kapitola 6.1), třeba proto, že ho uživatel mezitím odebral. Engine kolekci označí chybou `missing_scope`, nezkouší ji znovu a zařadí `Discover`, který `accounts.missing` doplní. Není to `Unauthorized`: obnova tokenu nepomůže.
+- **Zrušení `missing_scope`:** každé úplné zjišťování, jehož `unauthorized` druh neobsahuje (typicky po opětovném souhlasu), zruší `missing_scope` u kolekcí toho druhu, odebere druh z `accounts.missing` a zařadí jejich `Sync` s `due = now`. Jinak by kolekce po opětovném souhlasu zůstala mrtvá.
 
 ### 3.6 Engine pro víc poskytovatelů a druhů
 
@@ -224,6 +225,10 @@ Kanonická událost (i úkol) s vlastní zónou nese `time_zone: "/<TZID>"` a no
 
 - `time_zone` začínající `/` se hledá v `time_zones` a sestaví přes `jiff::tz::TimeZone::posix`. `musubi-recurrence` se nemění, protože už bere `jiff::tz::TimeZone`;
 - zóna, kterou nejde vyřešit (krok 6, nebo `/TZID` bez záznamu v `time_zones`), se už neindexuje jako plovoucí. Položka nedostane řádky výskytů a `range` ji vrátí v `RangePage::unindexed`, stejně jako sérii s `TooExpensive` (fáze 1, K5). Kanonický tvar i surová vrstva zůstanou čitelné.
+- `unindexed` dnes plní jen `SeriesSpan` a `ingest.rs::occurrences` ho staví jen pro opakované události (`single()` nikdy; série potřebuje zónu už pro `recurrence_id` prvního výskytu). Bez změny by jednorázová událost s nevyřešenou zónou z `range` tiše zmizela. K5 proto při nevyřešené zóně vrátí `SeriesSpan` u jednorázové i opakované události (a u výjimky s `master`) a nevolá `single()` ani `recurrence_id`. Čas začátku je stěnový čas `start` brán jako UTC (`w`), rozšířený o 14 h na obě strany jako plovoucí výskyty v `range` (`FLOAT_WIDEN`):
+  - opakovaná: `SeriesSpan { first: w − 14 h, last: None, indexed_until: first }`;
+  - jednorázová: totéž, ale `last: Some(w + duration + 14 h)`, aby se hlásila jen v oknech, která ji mohou obsahovat, ne v každém dotazu navždy.
+- `ingest::extension` (rozšiřování indexu, `extend_index`) bere takové položky také (`indexed_until` < horizont). Pro nevyřešenou zónu musí vrátit chybu, ne řádky plovoucího času; položka tak zůstane v `unindexed`, stejně jako dnes série `TooExpensive`.
 
 Sjednocení dosavadních tvrzení o neznámé VTIMEZONE: calcard ji při rozbalení bere jako UTC ([calcard.md](../research/phase0/calcard.md), bod 2), korpus crate `rrule` jako plovoucí čas ([recurrence.md](../research/phase0/recurrence.md)) a dnešní engine také jako plovoucí čas. Fáze 2 nepoužije ani jedno: rozbalení calcardu se nevolá vůbec a nevyřešená zóna je „neindexováno", nahlas.
 
@@ -296,8 +301,8 @@ Nové operace `ControlStore`: `set_endpoint(account, &Endpoint)`, `endpoint(acco
 
 - **Před přechodem záloha.** Postup v provozní dokumentaci: `musubi-syncd backup` binárkou fáze 1 (záloha už obsahuje `control.db` i tenanty), pak teprve nová binárka.
 - **Návrat na fázi 1 je obnova ze zálohy.** Binárka fáze 1 tenanta s `MAIN_V2` odmítne (`SchemaTooNew` z migrací tenanta), takže bez obnovy nečte nic. Změny od zálohy se po obnově dočtou od poskytovatele znovu.
-- **`control.db` návrat nerozbije.** Fáze 1 nemá strážce verze pro `control.db` (`CREATE TABLE IF NOT EXISTS`) a soubor fáze 2 otevře: nové sloupce a klíč `schema` ignoruje a bloby OAuth jsou ve formátu fáze 1 (kapitola 3.5). Účty DAV pro ni nejsou čitelné, ale fáze 1 poskytovatele `dav` ani nezná.
-- **Test v K1:** test drží kopii DDL `CONTROL` a struktury `Plain` z fáze 1 (commit `b2e7758`) a ověří, že nad `control.db` zapsaným fází 2 projde čtení účtů a otevření blobu OAuth.
+- **Neobnovený `control.db` fáze 2 binárka fáze 1 spouštět nesmí.** Nemá pro něj strážce verze (`CREATE TABLE IF NOT EXISTS`), soubor otevře a engine fáze 1 má jediného poskytovatele (`Arc<dyn Provider>`) a `accounts.provider` nečte: na účty DAV by pustil Google s blobem Basic. Proto návrat je vždy obnova celé zálohy včetně `control.db`, nikdy jen výměna binárky. Formát blobů OAuth fáze 1 (kapitola 3.5) a test čtenáře fáze 1 nejsou cesta návratu; hlídají jen, že fáze 2 nemění data účtů Google, která už existují.
+- **Test v K1:** test drží kopii DDL `CONTROL` a struktury `Plain` z fáze 1 (commit `b2e7758`) a ověří, že migrace na verzi 2 nezměnila řádky a bloby účtů Google (čtení dotazy fáze 1 a otevření blobu kódem fáze 1).
 
 ## 5. DAV: zjišťování, delta, iCloud, pověření
 
@@ -318,7 +323,8 @@ Pravidla:
 - Delta kolekce: `sync-collection` v `supported-report-set` → `SyncToken`; jinak `getctag` → `CtagEtag`; jinak `None` (každé čtení je výpis ETagů).
 - Přístup z `current-user-privilege-set`: `write-content` nebo `write` → `Writer`, jinak `Reader`. Kolekce bez vlastnosti pod vlastním home setem je `Owner` (iCloud oprávnění nehlásí, kapitola 2.6 návrhu).
 - Klíč kolekce (`RemoteKey`) je absolutní cesta kolekce. Klíč objektu je absolutní cesta objektu. Host do klíče nepatří; je v `Endpoint`.
-- Subjekt účtu je URL principalu. Dva účty se stejným principalem téhož tenanta jsou stejný účet (`UNIQUE(tenant, provider, subject)`).
+- Subjekt účtu je normalizované URL principalu CalDAV; účet bez CalDAV (jen `carddav_url`) má subjekt z principalu CardDAV. Dva účty se stejným subjektem téhož tenanta jsou stejný účet (`UNIQUE(tenant, provider, subject)`).
+- iCloud a obecný DAV s oddělenými `caldav_url` a `carddav_url` mají dva principaly na dvou hostech. Oba (normalizované) se uloží do `Endpoint.state` jako `principals: { caldav?, carddav? }`; subjekt je jen jeden z nich, ale opětovné připojení kontroluje oba (kapitola 5.5).
 - DNS SRV (`_caldavs._tcp`) se nedělá. Uživatel zadá adresu serveru; well-known na ní stačí pro běžné servery **(neověřeno pro všechny)**.
 
 ### 5.2 Delta
@@ -358,7 +364,7 @@ Profil je data v `musubi-dav::profile`, ne větvení kódu:
 | Vlastnost | `generic` | `icloud` |
 | --- | --- | --- |
 | výchozí adresy | od uživatele | `caldav.icloud.com`, `contacts.icloud.com` |
-| povolené originy (kam smí jít heslo) | originy `server_url` (nebo `caldav_url` a `carddav_url`) a originy, které uživatel při připojení výslovně potvrdil (kapitola 5.5); pevné od připojení | `^(caldav\|p[0-9]+-caldav)\.icloud\.com$`, `^(contacts\|p[0-9]+-contacts)\.icloud\.com$`; jen `https`, bez portu |
+| povolené originy (kam smí jít heslo) | originy `server_url` (nebo `caldav_url` a `carddav_url`) a originy, které uživatel při připojení výslovně potvrdil (kapitola 5.5); pevné od připojení | `^(caldav\|p[0-9]+-caldav)\.icloud\.com$`, `^(contacts\|p[0-9]+-contacts)\.icloud\.com$`; jen `https`, port 443 (výslovný `:443` i bez portu) |
 | objekt na jiném originu než jeho kolekce | odmítnout | odmítnout (vzor `isIcloudPersonalContentDestination` v Musubi) |
 | souběžnost na účet | 2 | 2 (kapitola 2.6 návrhu, I5) |
 | `multiget` dávka | 50 | 20 **(neověřeno)** |
@@ -381,10 +387,11 @@ Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-
 **Heslo jde jen na povolené originy.** Basic posílá heslo v každém požadavku, takže každé přesměrování je místo, kde může uniknout:
 
 - Povolené originy (schéma, host, port) se určí při připojení a uloží do `Endpoint`: originy zadaných adres a originy z `allow_origins`. U `icloud` platí pevné vzory z profilu. Později se už nemění, jen novým připojením.
+- Originy i URL principalu se porovnávají **normalizované**: schéma a host malými písmeny, výchozí port schématu (443 pro `https`, 80 pro `http`) je totéž jako žádný port. Home sety iCloudu často nesou výslovné `:443` (`https://p52-caldav.icloud.com:443/…`) **(neověřeno, T11)**; bez normalizace by je ochrana odmítla a subjekt by se lišil podle toho, kudy zjišťování přišlo.
 - HTTP klient přesměrování nesleduje sám. Adaptér každé přesměrování zkontroluje: cíl v povolených originech → pokračuje s hlavičkou `Authorization`; cíl mimo ně → požadavek se nepošle vůbec (ani bez hesla). Při připojení to je `400 cross_origin_redirect` s cílovou adresou, aby ji uživatel mohl potvrdit přes `allow_origins` a zkusit znovu. Za běhu je to `ReauthRequired` s důvodem `endpoint_moved`.
 - `http` jen pro adresy, které se přeloží na loopback, a jen se zapnutou volbou `dav.allow_private` (testy s Radicale). Jinde se heslo nešifrovaně neposílá nikdy; samostatná volba `dav.allow_http` neexistuje.
 
-**Opětovné připojení** po `ReauthRequired`: stejné volání s `account` id. Zjišťování musí najít stejný subjekt (URL principalu) na stejném originu, jaký má uložený účet; jinak `400 subject_mismatch` a uložený účet se nezmění. Účet tak nejde potichu přesměrovat na jiný server nebo jiného uživatele.
+**Opětovné připojení** po `ReauthRequired`: stejné volání s `account` id. Zjišťování musí najít stejné normalizované principaly jako uložený účet, a to každý, který účet má: CalDAV i CardDAV (kapitola 5.1). Liší-li se kterýkoli, nebo chybí-li, `400 subject_mismatch` a uložený účet se nezmění. Účet tak nejde potichu přesměrovat na jiný server nebo jiného uživatele.
 
 **Ochrana odchozích adres** (vstup od uživatele je cesta k SSRF): adresa po překladu DNS nesmí být loopback, privátní, link-local, CGNAT, multicast ani nespecifikovaná (pokud to konfigurace `dav.allow_private` nepovolí). Kontroluje se přeložená IP a spojení jde na ni (žádný druhý překlad, ochrana proti DNS rebinding). Přesměrování nejvýš 5, každé přes stejnou kontrolu i přes povolené originy, nikdy z `https` na `http`. Vzor: `network-origin.ts` v Musubi. Tělo odpovědi má strop (32 MB) a XML parser nerozbaluje externí entity.
 
@@ -393,7 +400,7 @@ Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-
 ### 6.1 Scope a zjišťování
 
 - `SCOPES` v `oauth.rs` dostane `https://www.googleapis.com/auth/tasks.readonly` a `https://www.googleapis.com/auth/contacts.readonly`, s `include_granted_scopes=true`.
-- Google dovoluje uživateli jednotlivé scope na obrazovce souhlasu odškrtnout. Udělené scope se nikam neukládají (`AccountTokens` ani `AccountCx` je nenesou) a ukládat je není potřeba: zjišťování zavolá `tasklists.list` a `people.connections.list` s `pageSize=1` a `403 insufficientPermissions` znamená druh v `Discovery.unauthorized`. Stejná chyba později v `changes()` nebo `fetch()` je `SyncError::MissingScope` (kapitola 3.5). Engine výsledek uloží do `accounts.missing`.
+- Google dovoluje uživateli jednotlivé scope na obrazovce souhlasu odškrtnout. Udělené scope se nikam neukládají (`AccountTokens` ani `AccountCx` je nenesou) a ukládat je není potřeba: zjišťování zavolá `tasklists.list` a `people.connections.list` s `pageSize=1` a chybějící scope znamená druh v `Discovery.unauthorized`. Chybějící scope pozná adaptér podle obou tvarů: `403` s `errors[].reason = insufficientPermissions` (starší tvar, Tasks) i `403 PERMISSION_DENIED` s `ErrorInfo.reason = ACCESS_TOKEN_SCOPE_INSUFFICIENT` (tvar People a novějších API) **(neověřeno, který tvar které API vrací; T10)**. Jiné `403` je `Permanent`. Stejná chyba později v `changes()` nebo `fetch()` je `SyncError::MissingScope` (kapitola 3.5). Engine výsledek uloží do `accounts.missing`.
 - Kolekce neudělaného druhu se nemaže a nezakládá. Pohled na účet hlásí `missing: ["task"]` a odkaz na opětovný souhlas (`POST /v1/accounts` s `account`). Odpovídá kapitole 3.3 návrhu: chybějící oprávnění je neúplné zjišťování, ne smazání.
 - Účty připojené ve fázi 1 mají jen `calendar.readonly`. Tasks a People u nich začnou až po opětovném souhlasu.
 - Zjišťování: `calendarList` (beze změny), `tasklists.list` (každý seznam je kolekce `Task`), pro People jedna pevná kolekce `people/me/connections` (`Contact`, jméno „Kontakty").
@@ -413,7 +420,7 @@ Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-
 - Čtení: `people.connections.list` s pevným `personFields` (jména, e-maily, telefony, adresy, organizace, narozeniny, poznámky, URL, přezdívky, fotky, členství, metadata, `clientData`), `pageSize=1000`, `requestSyncToken=true`.
 - Pevné `personFields` jsou součást kurzoru: jejich změna (nová verze mapování) vynutí úplné čtení, protože Google token s jinými parametry odmítne (kapitola 2.7 návrhu).
 - Delta: `syncToken`. `metadata.deleted: true` je odebrání.
-- Token vyprší **7 dní po úplném čtení**, které ho vydalo (providers.md, O8, a dokumentace Googlu), ne 7 dní od posledního použití. Zda inkrementální čtení platnost prodlužuje, není ověřené **(neověřeno)**: T10 zaznamená čas vydání tokenu a K10 (nejdřív 8 dní po T10) zkusí delty se starým tokenem. Plán počítá s horší variantou:
+- Token vyprší **7 dní po úplném čtení**, které ho vydalo (providers.md, O8, a dokumentace Googlu), ne 7 dní od posledního použití. Zda inkrementální čtení platnost prodlužuje, není ověřené **(neověřeno)**: T10 vydá úplným čtením **dva nezávislé tokeny** (dvě úplná čtení hned po sobě) a zaznamená čas vydání. Token A se pak nepoužije vůbec; token B se používá k deltám zhruba denně (každá delta vrací nový token, uloží se poslední). K10 nejdřív 8 dní po T10 zkusí deltu s oběma. Plán počítá s horší variantou:
   - Odpověď s `ErrorInfo.reason = EXPIRED_SYNC_TOKEN` je `CursorExpired`, ať je stav `400` nebo `410` **(neověřeno, který)**.
   - Úplné čtení kontaktů tak proběhne zhruba jednou týdně na účet. Cena: `ceil(počet kontaktů / 1000)` požadavků; první stránka má zvláštní kvótu a může vrátit `429` (níže).
   - Úplné čtení maže nepřítomností, takže ho hlídá existující ochrana proti hromadnému mazání (ověření přes `fetch`). Týdenní opakování ji nesmí spouštět falešně: test v K6 s 5 000 kontakty a vypršeným tokenem nesmí nic smazat.
@@ -423,7 +430,7 @@ Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-
 
 ### 6.4 Falešný server Google
 
-`musubi-testkit::google` dostane endpointy `tasklists`, `tasks` a `people.connections` se stejnými chybami jako kalendář (`Fault`): `429` s `Retry-After`, `5xx`, neplatný `pageToken`, `EXPIRED_SYNC_TOKEN`, `403 insufficientPermissions`. Tvary odpovědí podle zaznamenaných odpovědí z T10.
+`musubi-testkit::google` dostane endpointy `tasklists`, `tasks` a `people.connections` se stejnými chybami jako kalendář (`Fault`): `429` s `Retry-After`, `5xx`, neplatný `pageToken`, `EXPIRED_SYNC_TOKEN`, `403` s `insufficientPermissions` i s `ACCESS_TOKEN_SCOPE_INSUFFICIENT`. Tvary odpovědí podle zaznamenaných odpovědí z T10.
 
 ## 7. Adaptivní dotazování
 
@@ -439,7 +446,7 @@ Engine drží v paměti u kolekce počítadlo `quiet` (čtení za sebou bez změ
 
 | Úroveň | Kdy | `min` | `max` |
 | --- | --- | --- | --- |
-| aktivní | výslovný signál zájmu nebo čtení dat za posledních 120 s | 15 s | 60 s |
+| aktivní | `POST /v1/interest` za posledních 120 s | 15 s | 60 s |
 | běžná | jinak | 2 min | 15 min |
 | spící | žádný zájem 7 dní (od restartu se počítá jako běžná) | 1 h | 6 h |
 
@@ -452,8 +459,8 @@ Engine drží v paměti u kolekce počítadlo `quiet` (čtení za sebou bez změ
 
 ### 7.3 Zrychlení při zájmu
 
-- `Engine::touch(tenant)` volá `musubi-syncd` při čtení `/v1/entities` a `/v1/items` a při novém volání `POST /v1/interest` (bez těla, rozsah čtení). Klient ho volá, když uživatel data opravdu vidí (otevřený kalendář, popředí aplikace), nejvýš jednou za 60 s.
-- Připojené SSE ani `/v1/changes` zájem **nejsou**. Musubi drží SSE otevřené trvale a `/changes` čte i na pozadí; kdyby se počítaly, byl by každý tenant pořád aktivní a každá kolekce by se četla každých 15 s (240 požadavků za hodinu, riziko kvóty Tasks a iCloudu).
+- `Engine::touch(tenant)` volá `musubi-syncd` **jen** při `POST /v1/interest` (bez těla, rozsah čtení). Klient ho volá, když uživatel data opravdu vidí (otevřený kalendář, popředí aplikace), nejvýš jednou za 60 s.
+- Připojené SSE, `/v1/changes`, `/v1/entities` ani `/v1/items` zájem **nejsou**. Musubi drží SSE otevřené trvale a na pozadí po každé změně dočítá `/changes` a entity; kdyby se čtení počítalo, změna by vyvolala čtení, čtení zájem a zájem další dotazování. Každý tenant by byl pořád aktivní a každá kolekce by se četla každých 15 s (240 požadavků za hodinu, riziko kvóty Tasks a iCloudu).
 - Přechod tenanta z běžné nebo spící úrovně do aktivní zařadí úlohy `Sync` všech jeho adaptivních kolekcí s `due ≈ now`. Fronta je už zdvojit neumí: `enqueue` při shodě dělá `due = min(due, ?)`, takže stačí zařadit.
 - Přechod se počítá nejvýš jednou za 120 s na tenanta. Díky levné kontrole (ctag, kapitola 5.2) stojí zrychlení u nezměněné kolekce jeden požadavek.
 - Úroveň zájmu je jen v paměti. Ztráta po restartu znamená nejvýš jeden interval běžné úrovně.
@@ -566,7 +573,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
   - blob zapečetěný fází 1 se otevře jako `Credentials::OAuth`; `Basic` projde pečetěním a otevřením a neotevře se pod jiným účtem;
   - `push_resource` se zapíše a přežije výměnu kanálu;
   - `accounts.endpoint` a `accounts.missing` se zapíšou a přečtou;
-  - **čtenář fáze 1:** test drží kopii DDL `CONTROL` a struktury `Plain` z commitu `b2e7758` (fáze 1). Nad `control.db` po migraci na verzi 2, s účtem Google i DAV, otevře tabulky dotazy fáze 1 a blob Google rozpečetí kódem fáze 1. Hlídá návrat podle kapitoly 4.4.
+  - **čtenář fáze 1:** test drží kopii DDL `CONTROL` a struktury `Plain` z commitu `b2e7758` (fáze 1). Nad `control.db` po migraci na verzi 2 přečte účet Google dotazy fáze 1 a blob rozpečetí kódem fáze 1. Hlídá, že migrace nemění stávající účty Google; návrat je i tak obnova zálohy (kapitola 4.4).
 - **Závisí na:** K0.
 - **Souběžně:** K2, K3, K4, K6.
 
@@ -619,8 +626,8 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
   - `stubs`: shodný validátor nestáhne nic, rozdílný stáhne přes `fetch` po dávkách; pád mezi výpisem a stažením stránku zopakuje bez duplicit; objekt chybějící ve `fetch` u delty nic nezmění, u úplného čtení zmizí nepřítomností;
   - `Pass::Full` od proudu s kurzorem delty smaže nepřítomné;
   - `Rediscover` zařadí `Discover` a odloží úlohu kolekce; `ReauthRequired` u účtu bez `oauth()` neobnovuje token;
-  - `Discovery.unauthorized`: kolekce druhu zůstanou, účet hlásí chybějící druh; `MissingScope` z `changes()` označí kolekci `missing_scope`, nezkouší ji znovu a zařadí `Discover`;
-  - zóny (kapitola 3.7): `event_zone` vyřeší `/TZID` z `time_zones` přes `jiff::tz::TimeZone::posix`; test indexu výskytů s vlastní zónou dává stejné výskyty jako ekvivalentní IANA zóna; `/TZID` bez záznamu nemá řádky výskytů a `range` ji vrátí v `unindexed`;
+  - `Discovery.unauthorized`: kolekce druhu zůstanou, účet hlásí chybějící druh; `MissingScope` z `changes()` označí kolekci `missing_scope`, nezkouší ji znovu a zařadí `Discover`; další zjišťování, které druh už hlásí jako povolený, `missing_scope` zruší, vyčistí `accounts.missing` a zařadí `Sync`, po kterém kolekce znovu synchronizuje;
+  - zóny (kapitola 3.7): `event_zone` vyřeší `/TZID` z `time_zones` přes `jiff::tz::TimeZone::posix`; test indexu výskytů s vlastní zónou dává stejné výskyty jako ekvivalentní IANA zóna; `/TZID` bez záznamu nemá řádky výskytů a `range` ji vrátí v `unindexed`, a to zvlášť pro **jednorázovou** událost, opakovanou událost i výjimku s `master` (jednorázová se v `unindexed` neobjeví v okně o týden dál); `extend_index` nad ní nevytvoří řádky;
   - událost z prostředku s více komponentami (`recurrence_overrides` z výjimek) má v indexu přesunuté a zrušené výskyty správně;
   - adaptivní dotazování s pevnými hodinami: interval roste od `min` do `max`, změna ho vrátí na `min`, `touch` zařadí úlohy s `due ≈ now` a druhý `touch` do 120 s nic nepřidá; kolekce s otevřeným kanálem zůstává na `poll_every_push`;
   - `max_concurrency_per_account = 2` nepustí třetí úlohu účtu;
@@ -631,7 +638,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 ### T10. Živá kontrola Google Tasks a People (spouští koordinátor)
 
 - **Cíl:** potvrdit tvary a chování, na kterých stojí K6. Na stávajícím testovacím účtu Google. Zápisy (vložení a smazání úkolu, změna a smazání kontaktu) jdou **jen do testovacího účtu** a jen do seznamu a kontaktů, které T10 sama založí; Musubi sám nic nezapisuje.
-- **Kroky:** T10 z [providers.md](../research/phase0/providers.md) (vložení s `id`, smazání, dokončení, vyčištění, pak `updatedMin` + `showDeleted` + `showHidden`); navíc: mění se `tasklists.updated` při změně úkolu; `people.connections.list` s `requestSyncToken`, změna kontaktu, delta, smazaný kontakt; odezva na token s jinými `personFields`; stav a tvar chyby u neplatného `syncToken`; chování při odškrtnutém scope; čas vydání sync tokenu People (pro kontrolu sedmidenní platnosti v K10); zpoždění mezi změnou kontaktu a jejím objevením v deltě (opakovaně, rozdělení).
+- **Kroky:** T10 z [providers.md](../research/phase0/providers.md) (vložení s `id`, smazání, dokončení, vyčištění, pak `updatedMin` + `showDeleted` + `showHidden`); navíc: mění se `tasklists.updated` při změně úkolu; `people.connections.list` s `requestSyncToken`, změna kontaktu, delta, smazaný kontakt; odezva na token s jinými `personFields`; stav a tvar chyby u neplatného `syncToken`; chování při odškrtnutém scope (přesný tvar `403` u Tasks i People); dva nezávislé sync tokeny People z dvou úplných čtení s časem vydání (A se nechá ležet, B se denně posouvá deltami až do K10; kapitola 6.3); zpoždění mezi změnou kontaktu a jejím objevením v deltě (opakovaně, rozdělení).
 - **Výstup:** `docs/research/phase2/live-google-tasks-people.md` a zaznamenané odpovědi jako fixtures (bez osobních dat).
 - **Závisí na:** nic (stačí účet a skript); musí skončit před přijetím K6.
 
@@ -643,7 +650,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
   - zjišťování vrátí kalendáře, seznamy úkolů a kolekci kontaktů; chybějící scope je v `Discovery.unauthorized`;
   - Tasks: úplné čtení, delta s překryvem bez zdvojení, smazání přes `deleted`, neplatný `pageToken` → `CursorExpired`;
   - People: úplné čtení se sync tokenem, delta, smazání, `EXPIRED_SYNC_TOKEN` → `CursorExpired`, `429` na první stránce → `RateLimited`; vypršený token u 5 000 kontaktů vede na úplné čtení, které nic nesmaže (kapitola 6.3);
-  - `403 insufficientPermissions` při zjišťování → `Discovery.unauthorized`, v `changes()` → `MissingScope`;
+  - `403` s `insufficientPermissions` i s `ACCESS_TOKEN_SCOPE_INSUFFICIENT` při zjišťování → `Discovery.unauthorized`, v `changes()` → `MissingScope`; jiné `403` → `Permanent`;
   - zlaté fixtures `TasksCodec` a `PeopleCodec` z T10.
 - **Závisí na:** K0, T10.
 - **Souběžně:** K1–K5, K7.
@@ -651,7 +658,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 ### T11. Živá kontrola iCloudu (spouští koordinátor)
 
 - **Cíl:** potvrdit předpoklady profilu `icloud` (I1–I6). Na testovacím účtu iCloud, který dodá uživatel.
-- **Kroky:** T11 z providers.md (`supported-report-set` u kalendáře a adresáře; `sync-collection` s prázdným tokenem a po jedné změně s vráceným; token starý 30 dní, pokud ho uživatel z dřívějška má, jinak vymyšlený; `PUT` s `If-Match` na kontakt jen pro záznam, **jen na testovacím účtu** a na kontaktu, který T11 sama založí); navíc: partition hosty z principalu, `current-user-privilege-set`, verze vCard, velikost dávky `multiget`, zda `sync-collection` zkracuje (`507`), chování při `503`.
+- **Kroky:** T11 z providers.md (`supported-report-set` u kalendáře a adresáře; `sync-collection` s prázdným tokenem a po jedné změně s vráceným; token starý 30 dní, pokud ho uživatel z dřívějška má, jinak vymyšlený; `PUT` s `If-Match` na kontakt jen pro záznam, **jen na testovacím účtu** a na kontaktu, který T11 sama založí); navíc: partition hosty z principalu (a zda home sety nesou výslovné `:443`), `current-user-privilege-set`, verze vCard, velikost dávky `multiget`, zda `sync-collection` zkracuje (`507`), chování při `503`.
 - **Výstup:** `docs/research/phase2/live-icloud.md`, anonymizované odpovědi jako fixtures pro falešný DAV v režimu `icloud`.
 - **Závisí na:** účet od uživatele; musí skončit před přijetím K7.
 
@@ -660,7 +667,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 - **Cíl:** kapitola 5.4 podle výsledků T11.
 - **Crates:** `musubi-dav`, `musubi-testkit` (režim `icloud` falešného DAV).
 - **Přijetí:**
-  - zjišťování přes partition host; adresa mimo povolené hosty nebo jiný origin objektu se odmítne;
+  - zjišťování přes partition host, včetně home setů s výslovným `:443`; adresa mimo povolené hosty nebo jiný origin objektu se odmítne;
   - kolekce jen s VTODO se přeskočí; vCard 3.0 a Apple skupiny projdou;
   - souběžnost 2 a dávka `multiget` podle T11;
   - `401` vede na `ReauthRequired` s textem o hesle pro aplikace;
@@ -677,16 +684,17 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
   - `POST /v1/accounts/dav` (kapitola 5.5) s ochranou adres podle konfigurace, povolenými originy a kontrolou subjektu při opětovném připojení;
   - nové scope Googlu a pohled na účet s `missing`;
   - `GET /v1/entities?kind=task|contact|contact_group&collection=…&after=…` přes `list_entities`; bez `kind` beze změny (rozsah událostí);
-  - `Engine::touch` z čtecích endpointů a `POST /v1/interest` (kapitola 7.3), ne z SSE;
+  - `Engine::touch` jen z `POST /v1/interest` (kapitola 7.3), ne z SSE ani čtecích endpointů;
   - pohled na účet DAV bez hesla.
 - **Přijetí:**
   - e2e: připojení DAV účtu proti Radicale, první data v API, změna u Radicale v proudu změn do dvou intervalů aktivní úrovně;
   - špatné heslo vrátí `400 unauthorized` a nic neuloží; adresa `127.0.0.1` bez `dav.allow_private` vrátí `blocked_address`;
   - heslo se neobjeví v žádné odpovědi API ani v logu (test čte log na úrovni `trace`);
   - přesměrování na jiný origin při připojení vrátí `cross_origin_redirect` a cíl nedostane žádný požadavek (testovací server počítá požadavky); totéž při synchronizaci vede na `ReauthRequired` `endpoint_moved`;
-  - opětovné připojení stávajícího účtu na jiný server nebo principal vrátí `400 subject_mismatch` a nic nezmění;
+  - opětovné připojení stávajícího účtu na jiný server nebo principal vrátí `400 subject_mismatch` a nic nezmění, i když se liší jen principal CardDAV a CalDAV sedí;
+  - `https://host:443/…` a `https://host/…` jsou týž origin i týž principal;
   - `http://` na veřejnou adresu vrátí `blocked_address` i se zapnutým `dav.allow_private`;
-  - připojené SSE bez čtení nezvedne úroveň zájmu; `POST /v1/interest` ano;
+  - připojené SSE ani čtení `/v1/changes`, `/v1/entities` a `/v1/items` nezvednou úroveň zájmu; `POST /v1/interest` ano;
   - účet Google fáze 1 bez nových scope dál synchronizuje kalendáře a hlásí `missing`.
 - **Závisí na:** K1, K2, K3, K4, K5, K6.
 - **Souběžně:** K7 (registr `icloud` je jeden řádek; K7 dodá profil).
@@ -707,7 +715,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 
 - **Cíl:** celý `musubi-syncd` proti testovacímu účtu Google (Tasks a People) a iCloudu: první data, změna u poskytovatele v proudu změn, skutečná doba při aktivní a běžné úrovni.
 - **Očekávání:** změna úkolu a události DAV do intervalu úrovně plus jedné delty; změna kontaktu People navíc se zpožděním propsání z T10 (několik minut), což se nepočítá jako chyba.
-- **Sync token People:** nejdřív 8 dní po T10 zkusí deltu s tokenem z T10 (bez mezitímního úplného čtení i s průběžnými deltami). Výsledek rozhodne, zda týdenní úplné čtení z kapitoly 6.3 nastává, a zapíše se k `(neověřeno)` v 6.3.
+- **Sync token People:** nejdřív 8 dní po T10 zkusí deltu s tokenem A (bez mezitímních delt) a s posledním tokenem řetězu B (s průběžnými deltami). Výsledek rozhodne, zda týdenní úplné čtení z kapitoly 6.3 nastává, a zapíše se k `(neověřeno)` v 6.3.
 - **Výstup:** doplnění `docs/research/phase2/` o čísla a odchylky; opravy jako nové úkoly. Odchylka, která mění kontrakt, se opraví před K11.
 - **Zápisy:** jen v testovacích účtech, stejně jako T10 a T11.
 - **Závisí na:** K9.
