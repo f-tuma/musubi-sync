@@ -466,6 +466,28 @@ async fn expired_cursor_reads_everything_again_without_duplicates() {
 }
 
 #[tokio::test]
+async fn full_read_again_on_an_existing_channel_is_followed_by_a_delta() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.control.channels(TENANT, Some(ACCOUNT)).unwrap().len(), 1);
+    h.fake.expire_cursors();
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().full_reads, 2);
+    // After the second full read's snapshot; the channel already exists, so
+    // a notification deferred to the read would wait for the push poll.
+    h.put_at("b", 2);
+    let deltas = h.fake.calls().deltas;
+    h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().deltas, deltas + 1);
+    assert_eq!(h.live("cal1", &["a", "b"]), ["a", "b"]);
+}
+
+#[tokio::test]
 async fn ten_notifications_within_150_ms_cost_one_delta() {
     let h = H::new();
     h.put_at("a", 1);
