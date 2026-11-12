@@ -1387,3 +1387,51 @@ async fn refused_subscribe_leaves_no_pending_channel() {
     assert_eq!(channel_rows(&h), (vec![], vec![]));
     assert!(h.fake.channels().is_empty());
 }
+
+#[tokio::test]
+async fn failed_delta_probe_after_a_day_rearms_full_reads_only() {
+    const DAY: Duration = Duration::from_secs(86_400);
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    // Every cursor expires right after the full read that issued it: after
+    // the second such read the collection is full-read-only for a day.
+    for _ in 0..2 {
+        h.fake.expire_cursors();
+        h.advance(musubi_engine::COALESCE + Duration::from_millis(1));
+        h.engine.run_until_idle().await.unwrap();
+    }
+    let calls = h.fake.calls();
+    assert_eq!((calls.full_reads, calls.deltas), (3, 2));
+    assert!(h.collection("cal1").unwrap().status.error.is_none());
+
+    // The last full read of the day starts before the delta retry is due
+    // and ends after it.
+    h.fake.expire_cursors();
+    h.advance(DAY - Duration::from_secs(1));
+    h.fake.hold_full_reads();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().full_reads == 4).await;
+    h.advance(Duration::from_secs(2));
+    h.fake.release_full_reads();
+    run.await.unwrap().unwrap();
+    assert_eq!(h.fake.calls().deltas, 2, "no delta during the day");
+    assert!(
+        h.collection("cal1").unwrap().status.error.is_none(),
+        "still full-read-only until a delta is tried"
+    );
+
+    // The next sync tries a delta; it fails, and the day starts again.
+    h.fake.expire_cursors();
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    let calls = h.fake.calls();
+    assert_eq!((calls.full_reads, calls.deltas), (5, 3));
+    h.fake.expire_cursors();
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    let calls = h.fake.calls();
+    assert_eq!((calls.full_reads, calls.deltas), (6, 3), "no delta");
+    assert!(h.collection("cal1").unwrap().status.error.is_none());
+}

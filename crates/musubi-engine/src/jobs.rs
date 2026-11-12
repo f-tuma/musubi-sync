@@ -790,7 +790,9 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 // A delta worked: the cursor is usable again.
                 rt.full_only_until = None;
             }
-            (rt.full_reads, rt.full_only_until.is_some_and(|t| t > now))
+            // Full-read-only until a delta works, also once the retry is due:
+            // the read that ends past it is no reason to back off.
+            (rt.full_reads, rt.full_only_until.is_some())
         });
         // A third full read without a delta between, on a collection not
         // known to be full-read-only: a guard against a cursor that keeps
