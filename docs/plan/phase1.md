@@ -440,7 +440,7 @@ Měří je `musubi-testkit` (binárka `bench`) proti `musubi-syncd` a falešném
 
 | # | Cíl (kapitola 5.1) | Jak | Rozpočet |
 | --- | --- | --- | --- |
-| B1 | první data po připojení | odezva falešného serveru 150 ms na požadavek; čas od dokončení OAuth po první záznam v `/changes` | pod 1 s |
+| B1 | první data po připojení | odezva falešného serveru 150 ms na požadavek; čas od návratu z OAuth (callback včetně výměny tokenu) po první událost (entitu) v `/changes`; změny kolekcí z discovery se nepočítají | pod 1 s |
 | B2 | změna → proud změn s pushem | čas od odeslání oznámení po událost v SSE | pod 500 ms |
 | B3 | dotaz na rozsah | tenant 5 000 událostí a 50 sérií, okno 1 týden a 1 měsíc; varianta s payloadem i jen s id; hustý rozsah se jen hlásí (fáze 0: 28 ms, jen id 6,8 ms) | p99 pod 10 ms |
 | B4 | změny od kurzoru | `/changes` po 500 | p99 pod 10 ms |
@@ -460,7 +460,7 @@ Výsledky (K7, plný běh na nečinném stroji, 20 jader, release):
 
 | # | Naměřeno | Rozpočet |
 | --- | --- | --- |
-| B1 | nejhorší z 5: 160 ms | pod 1 s |
+| B1 | nejhorší z 5: 464 ms (dřív 160 ms: měřilo se až po výměně tokenu a do první změny kolekce) | pod 1 s |
 | B2 | nejhorší z 20: 307 ms (p50 304 ms; 150 ms je zpoždění `COALESCE`, 150 ms odezva falešného serveru) | pod 500 ms |
 | B3 | p99 z 500: týden 1,0 ms (jen id 0,7 ms), měsíc 3,7 ms (jen id 1,2 ms) | pod 10 ms |
 | B4 | p99 z 500: 1,0 ms | pod 10 ms |

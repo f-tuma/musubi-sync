@@ -177,8 +177,8 @@ fn timed(o: &Opts, id: &'static str, what: String, value: Duration, budget: Dura
     }
 }
 
-/// B1: from the end of the OAuth callback to the first `/changes` entry,
-/// 150 ms per fake request.
+/// B1: from following the OAuth callback (token exchange included) to the
+/// first event in `/changes`, 150 ms per fake request.
 async fn b1(o: &Opts) -> Vec<Row> {
     let fake = google::Config {
         seed: Seed {
@@ -193,12 +193,24 @@ async fn b1(o: &Opts) -> Vec<Row> {
     let mut runs = Vec::new();
     for _ in 0..if o.smoke { 1 } else { 5 } {
         let t = n.tenant().await;
-        n.api.connect(&t.admin).await;
+        let callback = n.api.consent(&t.admin).await;
         let t0 = Instant::now();
-        loop {
-            let (_, v) = n.api.changes(&t.read, 0, 1).await.expect("changes");
-            if v["changes"].as_array().is_some_and(|c| !c.is_empty()) {
-                break;
+        n.api
+            .http
+            .get(&callback)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .expect("callback");
+        let mut since = 0;
+        // Discovery's collection changes come first; data is an entity.
+        'wait: loop {
+            let (_, v) = n.api.changes(&t.read, since, 500).await.expect("changes");
+            for c in v["changes"].as_array().expect("changes") {
+                if c["target"]["type"] == "entity" {
+                    break 'wait;
+                }
+                since = c["seq"].as_u64().expect("seq");
             }
             assert!(
                 t0.elapsed() < Duration::from_secs(30),
@@ -209,7 +221,10 @@ async fn b1(o: &Opts) -> Vec<Row> {
         }
         runs.push(t0.elapsed());
     }
-    let what = format!("first data after connect, worst of {}", runs.len());
+    let what = format!(
+        "first event after the OAuth callback, worst of {}",
+        runs.len()
+    );
     vec![timed(
         o,
         "B1",

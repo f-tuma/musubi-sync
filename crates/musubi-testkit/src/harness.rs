@@ -263,6 +263,14 @@ impl Api {
     /// Signs in to the fake Google with the tenant's admin key: consent,
     /// then the callback. Returns the account id.
     pub async fn connect(&self, admin: &str) -> String {
+        let callback = self.consent(admin).await;
+        let v = self.ok("GET", &callback, None, None).await;
+        v["account"].as_str().expect("account").to_owned()
+    }
+
+    /// Starts connecting an account and consents at the fake: the OAuth
+    /// callback URL, not yet followed (it does the token exchange).
+    pub async fn consent(&self, admin: &str) -> String {
         let v = self
             .ok(
                 "POST",
@@ -277,12 +285,10 @@ impl Api {
             .send()
             .await
             .expect("consent");
-        let callback = consent.headers()["location"]
+        consent.headers()["location"]
             .to_str()
             .expect("ascii")
-            .to_owned();
-        let v = self.ok("GET", &callback, None, None).await;
-        v["account"].as_str().expect("account").to_owned()
+            .to_owned()
     }
 
     /// `GET /v1/changes?since=…&limit=…`.
