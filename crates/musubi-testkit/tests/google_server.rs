@@ -954,6 +954,39 @@ async fn watch_delivers_sync_then_change_notifications_until_stopped() {
     assert!(g.deliveries().iter().all(|d| d.result == Ok(200)));
 }
 
+/// Live-verified 12. 11. 2026 (FIDELITY.md, watch): one resource id per
+/// calendar, any of them stops a channel of it, and a stopped or never
+/// created channel id is 404.
+#[tokio::test]
+async fn any_watch_of_a_calendar_stops_another_and_a_stopped_one_is_404() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let (hook, _rx) = receiver().await;
+    let watch = format!("{}/calendars/primary/events/watch", g.calendar_api());
+    let open = async |id: &str| {
+        let r = post_json(
+            &watch,
+            &t,
+            &json!({ "id": id, "type": "web_hook", "address": hook }),
+        )
+        .await;
+        assert_eq!(r.status, 200, "{}", r.json);
+        r.json["resourceId"].as_str().expect("id").to_owned()
+    };
+    let (a, b) = (open("ch-a").await, open("ch-b").await);
+    assert_eq!(a, b, "one resource id per calendar");
+
+    let stop = format!("{}/channels/stop", g.calendar_api());
+    let r = post_json(&stop, &t, &json!({ "id": "ch-a", "resourceId": b })).await;
+    assert_eq!(r.status, 204, "B's resource id stops A");
+    assert_eq!(g.channels(), ["ch-b"]);
+    for id in ["ch-a", "never-created"] {
+        let r = post_json(&stop, &t, &json!({ "id": id, "resourceId": b })).await;
+        assert_eq!(r.status, 404, "{id}");
+        assert_eq!(r.json["error"]["errors"][0]["reason"], "notFound");
+    }
+}
+
 #[tokio::test]
 async fn watch_expiration_is_capped_by_the_configured_maximum() {
     let g = FakeGoogle::start(Config {

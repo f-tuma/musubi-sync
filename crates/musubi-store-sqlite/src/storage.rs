@@ -290,8 +290,14 @@ impl Storage for SqliteStorage {
 /// Copies `src` to `out` through the backup API in one step: the source read
 /// transaction is a consistent snapshot while writers go on (WAL), and a step
 /// covering all pages cannot be restarted by their commits.
+/// `out` is created new and private (`0600`) before SQLite opens it.
 fn snapshot(src: &Path, out: &Path) -> Result<Connection> {
     let from = open_existing(src)?;
+    let mut o = fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    o.open(out).map_err(StoreError::Io)?;
     let mut to = Connection::open(out)?;
     {
         let b = Backup::new(&from, &mut to)?;

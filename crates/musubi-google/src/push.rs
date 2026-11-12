@@ -74,8 +74,9 @@ impl PushSource for GoogleProvider {
         cx: &AccountCx,
         col: &CollectionRef,
         callback: &Uri,
+        channel: &ChannelId,
     ) -> Result<Subscription, SyncError> {
-        let id = random_hex(16)?;
+        let id = &channel.0;
         let token = random_hex(32)?;
         let body = serde_json::json!({
             "id": id,
@@ -88,7 +89,7 @@ impl PushSource for GoogleProvider {
         let ch: Channel = serde_json::from_slice(&bytes).unwrap_or_default();
         match (ch.resource_id, ch.expiration.as_ref().and_then(millis)) {
             (Some(resource), Some(expiration)) => Ok(Subscription {
-                channel: ChannelId(id),
+                channel: channel.clone(),
                 collection: col.clone(),
                 resource,
                 token: SecretString::from(token),
@@ -98,7 +99,7 @@ impl PushSource for GoogleProvider {
                 // The channel is open at Google but unusable here: close it
                 // rather than leak it until it expires. Best effort.
                 if let Some(resource) = resource {
-                    let _ = self.stop(cx, &id, &resource).await;
+                    let _ = self.stop(cx, id, &resource).await;
                 }
                 Err(permanent(
                     "events.watch: reply without resourceId or valid expiration",

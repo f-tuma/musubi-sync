@@ -388,6 +388,18 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
 - **Závisí na:** K7.
 - **Souběžně:** nic.
 
+### K9. Uzavření známých nedodělků před fází 2
+
+- **Cíl:** opravit, co zbylo z K6–K8, každé s testem, který bez opravy selže.
+- **Hotovo:**
+  - osiřelý kanál Google po pádu (kapitola 9, bod 5);
+  - `serve` skončí na SIGINT i SIGTERM: otevřená spojení (stream `/v1/stream`) přeruší po 5 s, běžící práci počká nejvýš dalších 5 s; test pošle signál binárce s otevřeným streamem;
+  - kolekce jen pro úplné čtení zůstane taková, dokud delta neprojde: úplné čtení, které skončí až po termínu nového pokusu o deltu (24 h), už nehlásí chybu ani neodkládá; nepovedený pokus nastaví další den;
+  - soubory zálohy tenanta vznikají rovnou s právy `0600` (dřív je `backup` až dodatečně měnil);
+  - SSE navázané s `Last-Event-ID` = hlava − 1 dostane hlavu a pak každý další commit jednou (jen test, chování bylo správné);
+  - trvalou chybu poskytovatele loguje jen engine (s úlohou a kolekcí), adaptér Google už ne.
+- **Už hotové dřív (beze změny):** odebrání tolerující NotFound a test `removal_during_a_discovery`, nízké nálezy kroku 2 K6 (1)–(4), odebrání tenanta z `CommitBus`, adresář dat `0700` a `VACUUM INTO` do souboru `0600`.
+
 ## 6. Testovací strategie
 
 ### 6.1 Vrstvy
@@ -549,4 +561,4 @@ Rozhodnuto (koordinátor, 11. 11. 2026): soubor outboxu se implementuje ve fázi
 2. **Testovací účet Google, projekt GCP a veřejná adresa pro webhook** pro K8.
 3. **Uid zrušeného výskytu importované série.** Rozhodnuto (koordinátor, 11. 11. 2026, K5): vazbu na sérii nese `RemoteObject::master: Option<RemoteKey>` (Google `recurringEventId`). `Correlation` tvar nemění; `Correlation.uid` je neprůhledný klíč série daný poskytovatelem (remote key předlohy: vlastní klíč u předlohy a samostatné události, `master` u výjimky), **ne** iCalUID. Úložiště se nemění, páruje dál podle (kolekce, uid, recurrence_id). Zrušený výskyt je živá položka bez řádků výskytů, která potlačí výskyt předlohy; živě se neukáže.
 4. **Přeskok vpřed u drahých sérií (oprava 12 z `recurrence.md`, odložena).** `TooExpensive` dnes znamená „v tomto okně nerozbalitelné". Známé případy: `FREQ=MINUTELY` (nebo `SECONDLY`) se starým DTSTART, kde okno leží za rozpočtem 1 000 000 vygenerovaných okamžiků, a nemožné pravidlo jako `BYMONTH=2;BYMONTHDAY=30` daleko od DTSTART (jádro skončí po `MAX_ITER_LOOP` = 100 000 prázdných period, `was_limited`). Otázka: zda a kdy doplnit přeskok na začátek okna; do té doby to K5 hlásí, nemlčí.
-5. **Osiřelý kanál Google po pádu (K7).** Pád mezi `subscribe` a `put_channel` (obnova kanálu i `ensure_channel`) nechá kanál u Googlu běžet do vypršení (≤ 7 dní). Data se neztratí, jen chodí zbytečné notifikace. Návrh opravy: před `subscribe` uložit id čekajícího kanálu a při startu zbytky zastavit (`stop`).
+5. **Osiřelý kanál Google po pádu (K7).** Vyřešeno v K9. Pád mezi `subscribe` a `put_channel` (obnova kanálu i `ensure_channel`) nebo ztracená odpověď na `events.watch` nechávala kanál u Googlu běžet do vypršení (≤ 7 dní). Teď id kanálu volí engine (`PushSource::subscribe` dostane `channel: &ChannelId`, formát `{kolekce}-{ns}`) a před voláním ho uloží jako čekající kanál (`ChannelState::Pending`; ve `control.db` mají `remote`, `resource`, `token` a `expiration` NULL, starší soubor se při otevření převede). Čekající kanál se nikdy neobnovuje, `catch_up` ho přeskočí a webhook na něj odpoví 404. Zastaví ho nejbližší úloha kolekce: synchronizace (`ensure_channel`) nebo obnova kanálu, s `resourceId` jiného kanálu téhož kalendáře (živě ověřeno 12. 11. 2026: všechny kanály kalendáře mají stejné `resourceId`, `stop` s cizím `resourceId` téhož kalendáře vrátí 204, zastavený nebo neznámý kanál 404, což se bere jako hotovo). Chyba `subscribe`, po které kanál určitě nevznikl (trvalé odmítnutí, omezení rychlosti, neplatný přístup), svůj čekající řádek smaže; ztracená odpověď, timeout nebo 5xx ho nechá. Odebrání účtu (i tenanta) zastaví čekající kanál s `resourceId` otevřeného kanálu téže kolekce, a to dřív než otevřené kanály, aby pád mezi nimi nenechal čekající řádek bez `resourceId`; bez otevřeného kanálu řádek jen smaže a kanál u Googlu vyprší (uložit `resourceId` ke kolekci by to řešilo; odloženo).

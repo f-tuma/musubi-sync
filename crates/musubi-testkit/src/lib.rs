@@ -88,6 +88,8 @@ pub enum Op {
     Refresh,
     /// [`PushSource::subscribe`].
     Subscribe,
+    /// [`PushSource::unsubscribe`].
+    Unsubscribe,
 }
 
 /// How many times each call reached the provider (failed ones included).
@@ -129,7 +131,8 @@ struct State {
     oldest_cursor: u64,
     collections: BTreeMap<CollectionRef, FakeCollection>,
     channels: BTreeMap<ChannelId, CollectionRef>,
-    next_channel: u64,
+    /// Scripted lost `subscribe` replies (see [`FakeProvider::lose_subscribe_reply`]).
+    lost_subscribe: VecDeque<SyncError>,
     /// `changes` streams not yet dropped, per collection.
     open_reads: BTreeMap<CollectionRef, u32>,
 }
@@ -210,6 +213,12 @@ impl FakeProvider {
         self.lock().failures.entry(op).or_default().push_back(err);
     }
 
+    /// The next `subscribe` opens its channel, then fails with `err`: the reply
+    /// is lost, as after a timeout or a crash before the engine stores it.
+    pub fn lose_subscribe_reply(&self, err: SyncError) {
+        self.lock().lost_subscribe.push_back(err);
+    }
+
     /// Call counters so far.
     pub fn calls(&self) -> Calls {
         self.lock().calls
@@ -227,7 +236,7 @@ impl FakeProvider {
         }
     }
 
-    /// Calls of `op` (`Discover` or `Subscribe`) from now on are counted, then
+    /// Calls of `op` (`Discover`, `Subscribe` or `Unsubscribe`) from now on are counted, then
     /// wait until [`FakeProvider::release`].
     pub fn hold(&self, op: Op) {
         self.lock()
@@ -284,6 +293,7 @@ impl FakeProvider {
             Op::Fetch => c.fetch += 1,
             Op::Refresh => c.refresh += 1,
             Op::Subscribe => c.subscribe += 1,
+            Op::Unsubscribe => c.unsubscribe += 1,
         }
         match s.failures.get_mut(&op).and_then(VecDeque::pop_front) {
             Some(e) => Err(e),
@@ -733,26 +743,33 @@ impl PushSource for FakeProvider {
         cx: &AccountCx,
         col: &CollectionRef,
         _callback: &Uri,
+        channel: &ChannelId,
     ) -> Result<Subscription, SyncError> {
         self.enter(Op::Subscribe)?;
         self.gate(Op::Subscribe).await;
         let mut s = self.lock();
-        s.next_channel += 1;
-        let channel = ChannelId(format!("fake-channel-{}", s.next_channel));
         s.channels.insert(channel.clone(), col.clone());
+        if let Some(e) = s.lost_subscribe.pop_front() {
+            return Err(e);
+        }
         Ok(Subscription {
             token: SecretString::from(format!("token-{}", channel.0)),
-            channel,
+            channel: channel.clone(),
             collection: col.clone(),
-            resource: format!("resource-{}", col.0),
+            resource: fake_resource(col),
             expiration: cx.clock.now() + SignedDuration::from_hours(24),
         })
     }
 
+    /// Like Google: any resource id of the channel's collection stops it; an
+    /// unknown channel or a wrong resource changes nothing and is `Ok`.
     async fn unsubscribe(&self, _cx: &AccountCx, sub: &Subscription) -> Result<(), SyncError> {
+        self.enter(Op::Unsubscribe)?;
+        self.gate(Op::Unsubscribe).await;
         let mut s = self.lock();
-        s.calls.unsubscribe += 1;
-        s.channels.remove(&sub.channel);
+        if s.channels.get(&sub.channel).map(fake_resource) == Some(sub.resource.clone()) {
+            s.channels.remove(&sub.channel);
+        }
         Ok(())
     }
 
@@ -781,6 +798,11 @@ impl PushSource for FakeProvider {
             PushHint::Changed
         })
     }
+}
+
+/// The resource id the fake gives every channel of `col`.
+fn fake_resource(col: &CollectionRef) -> String {
+    format!("resource-{}", col.0)
 }
 
 /// A limiter that never waits.

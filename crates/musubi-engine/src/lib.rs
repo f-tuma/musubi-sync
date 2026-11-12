@@ -317,17 +317,13 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
         if !channels.is_empty() {
             match self.cx(account, false).await {
-                Ok(cx) => {
-                    for ch in &channels {
-                        gone_ok(self.drop_channel(&cx, ch).await)?;
-                    }
-                }
+                Ok(cx) => gone_ok(self.drop_channels(&cx, &channels).await)?,
                 // Without a grant the channels cannot be stopped; they expire.
                 // Any other failure retries the removal, which keeps the tokens.
                 Err(EngineError::Sync(SyncError::ReauthRequired)) => {
                     tracing::warn!(%account, "no grant to stop push channels with");
                     for ch in channels {
-                        gone_ok(self.ctl(move |c| c.delete_channel(&ch.sub.channel)).await)?;
+                        gone_ok(self.ctl(move |c| c.delete_channel(ch.id())).await)?;
                     }
                 }
                 Err(e) => return Err(e),
@@ -376,9 +372,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         }
     }
 
-    /// Queues a delta of every collection with a push channel. Call once at
-    /// startup: notifications sent while the node was down are lost (Google
-    /// does not retry them). Returns how many were queued.
+    /// Queues a delta of every collection with an open push channel. Call
+    /// once at startup: notifications sent while the node was down are lost
+    /// (Google does not retry them). Returns how many were queued. Pending
+    /// channels left by a crash are stopped by their collection's next sync.
     pub async fn catch_up(&self) -> Result<usize, EngineError> {
         let channels = self.ctl(|c| c.channels_expiring(Timestamp::MAX)).await?;
         let now = self.now();

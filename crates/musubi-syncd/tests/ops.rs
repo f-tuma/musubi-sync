@@ -1,5 +1,5 @@
 //! `musubi-syncd backup` against a running node and `restore` into a stopped
-//! one, through the binary.
+//! one, and the stop signals of `serve`, through the binary.
 
 mod common;
 
@@ -7,10 +7,11 @@ use std::path::Path;
 use std::process::{Child, Command, Output};
 use std::time::Duration;
 
+use common::whole::World;
 use common::{ADMIN_KEY, config_json, event};
 use musubi_model::{AccountId, Storage, TenantId, TenantStore};
 use musubi_store_sqlite::SqliteStorage;
-use musubi_testkit::google::FakeGoogle;
+use musubi_testkit::google::{Endpoint, FakeGoogle, Fault};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_musubi-syncd");
@@ -220,4 +221,96 @@ async fn backup_of_a_running_node_restores_into_a_stopped_one() {
     assert_eq!((s, &v["next"]), (200, &json!(head.0)), "{v}");
     let stored = SqliteStorage::new(&data, 1).expect("storage");
     assert_eq!(stored.open(t).expect("tenant").head().expect("head"), head);
+}
+
+/// SIGINT and SIGTERM stop `serve` within a bounded time, also with a
+/// `/v1/stream` open (it never ends by itself).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_signal_ends_serve_with_a_stream_open() {
+    let google = FakeGoogle::start(Default::default())
+        .await
+        .expect("fake google");
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let http = reqwest::Client::new();
+    for sig in ["-INT", "-TERM"] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let addr = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .expect("free port")
+            .to_string();
+        let config = dir.path().join("config.json");
+        let c = config_json(&addr, &dir.path().join("data"), &google);
+        std::fs::write(&config, c.to_string()).expect("config");
+        let base = format!("http://{addr}");
+        let mut node = serve(&config, &addr).await;
+
+        let (_, v) = call(
+            &http,
+            "POST",
+            format!("{base}/v1/admin/tenants"),
+            ADMIN_KEY,
+            None,
+        )
+        .await;
+        let t = v["id"].as_str().expect("id").to_owned();
+        let body = json!({ "scope": "read" });
+        let url = format!("{base}/v1/admin/tenants/{t}/keys");
+        let (_, v) = call(&http, "POST", url, ADMIN_KEY, Some(body)).await;
+        let key = v["key"].as_str().expect("key");
+        let stream = http
+            .get(format!("{base}/v1/stream"))
+            .bearer_auth(key)
+            .send()
+            .await
+            .expect("stream");
+        assert_eq!(stream.status(), 200);
+
+        let pid = node.0.id().to_string();
+        let kill = Command::new("kill").args([sig, &pid]).status();
+        assert!(kill.expect("kill").success());
+        let started = std::time::Instant::now();
+        let status = loop {
+            if let Some(s) = node.0.try_wait().expect("wait") {
+                break s;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "{sig}: still running"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert!(status.success(), "{sig}: {status:?}");
+        drop(stream);
+    }
+}
+
+/// A permanent provider error is logged once, by the engine with its job
+/// and collection, not again by the adapter.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_permanent_provider_error_is_logged_once() {
+    let w = World::start(Default::default(), &[]).await;
+    w.converge(Duration::from_secs(30), |w| !w.fake.channels().is_empty())
+        .await;
+    let forbidden = Fault {
+        status: 403,
+        domain: "global",
+        reason: "forbidden",
+        message: "Forbidden",
+        retry_after: None,
+    };
+    w.fake.fail(Endpoint::EventsList, forbidden, 1);
+    // Notified: the delta answers 403.
+    let start = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24);
+    let when = json!({ "dateTime": start.to_string(), "timeZone": "UTC" });
+    w.fake.put_event(
+        &w.fake.primary(),
+        json!({ "summary": "x", "start": when, "end": when }),
+    );
+    let mark = "permanent provider error";
+    let line = w.node().wait_line(mark, Duration::from_secs(30));
+    assert!(line.is_some(), "{}", w.node().tail(40));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let log = w.node().tail(usize::MAX);
+    assert_eq!(log.matches(mark).count(), 1, "{log}");
 }

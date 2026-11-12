@@ -298,3 +298,34 @@ async fn full_read_only_probes_a_delta_after_a_day() {
     assert!(after.delta > probed.delta, "{after:?}");
     assert!(h.holiday().status.error.is_none());
 }
+
+/// (b) over more than a day: the delta probed after `DELTA_RETRY` fails like
+/// every other one and re-arms full-read-only, without an error and without
+/// reads beyond one full read per poll interval and one probe per day.
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_delta_probe_rearms_full_read_only() {
+    let h = H::new(&[Quirk::ExpireEverySyncToken, Quirk::RefuseWatch]).await;
+    h.run(SPAN).await;
+    let c = h.counts();
+    assert_eq!(c.delta, 2, "{c:?}");
+
+    let day = Duration::from_secs(86_400);
+    let mut last = c;
+    for _ in 0..2 {
+        h.advance(day, Duration::from_secs(3600)).await;
+        let now = h.counts();
+        assert!(
+            h.holiday().status.error.is_none(),
+            "{:?}",
+            h.holiday().status.error
+        );
+        assert_eq!(now.delta - last.delta, 1, "one probe a day: {now:?}");
+        // One full read per hour step (the 5-minute poll is always due),
+        // plus the probe's.
+        assert!(
+            (23..=26).contains(&(now.full - last.full)),
+            "{last:?} -> {now:?}"
+        );
+        last = now;
+    }
+}

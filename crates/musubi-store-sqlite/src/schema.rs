@@ -117,6 +117,8 @@ pub(crate) fn migrate(c: &mut Connection, steps: &[&str]) -> Result<()> {
 /// `NotFound` without the channel;
 /// `ExtendIndex`, `Maintain`: none, they belong to the tenant) so that
 /// `delete_account` finds the account's jobs through an index.
+/// A pending channel (stored before subscribe) has `remote`, `resource`,
+/// `token` and `expiration` NULL; see [`migrate_control`] for older files.
 pub(crate) const CONTROL: &str = r#"
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER NOT NULL);
 INSERT OR IGNORE INTO meta VALUES ('lease', 0);
@@ -144,10 +146,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_dedup ON jobs(tenant, dedup)
   WHERE dedup IS NOT NULL AND lease IS NULL;
 CREATE TABLE IF NOT EXISTS channels(
   id TEXT PRIMARY KEY, tenant BLOB NOT NULL, account BLOB NOT NULL, collection BLOB NOT NULL,
-  remote TEXT NOT NULL, resource TEXT NOT NULL, token TEXT NOT NULL, expiration INTEGER NOT NULL);
+  remote TEXT, resource TEXT, token TEXT, expiration INTEGER);
 CREATE INDEX IF NOT EXISTS channels_tenant ON channels(tenant, account);
 CREATE INDEX IF NOT EXISTS channels_expiration ON channels(expiration);
 "#;
+
+/// Brings a `control.db` created before pending channels (K9) to [`CONTROL`]:
+/// its `channels` columns were `NOT NULL`. Run after `CONTROL`, which leaves
+/// an existing table as it is.
+pub(crate) fn migrate_control(c: &mut Connection) -> Result<()> {
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let old: bool = tx.query_row(
+        r#"SELECT "notnull" FROM pragma_table_info('channels') WHERE name = 'resource'"#,
+        [],
+        |r| r.get(0),
+    )?;
+    if old {
+        tx.execute_batch(
+            "ALTER TABLE channels RENAME TO channels_v0;
+             DROP INDEX channels_tenant;
+             DROP INDEX channels_expiration;",
+        )?;
+        tx.execute_batch(CONTROL)?;
+        tx.execute_batch(
+            "INSERT INTO channels SELECT * FROM channels_v0;
+             DROP TABLE channels_v0;",
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

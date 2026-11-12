@@ -169,8 +169,14 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 - Expired channels are forgotten, as by Google: they leave
   `FakeGoogle::channels`, their id can be reused, and stopping one answers
   `404 notFound`.
-- `channels.stop` with a wrong `id`/`resourceId` pair answers `404
-  notFound`. Stopping does not need the token.
+- Every watch on one calendar gets the same `resourceId`, and
+  `channels.stop` of a channel with the `resourceId` of another watch on the
+  same calendar answers `204` and stops it. Stopping an already stopped or
+  never created channel id answers `404 notFound`. All three *verified (K9)*
+  live on 12. 11. 2026; the engine relies on them to stop a channel whose
+  watch reply it lost (plan ch. 9 item 5).
+- `channels.stop` with a channel id and a `resourceId` of another calendar
+  answers `404 notFound` (*not verified*). Stopping does not need the token.
 - Headers sent: `X-Goog-Channel-ID`, `X-Goog-Channel-Token` (when set),
   `X-Goog-Channel-Expiration` (RFC 1123), `X-Goog-Resource-ID`,
   `X-Goog-Resource-URI`, `X-Goog-Resource-State`, `X-Goog-Message-Number`.

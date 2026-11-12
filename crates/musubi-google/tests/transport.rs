@@ -10,7 +10,7 @@ use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use jiff::{SignedDuration, Timestamp};
 use musubi_google::{GoogleConfig, GoogleProvider};
 use musubi_model::provider::{
-    Access, Clock, FetchHint, Pass, PushHint, PushSource, Start, Subscription,
+    Access, ChannelId, Clock, FetchHint, Pass, PushHint, PushSource, Start, Subscription,
 };
 use musubi_model::remote::RemoteRef;
 use musubi_model::{
@@ -486,7 +486,11 @@ async fn watch_create_renew_cancel_and_verify() {
     let (hook, mut rx) = webhook().await;
 
     // Create: the expiration is the one the server granted (1 h here), not a constant.
-    let a: Subscription = e.p.subscribe(&e.cx, &e.cal, &hook).await.unwrap();
+    let a: Subscription =
+        e.p.subscribe(&e.cx, &e.cal, &hook, &ChannelId("chan-a".into()))
+            .await
+            .unwrap();
+    assert_eq!(a.channel.0, "chan-a", "the caller's id");
     let granted = a.expiration.duration_since(Timestamp::now());
     assert!(
         granted > SignedDuration::from_mins(59) && granted <= SignedDuration::from_mins(60),
@@ -502,7 +506,10 @@ async fn watch_create_renew_cancel_and_verify() {
     assert_eq!(e.p.verify(&exists, &a), Ok(PushHint::Changed));
 
     // Renew before `a.expiration`: open a successor, then stop the old channel.
-    let b = e.p.subscribe(&e.cx, &e.cal, &hook).await.unwrap();
+    let b =
+        e.p.subscribe(&e.cx, &e.cal, &hook, &ChannelId("chan-b".into()))
+            .await
+            .unwrap();
     assert_ne!(a.channel, b.channel);
     assert_ne!(a.token.expose_secret(), b.token.expose_secret());
     let b_sync = next(&mut rx).await;
@@ -522,5 +529,19 @@ async fn watch_create_renew_cancel_and_verify() {
     assert_eq!(e.p.verify(&b_sync, &a), Err(PushRejected::UnknownChannel));
 
     e.p.unsubscribe(&e.cx, &b).await.unwrap();
+    assert!(e.g.channels().is_empty());
+
+    // A lost watch reply: the engine knows only the id it chose, and stops the
+    // channel with the resource id of another watch on the same calendar.
+    let c =
+        e.p.subscribe(&e.cx, &e.cal, &hook, &ChannelId("chan-c".into()))
+            .await
+            .unwrap();
+    assert_eq!(c.resource, b.resource, "one resource id per calendar");
+    let pending = Subscription {
+        channel: ChannelId("chan-c".into()),
+        ..b.clone()
+    };
+    e.p.unsubscribe(&e.cx, &pending).await.unwrap();
     assert!(e.g.channels().is_empty());
 }

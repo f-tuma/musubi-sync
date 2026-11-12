@@ -182,7 +182,6 @@ impl GoogleProvider {
                 tracing::warn!(body = %excerpt(&body), pass = ?q.pass, "events.list: page token rejected; restarting the pass");
                 return Ok(None);
             }
-            tracing::warn!(status = 400, body = %excerpt(&body), "permanent provider error");
             return Err(SyncError::Permanent(
                 HttpStatus {
                     status,
@@ -236,10 +235,10 @@ pub(crate) async fn error_for(resp: Response, now: Timestamp) -> SyncError {
                 status,
                 body: excerpt(&body),
             };
+            // Logged by the caller, which knows the job and the collection.
             if status.is_server_error() {
                 SyncError::Transient(err.into())
             } else {
-                tracing::warn!(status = status.as_u16(), body = %err.body, "permanent provider error");
                 SyncError::Permanent(err.into())
             }
         }
