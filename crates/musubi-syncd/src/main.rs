@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use musubi_syncd::App;
 use musubi_syncd::config::Config;
@@ -15,6 +16,9 @@ use musubi_syncd::config::Config;
 const USAGE: &str = "usage: musubi-syncd serve --config <file>
        musubi-syncd backup --config <file> --to <dir>
        musubi-syncd restore --config <file> --from <dir>";
+
+/// How long a stop signal waits for open requests and running work.
+const GRACE: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -49,7 +53,13 @@ fn run() -> Result<(), String> {
             .map_err(|e| e.to_string())
     };
     match (cmd.as_str(), dir) {
-        ("serve", None) => rt()?.block_on(serve(config)),
+        ("serve", None) => {
+            let rt = rt()?;
+            let r = rt.block_on(serve(config));
+            // Work still running (a blocking store call) does not hold the exit.
+            rt.shutdown_timeout(GRACE);
+            r
+        }
         ("backup", Some(to)) => rt()?.block_on(musubi_syncd::backup(&config, &to)),
         ("restore", Some(from)) => musubi_syncd::restore(&config, &from),
         _ => Err(USAGE.into()),
@@ -64,11 +74,49 @@ async fn serve(c: Config) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(c.listen)
         .await
         .map_err(|e| format!("{}: {e}", c.listen))?;
+    let stop = stop_signal()?;
     eprintln!("musubi-syncd: listening on {}", c.listen);
-    axum::serve(listener, app.router())
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .map_err(|e| e.to_string())
+    let (stopping, mut stopped) = tokio::sync::watch::channel(false);
+    let server = axum::serve(listener, app.router()).with_graceful_shutdown(async move {
+        stop.await;
+        eprintln!("musubi-syncd: stopping");
+        let _ = stopping.send(true);
+    });
+    // Open streams (`/v1/stream`) never end by themselves: after the grace
+    // period they are cut.
+    let cut = async {
+        let _ = stopped.wait_for(|s| *s).await;
+        tokio::time::sleep(GRACE).await;
+    };
+    tokio::select! {
+        r = server => r.map_err(|e| e.to_string()),
+        () = cut => {
+            eprintln!("musubi-syncd: open connections cut after {GRACE:?}");
+            Ok(())
+        }
+    }
+}
+
+/// SIGINT or SIGTERM. The handlers are installed here, so a signal that
+/// arrives while the server starts is not missed.
+#[cfg(unix)]
+fn stop_signal() -> Result<impl Future<Output = ()>, String> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let listen = |k| signal(k).map_err(|e| format!("signal handler: {e}"));
+    let mut int = listen(SignalKind::interrupt())?;
+    let mut term = listen(SignalKind::terminate())?;
+    Ok(async move {
+        tokio::select! {
+            _ = int.recv() => {}
+            _ = term.recv() => {}
+        }
+    })
+}
+
+/// Ctrl-C.
+#[cfg(not(unix))]
+fn stop_signal() -> Result<impl Future<Output = ()>, String> {
+    Ok(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
 }
