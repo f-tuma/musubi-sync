@@ -475,12 +475,37 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             }
             return self.ensure_full(tenant, rec.id, id).await;
         }
-        match self
-            .read_pass(tenant, cx, &col, col.cursor.clone(), Start::Full, None)
-            .await
-        {
+        // A full-read-only collection skips the delta its provider would refuse.
+        let res = match self.with_col(id, |rt| rt.full_only) {
+            true => Err(EngineError::Sync(SyncError::CursorExpired)),
+            false => {
+                self.read_pass(tenant, cx, &col, col.cursor.clone(), Start::Full, None)
+                    .await
+            }
+        };
+        match res {
             Err(EngineError::Sync(SyncError::CursorExpired)) => {
-                tracing::info!(collection = %id, "delta cursor expired; full read");
+                // Expired right after the full read that issued it, twice in a
+                // row (live: a Google holiday calendar answers every fresh token
+                // with 410), or a cursor that says no delta is possible: the
+                // provider gives no usable delta here, so every sync is a full
+                // read. One expiry alone is an ordinary expired token.
+                let (was, now) = self.with_col(id, |rt| {
+                    let was = rt.full_only;
+                    rt.full_only |= rt.full_reads > 1;
+                    (was, rt.full_only)
+                });
+                match (was, now) {
+                    (false, true) => {
+                        tracing::info!(collection = %id, "no usable delta cursor after a full read; full reads only, at the poll interval")
+                    }
+                    (false, false) => {
+                        tracing::info!(collection = %id, "delta cursor expired; full read")
+                    }
+                    (true, _) => {
+                        tracing::debug!(collection = %id, "full-read-only collection; full read")
+                    }
+                }
                 let r = self.full_read(tenant, cx, &col).await?;
                 self.finish(rec, cx, &col, r).await
             }
@@ -664,15 +689,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     ) -> Result<(), EngineError> {
         let now = self.now();
         let c = &self.inner.config;
-        let full_reads = self.with_col(col.id, |rt| {
+        let (full_reads, full_only) = self.with_col(col.id, |rt| {
             rt.full_reads = if full { rt.full_reads + 1 } else { 0 };
-            rt.full_reads
+            (rt.full_reads, rt.full_only)
         });
-        // A third full read without a delta between: the provider expires (or
-        // never gives) the cursor a full read ends with. One expiry right after
-        // a full read happens (a token aging out meanwhile); a repeat does not.
-        // Without this the next delta fails at once and the collection spins.
-        let backed_off = (full_reads > 2).then(|| backoff(c.poll_every, full_reads - 3));
+        // A third full read without a delta between, on a collection not
+        // known to be full-read-only: a guard against a cursor that keeps
+        // expiring on some other path, so the collection cannot spin.
+        let backed_off =
+            (!full_only && full_reads > 2).then(|| backoff(c.poll_every, full_reads - 3));
         let error = backed_off.map(|wait| {
             tracing::warn!(collection = %col.id, full_reads, ?wait, "no usable delta cursor after a full read; backing off");
             CollectionError {
@@ -696,6 +721,9 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let push = self.ensure_channel(rec, cx, col).await?;
         let every = match push {
             _ if let Some(wait) = backed_off => wait,
+            // No catch-up delta: each sync of such a collection is a full read.
+            Push::Existing if full_only => c.poll_every_push,
+            _ if full_only => c.poll_every,
             // A full read ends at its own snapshot, and a sync job arriving
             // during it only deferred to it; a new channel missed what changed
             // before it existed. One delta now picks both up.
@@ -756,10 +784,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 })
             }
             Err(SyncError::Permanent(e)) => {
-                tracing::warn!(collection = %id, error = %e, retry_in = ?PUSH_RETRY, "push channel refused; polling only");
-                self.with_col(id, |rt| {
-                    rt.push_refused_until = Some(after(now, PUSH_RETRY))
-                });
+                self.refuse_push(id, &e);
                 Ok(Push::None)
             }
             Err(e) => {
@@ -767,6 +792,13 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 Ok(Push::None)
             }
         }
+    }
+
+    /// The provider refused a push channel: poll only, ask again after [`PUSH_RETRY`].
+    fn refuse_push(&self, id: CollectionId, e: &musubi_model::error::BoxError) {
+        tracing::warn!(collection = %id, error = %e, retry_in = ?PUSH_RETRY, "push channel refused; polling only");
+        let until = after(self.now(), PUSH_RETRY);
+        self.with_col(id, |rt| rt.push_refused_until = Some(until));
     }
 
     /// Stores a new channel and schedules its renewal at two thirds of its
@@ -805,7 +837,21 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             && let Some(col) = self.collection(old.tenant, old.collection).await?
             && !col.gone
         {
-            let sub = push.subscribe(cx, &col.remote.remote, callback).await?;
+            let sub = match push.subscribe(cx, &col.remote.remote, callback).await {
+                Ok(sub) => sub,
+                // Refused now: like a first refusal, the collection is polled
+                // only. Its row would otherwise read as a live channel until
+                // long after Google's has expired.
+                Err(SyncError::Permanent(e)) => {
+                    self.refuse_push(col.id, &e);
+                    self.drop_channel(cx, old).await?;
+                    let now = self.now();
+                    return self
+                        .enqueue(sync_job(old.tenant, old.account, col.id, Lane::Sync, now))
+                        .await;
+                }
+                Err(e) => return Err(e.into()),
+            };
             self.put_channel(
                 cx,
                 ChannelRecord {

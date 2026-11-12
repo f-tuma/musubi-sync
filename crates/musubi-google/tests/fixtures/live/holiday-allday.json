@@ -1,0 +1,32 @@
+{
+ "kind": "calendar#event",
+ "etag": "\"3431870973490000\"",
+ "id": "20261117_73jjbc6is3hbn348dkk19eg0kg",
+ "status": "confirmed",
+ "htmlLink": "https://www.google.com/calendar/event?eid=REDACTED",
+ "created": "2024-05-17T08:44:46.000Z",
+ "updated": "2024-05-17T08:44:46.745Z",
+ "summary": "Struggle for Freedom and Democracy Day",
+ "description": "Public holiday",
+ "creator": {
+  "email": "en-gb.czech#holiday@group.v.calendar.google.com",
+  "displayName": "Holidays in Czechia",
+  "self": true
+ },
+ "organizer": {
+  "email": "en-gb.czech#holiday@group.v.calendar.google.com",
+  "displayName": "Holidays in Czechia",
+  "self": true
+ },
+ "start": {
+  "date": "2026-11-17"
+ },
+ "end": {
+  "date": "2026-11-18"
+ },
+ "transparency": "transparent",
+ "visibility": "public",
+ "iCalUID": "20261117_73jjbc6is3hbn348dkk19eg0kg@google.com",
+ "sequence": 0,
+ "eventType": "default"
+}

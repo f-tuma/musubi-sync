@@ -18,7 +18,7 @@ use musubi_model::{
     SyncError, TimeWindow,
 };
 use musubi_testkit::account_cx;
-use musubi_testkit::google::{Change, Config, Endpoint, FakeGoogle, Fault, Seed};
+use musubi_testkit::google::{Change, Config, Endpoint, FakeGoogle, Fault, Quirk, Seed};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -288,15 +288,53 @@ async fn expired_sync_token_is_cursor_expired() {
 }
 
 #[tokio::test]
-async fn rejected_page_token_of_a_stored_cursor_is_cursor_expired() {
-    // A stored mid-read cursor whose page token Google no longer accepts (400).
-    // K8: confirm the status Google answers for an expired page token.
+async fn rejected_page_token_restarts_the_pass() {
+    // A stored mid-read cursor whose page token Google no longer accepts:
+    // live Google answers `400 invalid` ("Invalid page token value").
     let e = env(seeded(3)).await;
     let stale = Cursor(br#"{"full":{"page":"no-longer-valid"}}"#.to_vec());
+    let pages = e.read_ok(Some(stale), full()).await;
+    let items: usize = pages.iter().map(|p| p.upserts.len()).sum();
+    assert!(items >= 3, "the full read starts over and reads everything");
+    let last = pages.last().unwrap();
+    assert!(last.last && last.cursor.is_some(), "and ends with a cursor");
+}
+
+#[tokio::test]
+async fn page_tokens_rejected_again_and_again_end_the_pass() {
+    let e = env(seeded(6)).await;
+    e.g.quirk(&e.cal.0, Quirk::RejectPageTokens);
+    let hint = FetchHint {
+        start: Start::Full,
+        page_size: NonZeroU32::new(2),
+    };
+    let out = e.read(None, hint).await;
+    let err = out.last().unwrap().as_ref().unwrap_err();
+    assert!(matches!(err, SyncError::Transient(_)), "{err:?}");
+    let lists =
+        e.g.requests()
+            .iter()
+            .filter(|r| r.contains("/events?"))
+            .count();
+    assert_eq!(lists, 6, "each of 3 tries: first page + rejected token");
+}
+
+#[tokio::test]
+async fn other_bad_request_on_a_page_is_an_error() {
+    let e = env(seeded(3)).await;
+    let bad = Fault {
+        status: 400,
+        domain: "global",
+        reason: "badRequest",
+        message: "Bad Request",
+        retry_after: None,
+    };
+    e.g.fail(Endpoint::EventsList, bad, 1);
+    let stale = Cursor(br#"{"full":{"page":"p"}}"#.to_vec());
     let out = e.read(Some(stale), full()).await;
     assert_eq!(out.len(), 1);
     assert!(
-        matches!(out[0], Err(SyncError::CursorExpired)),
+        matches!(out[0], Err(SyncError::Permanent(_))),
         "{:?}",
         out[0]
     );

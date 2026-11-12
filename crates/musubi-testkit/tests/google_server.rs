@@ -714,7 +714,7 @@ async fn an_event_with_an_unreadable_start_is_rejected() {
 }
 
 #[tokio::test]
-async fn seeded_events_use_several_offsets_and_all_resolve() {
+async fn seeded_events_come_in_the_calendar_offset_and_all_resolve() {
     let seed = Seed {
         seed: 9,
         calendars: 0,
@@ -727,16 +727,12 @@ async fn seeded_events_use_several_offsets_and_all_resolve() {
         .values()
         .filter_map(|e| e["start"]["dateTime"].as_str().map(str::to_owned))
         .collect();
-    for suffix in ["Z", "+01:00", "-05:00"] {
-        assert!(
-            starts.iter().any(|s| s.ends_with(suffix)),
-            "no start with {suffix}"
-        );
+    // Written in UTC, Prague and New York offsets or local time, all are
+    // served in the calendar's (Prague) offset, as live Google does.
+    assert!(!starts.is_empty());
+    for s in &starts {
+        assert!(s.ends_with("+01:00") || s.ends_with("+02:00"), "{s}");
     }
-    assert!(
-        starts.iter().any(|s| s.len() == 19),
-        "some local times carry no offset"
-    );
     // Seeded events lie within 30 days of the epoch; a window around it shows them all.
     let (all, _) = read_all(&g, &t, "primary", "").await;
     let (window, _) = read_all(

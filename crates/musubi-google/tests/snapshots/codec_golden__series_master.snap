@@ -30,7 +30,7 @@ expression: decode(stringify! (series_master))
       "roles": {
         "owner": true
       },
-      "participationStatus": "needs-action",
+      "participationStatus": "accepted",
       "expectReply": false
     }
   },

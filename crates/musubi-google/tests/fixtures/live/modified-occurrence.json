@@ -1,0 +1,37 @@
+{
+ "kind": "calendar#event",
+ "etag": "\"3588992401973630\"",
+ "id": "5vbt61l3jipfqjk47k9h9sma6q_20261114T153000Z",
+ "status": "confirmed",
+ "htmlLink": "https://www.google.com/calendar/event?eid=REDACTED",
+ "created": "2026-11-12T15:09:25.000Z",
+ "updated": "2026-11-12T15:10:00.986Z",
+ "summary": "K8 Daily series (moved title)",
+ "creator": {
+  "email": "owner@example.com",
+  "self": true
+ },
+ "organizer": {
+  "email": "owner@example.com",
+  "self": true
+ },
+ "start": {
+  "dateTime": "2026-11-14T16:30:00+01:00",
+  "timeZone": "Europe/Prague"
+ },
+ "end": {
+  "dateTime": "2026-11-14T17:30:00+01:00",
+  "timeZone": "Europe/Prague"
+ },
+ "recurringEventId": "5vbt61l3jipfqjk47k9h9sma6q",
+ "originalStartTime": {
+  "dateTime": "2026-11-14T16:30:00+01:00",
+  "timeZone": "Europe/Prague"
+ },
+ "iCalUID": "5vbt61l3jipfqjk47k9h9sma6q@google.com",
+ "sequence": 0,
+ "reminders": {
+  "useDefault": true
+ },
+ "eventType": "default"
+}

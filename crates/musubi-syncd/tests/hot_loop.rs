@@ -33,6 +33,7 @@ struct H {
     clock: ManualClock,
     storage: Arc<SqliteStorage>,
     engine: Engine<SqliteStorage, GoogleCodec>,
+    control: Arc<SqliteControl>,
     _dir: tempfile::TempDir,
 }
 
@@ -45,7 +46,7 @@ struct Counts {
 }
 
 impl H {
-    async fn new(quirk: Quirk) -> Self {
+    async fn new(quirks: &[Quirk]) -> Self {
         let g = FakeGoogle::start(Default::default()).await.expect("fake");
         g.apply(&Change::AddCalendar {
             entry: json!({ "id": HOLIDAY, "summary": "Státní svátky", "accessRole": "reader" }),
@@ -58,7 +59,9 @@ impl H {
                 "end": { "date": "2026-11-18" },
             }),
         );
-        g.quirk(HOLIDAY, quirk);
+        for q in quirks {
+            g.quirk(HOLIDAY, *q);
+        }
 
         let dir = tempfile::tempdir().expect("tempdir");
         let storage =
@@ -102,7 +105,7 @@ impl H {
         let engine = Engine::new(
             storage.clone(),
             Arc::new(provider),
-            control,
+            control.clone(),
             vault,
             Arc::new(clock.clone()),
             Arc::new(|_, _| {}),
@@ -121,6 +124,7 @@ impl H {
             clock,
             storage,
             engine,
+            control,
             _dir: dir,
         }
     }
@@ -177,7 +181,7 @@ impl H {
 /// and the watch is asked for again only after a day.
 #[tokio::test(flavor = "multi_thread")]
 async fn refused_watch_polls_without_asking_again() {
-    let h = H::new(Quirk::RefuseWatch).await;
+    let h = H::new(&[Quirk::RefuseWatch]).await;
     h.run(SPAN).await;
     let c = h.counts();
     assert_eq!(c.watch, 1, "watch retried every cycle: {c:?}");
@@ -197,37 +201,74 @@ async fn refused_watch_polls_without_asking_again() {
     );
 }
 
-/// (b) Every delta answers `410`: full reads back off exponentially and the
-/// collection carries a (transient) error.
+/// (b) The live holiday calendar: its fresh sync token answers `410` and
+/// `events.watch` is refused. After two such tokens the collection is read
+/// in full only, at the poll interval, without an error.
 #[tokio::test(flavor = "multi_thread")]
-async fn delta_always_gone_backs_off_full_reads() {
-    let h = H::new(Quirk::ExpireEverySyncToken).await;
+async fn delta_always_gone_reads_in_full_at_the_poll_interval() {
+    let h = H::new(&[Quirk::ExpireEverySyncToken, Quirk::RefuseWatch]).await;
     h.run(SPAN).await;
     let c = h.counts();
-    assert!(c.full <= 4, "full reads spin: {c:?}");
-    assert!(c.delta <= 4, "{c:?}");
+    // Full, delta 410, full, delta 410, full; then one every 5 min.
+    assert_eq!(c.delta, 2, "no delta once full-read-only: {c:?}");
+    assert!((4..=6).contains(&c.full), "{c:?}");
     let col = h.holiday();
-    let err = col.status.error.expect("backoff is a collection error");
-    assert!(!err.permanent);
-    assert!(
-        err.message.contains("no usable delta cursor"),
-        "{}",
-        err.message
-    );
+    assert!(col.status.error.is_none(), "{:?}", col.status.error);
     assert_eq!(col.status.coverage, Coverage::Full);
+
+    h.advance(Duration::from_secs(3600), STEP).await;
+    let more = h.counts();
+    assert_eq!(more.delta, 2, "{more:?}");
+    assert!((11..=13).contains(&(more.full - c.full)), "{more:?}");
+    assert!(h.holiday().status.error.is_none());
 }
 
-/// (c) A full read without `nextSyncToken`: the read still completes, the
-/// next sync is a full read again, and those back off like (b).
+/// (c) A full read without `nextSyncToken`: the read still completes and the
+/// collection is read in full only, like (b), without an error.
 #[tokio::test(flavor = "multi_thread")]
-async fn full_read_without_sync_token_completes_and_backs_off() {
-    let h = H::new(Quirk::NoSyncToken).await;
+async fn full_read_without_sync_token_reads_in_full_only() {
+    let h = H::new(&[Quirk::NoSyncToken]).await;
     h.run(SPAN).await;
     let c = h.counts();
     assert!((2..=4).contains(&c.full), "{c:?}");
     assert_eq!(c.delta, 0, "no sync token, no delta request: {c:?}");
     let col = h.holiday();
     assert_eq!(col.status.coverage, Coverage::Full);
-    let err = col.status.error.expect("backoff is a collection error");
-    assert!(!err.permanent);
+    assert!(col.status.error.is_none(), "{:?}", col.status.error);
+}
+
+/// (d) A renewal Google refuses leaves no channel row behind: the collection
+/// is polled like after a first refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_renewal_drops_the_channel_and_polls() {
+    let h = H::new(&[]).await;
+    h.run(SPAN).await;
+    let id = h.holiday().id;
+    let mine = |h: &H| {
+        h.control
+            .channels(TENANT, Some(ACCOUNT))
+            .expect("channels")
+            .into_iter()
+            .filter(|c| c.collection == id)
+            .count()
+    };
+    assert_eq!(mine(&h), 1, "a channel at first");
+    assert_eq!(h.counts().watch, 1);
+
+    h.g.quirk(HOLIDAY, Quirk::RefuseWatch);
+    // The renewal runs at two thirds of the 7-day channel.
+    h.advance(Duration::from_secs(5 * 86_400), Duration::from_secs(3600))
+        .await;
+    assert_eq!(h.counts().watch, 2, "the renewal was asked for");
+    assert_eq!(mine(&h), 0, "the refused channel's row is gone");
+
+    let before = h.counts();
+    h.advance(Duration::from_secs(3600), STEP).await;
+    let after = h.counts();
+    assert!(
+        (11..=13).contains(&(after.delta - before.delta)),
+        "polled every 5 min: {before:?} -> {after:?}"
+    );
+    assert_eq!(after.watch, 2, "no new watch right away");
+    assert!(h.holiday().status.error.is_none());
 }

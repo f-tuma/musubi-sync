@@ -1,0 +1,36 @@
+{
+ "kind": "calendar#event",
+ "etag": "\"3588992514833150\"",
+ "id": "5q0hcqack1944snjojjfu4tg58",
+ "status": "confirmed",
+ "htmlLink": "https://www.google.com/calendar/event?eid=REDACTED",
+ "created": "2026-11-12T15:10:57.000Z",
+ "updated": "2026-11-12T15:10:57.416Z",
+ "creator": {
+  "email": "owner@example.com",
+  "self": true
+ },
+ "organizer": {
+  "email": "owner@example.com",
+  "self": true
+ },
+ "start": {
+  "date": "2026-11-12"
+ },
+ "end": {
+  "date": "2026-11-13"
+ },
+ "transparency": "transparent",
+ "iCalUID": "5q0hcqack1944snjojjfu4tg58@google.com",
+ "sequence": 0,
+ "reminders": {
+  "useDefault": false,
+  "overrides": [
+   {
+    "method": "popup",
+    "minutes": 420
+   }
+  ]
+ },
+ "eventType": "default"
+}
