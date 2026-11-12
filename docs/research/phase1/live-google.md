@@ -84,9 +84,9 @@ Pojistka z K8a držela: po třech úplných čteních odklad 300 s, zdvojovaný 
 
 | Zjištění | Dřív | Teď |
 | --- | --- | --- |
-| čerstvý `syncToken` hned `410` (svátky) | kolekce v odkladu s chybou napořád | po dvou takových tokenech za sebou engine čte kolekci jen úplně, v běžném intervalu dotazování, bez chyby (stav v paměti do restartu) |
+| čerstvý `syncToken` hned `410` (svátky) | kolekce v odkladu s chybou napořád | po dvou takových tokenech za sebou engine čte kolekci jen úplně, v běžném intervalu dotazování, bez chyby; po 24 h zkusí deltu znovu a když projde, vrátí se k deltám (stav v paměti, restart ho smaže) |
 | `400` na `pageToken` | každá `400` u stránky = `CursorExpired` | jen `410` je `CursorExpired`; `400 invalid` u `pageToken` začne stránkování téhož průchodu znovu, nejvýš dvakrát, pak přechodná chyba; jiná `400` je chyba |
-| organizátor bez záznamu účastníka | `needs-action` | `accepted` (`MAPPING_VERSION` 2, uložené události se přepočítají) |
+| organizátor bez záznamu účastníka | `needs-action` | `accepted` (`MAPPING_VERSION` 2). Uložené události se přemapují, až je Google pošle znovu (změna nebo příští úplné čtení); do té doby nezměněné zůstávají `needs-action` |
 | chybějící `visibility` | `public` | beze změny: `public` je výchozí hodnota JSCalendar |
 | obnova kanálu, kterou Google odmítne | řádek kanálu zůstal a vypadal jako živý | řádek se smaže a kolekce se jen dotazuje, stejně jako po prvním odmítnutí; watch se znovu zkusí po 24 h |
 | úryvky těl odpovědí v logu | řídicí znaky prošly a šlo jimi podvrhnout řádek logu | řídicí znaky se escapují; log o prošlém kurzoru nenese id kalendáře (u primárního je to e-mail) |

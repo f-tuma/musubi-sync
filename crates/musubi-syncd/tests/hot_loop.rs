@@ -272,3 +272,29 @@ async fn refused_renewal_drops_the_channel_and_polls() {
     assert_eq!(after.watch, 2, "no new watch right away");
     assert!(h.holiday().status.error.is_none());
 }
+
+/// (e) A collection taken for full-read-only (two token invalidations in a
+/// row) tries a delta again after a day; once it works, deltas resume.
+#[tokio::test(flavor = "multi_thread")]
+async fn full_read_only_probes_a_delta_after_a_day() {
+    let h = H::new(&[Quirk::ExpireEverySyncToken]).await;
+    h.run(SPAN).await;
+    let c = h.counts();
+    assert_eq!(c.delta, 2, "full-read-only after two expired tokens: {c:?}");
+
+    h.g.clear_quirks(HOLIDAY);
+    let hour = Duration::from_secs(3600);
+    h.advance(22 * hour, hour).await;
+    let still = h.counts();
+    assert_eq!(still.delta, 2, "no delta before the day is up: {still:?}");
+    assert!(still.full > c.full, "{still:?}");
+
+    h.advance(3 * hour, hour).await;
+    let probed = h.counts();
+    assert!(probed.delta > 2, "the delta is tried again: {probed:?}");
+    h.advance(3 * hour, hour).await;
+    let after = h.counts();
+    assert_eq!(after.full, probed.full, "deltas only again: {after:?}");
+    assert!(after.delta > probed.delta, "{after:?}");
+    assert!(h.holiday().status.error.is_none());
+}

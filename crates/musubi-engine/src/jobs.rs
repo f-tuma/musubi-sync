@@ -50,6 +50,8 @@ const BACKOFF_CAP: Duration = Duration::from_secs(3600);
 /// A collection whose push channel the provider refused is polled only and
 /// asked for a channel again after this long (Google channels live ~7 days).
 const PUSH_RETRY: Duration = Duration::from_secs(86_400);
+/// How long a collection stays full-read-only before a delta is tried again.
+const DELTA_RETRY: Duration = Duration::from_secs(86_400);
 
 /// `base` doubled `n` times, at most [`BACKOFF_CAP`].
 fn backoff(base: Duration, n: u32) -> Duration {
@@ -475,8 +477,11 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             }
             return self.ensure_full(tenant, rec.id, id).await;
         }
-        // A full-read-only collection skips the delta its provider would refuse.
-        let res = match self.with_col(id, |rt| rt.full_only) {
+        // A full-read-only collection skips the delta its provider would
+        // refuse, until `DELTA_RETRY` has passed and a delta is tried again.
+        let now = self.now();
+        let full_only = |rt: &CollectionRt| rt.full_only_until.is_some_and(|t| t > now);
+        let res = match self.with_col(id, |rt| full_only(rt)) {
             true => Err(EngineError::Sync(SyncError::CursorExpired)),
             false => {
                 self.read_pass(tenant, cx, &col, col.cursor.clone(), Start::Full, None)
@@ -490,14 +495,16 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 // with 410), or a cursor that says no delta is possible: the
                 // provider gives no usable delta here, so every sync is a full
                 // read. One expiry alone is an ordinary expired token.
-                let (was, now) = self.with_col(id, |rt| {
-                    let was = rt.full_only;
-                    rt.full_only |= rt.full_reads > 1;
-                    (was, rt.full_only)
+                let (was, is) = self.with_col(id, |rt| {
+                    let was = full_only(rt);
+                    if !was && rt.full_reads > 1 {
+                        rt.full_only_until = Some(after(now, DELTA_RETRY));
+                    }
+                    (was, full_only(rt))
                 });
-                match (was, now) {
+                match (was, is) {
                     (false, true) => {
-                        tracing::info!(collection = %id, "no usable delta cursor after a full read; full reads only, at the poll interval")
+                        tracing::info!(collection = %id, retry_in = ?DELTA_RETRY, "no usable delta cursor after a full read; full reads only, at the poll interval")
                     }
                     (false, false) => {
                         tracing::info!(collection = %id, "delta cursor expired; full read")
@@ -691,7 +698,11 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let c = &self.inner.config;
         let (full_reads, full_only) = self.with_col(col.id, |rt| {
             rt.full_reads = if full { rt.full_reads + 1 } else { 0 };
-            (rt.full_reads, rt.full_only)
+            if !full {
+                // A delta worked: the cursor is usable again.
+                rt.full_only_until = None;
+            }
+            (rt.full_reads, rt.full_only_until.is_some_and(|t| t > now))
         });
         // A third full read without a delta between, on a collection not
         // known to be full-read-only: a guard against a cursor that keeps

@@ -485,6 +485,15 @@ impl FakeGoogle {
         }
     }
 
+    /// Makes `calendar` behave normally again.
+    pub fn clear_quirks(&self, calendar: &str) {
+        let mut s = self.inner.lock();
+        let id = s.resolve(calendar);
+        if let Some(c) = s.calendars.get_mut(&id) {
+            c.quirks.clear();
+        }
+    }
+
     /// Changes the per-response delay.
     pub fn set_latency(&self, latency: Duration) {
         self.inner.lock().latency = latency;
