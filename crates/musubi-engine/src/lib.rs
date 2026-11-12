@@ -166,10 +166,13 @@ struct AccountRt {
 }
 
 /// In-memory per-collection state: full reads ended since the last delta
-/// that worked, and until when a refused push channel is not asked for again.
+/// that worked, until when the provider is taken to reject the cursor a full
+/// read ends with (each sync is then a full read), and until when a refused
+/// push channel is not asked for again.
 #[derive(Default)]
 struct CollectionRt {
     full_reads: u32,
+    full_only_until: Option<Timestamp>,
     push_refused_until: Option<Timestamp>,
 }
 

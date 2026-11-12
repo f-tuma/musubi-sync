@@ -1,0 +1,31 @@
+{
+ "kind": "calendar#event",
+ "etag": "\"3588992579049054\"",
+ "id": "08svmi1qvstr39tceqfun4trqu",
+ "status": "confirmed",
+ "htmlLink": "https://www.google.com/calendar/event?eid=REDACTED",
+ "created": "2026-11-12T15:11:29.000Z",
+ "updated": "2026-11-12T15:11:29.524Z",
+ "creator": {
+  "email": "owner@example.com",
+  "self": true
+ },
+ "organizer": {
+  "email": "owner@example.com",
+  "self": true
+ },
+ "start": {
+  "dateTime": "2026-11-12T22:30:00+01:00",
+  "timeZone": "America/New_York"
+ },
+ "end": {
+  "dateTime": "2026-11-12T23:30:00+01:00",
+  "timeZone": "America/New_York"
+ },
+ "iCalUID": "08svmi1qvstr39tceqfun4trqu@google.com",
+ "sequence": 0,
+ "reminders": {
+  "useDefault": true
+ },
+ "eventType": "default"
+}

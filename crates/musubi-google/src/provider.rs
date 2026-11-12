@@ -37,6 +37,8 @@ use serde_json::value::RawValue;
 
 /// Largest `events.list` page Google serves.
 pub(crate) const MAX_PAGE: u32 = 2500;
+/// Restarts of one pass's paging after rejected page tokens before it fails.
+const PAGE_RESTARTS: u32 = 2;
 
 /// Endpoints and OAuth client of the adapter. [`GoogleConfig::new`] gives
 /// Google's production endpoints; tests point them at the fake server.
@@ -139,13 +141,15 @@ impl GoogleProvider {
         body(resp).await
     }
 
+    /// One `events.list` request. `Ok(None)`: Google rejected the page token
+    /// (`400 invalid`), the caller restarts the pass's paging.
     async fn events_page(
         &self,
         cx: &AccountCx,
         col: &CollectionRef,
         q: &Query,
         page_size: u32,
-    ) -> Result<(ChangePage, Option<Query>), SyncError> {
+    ) -> Result<Option<(ChangePage, Option<Query>)>, SyncError> {
         let mut url = self.url(&["calendars", &col.0, "events"]);
         {
             let mut p = url.query_pairs_mut();
@@ -164,20 +168,33 @@ impl GoogleProvider {
         }
         let resp = self.send(cx, self.http.get(url)).await?;
         let status = resp.status();
-        // 410: the sync token expired. 400 on a continuation of a stored cursor:
-        // Google rejected the page token (lifetime undocumented; K8 confirms the
-        // status). Both restart with a full read instead of stalling the collection.
-        let stale_page =
-            status == StatusCode::BAD_REQUEST && q.page.is_some() && q.pass != Pass::Window;
-        if status == StatusCode::GONE || stale_page {
+        // Live (K8): an expired or bogus sync token answers 410, a bogus page
+        // token `400 invalid` ("Invalid page token value"). The calendar id is
+        // not logged: a primary calendar's id is the user's address.
+        if status == StatusCode::GONE {
             let body = resp.bytes().await.unwrap_or_default();
-            tracing::warn!(calendar = %col.0, status = status.as_u16(), body = %excerpt(&body), pass = ?q.pass, "events.list: cursor expired");
+            tracing::warn!(status = 410, body = %excerpt(&body), pass = ?q.pass, "events.list: cursor expired");
             return Err(SyncError::CursorExpired);
+        }
+        if status == StatusCode::BAD_REQUEST && q.page.is_some() {
+            let body = resp.bytes().await.unwrap_or_default();
+            if has_reason(&body, &["invalid"]) {
+                tracing::warn!(body = %excerpt(&body), pass = ?q.pass, "events.list: page token rejected; restarting the pass");
+                return Ok(None);
+            }
+            tracing::warn!(status = 400, body = %excerpt(&body), "permanent provider error");
+            return Err(SyncError::Permanent(
+                HttpStatus {
+                    status,
+                    body: excerpt(&body),
+                }
+                .into(),
+            ));
         }
         if !status.is_success() {
             return Err(error_for(resp, cx.clock.now()).await);
         }
-        build_page(q, &body(resp).await?)
+        build_page(q, &body(resp).await?).map(Some)
     }
 }
 
@@ -231,12 +248,35 @@ pub(crate) async fn error_for(resp: Response, now: Timestamp) -> SyncError {
 
 /// The first 300 bytes of an error body, for logs and error messages. Google's
 /// error bodies hold the error object only, no tokens or event data.
+/// Control characters are escaped: a newline in a body must not forge a log line.
 fn excerpt(body: &[u8]) -> String {
-    String::from_utf8_lossy(&body[..body.len().min(300)]).into_owned()
+    let text = String::from_utf8_lossy(&body[..body.len().min(300)]);
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// `403` with a quota reason is throttling, not a permission error.
 fn is_rate_limit(body: &[u8]) -> bool {
+    has_reason(
+        body,
+        &[
+            "rateLimitExceeded",
+            "userRateLimitExceeded",
+            "quotaExceeded",
+            "dailyLimitExceeded",
+        ],
+    )
+}
+
+/// Whether a Google error body carries one of `reasons` in `error.errors`.
+fn has_reason(body: &[u8], reasons: &[&str]) -> bool {
     #[derive(Deserialize)]
     struct Body {
         error: Inner,
@@ -252,15 +292,10 @@ fn is_rate_limit(body: &[u8]) -> bool {
         reason: String,
     }
     serde_json::from_slice::<Body>(body).is_ok_and(|b| {
-        b.error.errors.iter().any(|r| {
-            matches!(
-                r.reason.as_str(),
-                "rateLimitExceeded"
-                    | "userRateLimitExceeded"
-                    | "quotaExceeded"
-                    | "dailyLimitExceeded"
-            )
-        })
+        b.error
+            .errors
+            .iter()
+            .any(|r| reasons.contains(&r.reason.as_str()))
     })
 }
 
@@ -610,17 +645,34 @@ impl Provider for GoogleProvider {
         hint: FetchHint,
     ) -> BoxStream<'a, Result<ChangePage, SyncError>> {
         let page_size = hint.page_size.map_or(MAX_PAGE, |n| n.get().min(MAX_PAGE));
-        let first = Query::start(cursor, hint);
+        let first = Query::start(cursor, hint).map(|q| (q, 0));
         Box::pin(futures_util::stream::unfold(
             Some(first),
             move |state| async move {
-                let q = match state? {
-                    Ok(q) => q,
+                let (mut q, mut restarts) = match state? {
+                    Ok(s) => s,
                     Err(e) => return Some((Err(e), None)),
                 };
-                match self.events_page(cx, col, &q, page_size).await {
-                    Ok((page, next)) => Some((Ok(page), next.map(Ok))),
-                    Err(e) => Some((Err(e), None)),
+                loop {
+                    match self.events_page(cx, col, &q, page_size).await {
+                        Ok(Some((page, next))) => {
+                            return Some((Ok(page), next.map(|n| Ok((n, restarts)))));
+                        }
+                        // The pass starts over (pages already read are read
+                        // again; at-least-once), a few times per call.
+                        Ok(None) if restarts < PAGE_RESTARTS => {
+                            restarts += 1;
+                            q.page = None;
+                        }
+                        Ok(None) => {
+                            let msg = format!(
+                                "events.list: page token rejected {} times in one pass",
+                                restarts + 1
+                            );
+                            return Some((Err(SyncError::Transient(msg.into())), None));
+                        }
+                        Err(e) => return Some((Err(e), None)),
+                    }
                 }
             },
         ))
@@ -685,7 +737,7 @@ impl Provider for GoogleProvider {
                 _ => Err(SyncError::Permanent(
                     HttpStatus {
                         status,
-                        body: String::from_utf8_lossy(&body).chars().take(300).collect(),
+                        body: excerpt(&body),
                     }
                     .into(),
                 )),
@@ -718,6 +770,14 @@ mod tests {
             sync: None,
             page: None,
         }
+    }
+
+    #[test]
+    fn error_excerpt_cannot_forge_a_log_line() {
+        let body = b"{\"error\":1}\n2026-11-12T00:00:00Z  INFO forged\r\x1b[31m";
+        let e = excerpt(body);
+        assert!(!e.chars().any(char::is_control), "{e}");
+        assert!(e.contains(r"\n2026") && e.contains(r"\r"), "{e}");
     }
 
     #[test]

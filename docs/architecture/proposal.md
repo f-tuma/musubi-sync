@@ -243,7 +243,7 @@ U korelace platí dál: **propojení, ne sloučení.** Sloučení by při zápis
 - Limity: Calendar API 600 požadavků za minutu na uživatele a 10 000 za minutu na projekt, klouzavé okno. Tasks API 50 000 dotazů za den jako „zdvořilostní limit". Calendar API má pro projekty založené od 1. 5. 2026 navíc práh 1 000 000 požadavků za den na projekt, nad kterým se bude platit.
 - Push: oznámení nemá tělo, jen hlavičky; kanál vyprší a neobnovuje se sám; Google sám píše, že oznámení „nejsou stoprocentně spolehlivá". Po každém oznámení následuje delta dotaz a vedle toho běží pojistné dotazování.
 - Idempotentní vytvoření: klient může zadat vlastní ID události. Podmíněný zápis: ETag a `If-Match`.
-- Watch kanál: výchozí životnost 604 800 s (7 dní), maximum dokumentace neuvádí. Obnovuje se podle vrácené `expiration`, výchozí plán po 6 dnech. Skutečnou životnost ověří živý test T8 ve fázi 1.
+- Watch kanál: výchozí životnost 604 800 s (7 dní), maximum dokumentace neuvádí. Obnovuje se podle vrácené `expiration`, výchozí plán po 6 dnech. Živý test T8 (fáze 1, K8): bez `expiration` Google dal přesně 7 dní, s `expiration` teď + 30 dní celých 30 dní; maximum dál není známé.
 - Stránka `events.list` má nejvýš 2 500 položek (výchozí 250). Stránka může být prázdná a přesto nést `nextPageToken`.
 - Dávka batch má nejvýš 1 000 volání a do kvóty se počítá jako N požadavků. Neověřená aplikace s citlivými scope má strop 100 nových uživatelů celkem.
 
@@ -493,7 +493,7 @@ Podoba datové roviny dál: režim WAL, jeden zapisovatel na tenanta, LRU cache 
 
 **Otevřené:** ext4/XFS a serverový disk s PLP fáze 0 neměřila (běželo se na btrfs nodatacow a spotřebitelském NVMe), stejně jako průběžný odvoz WAL a data větší než RAM. Group commit nebo sdílený accept log jsou zatím jen návrh. Změří se před fází 3 jako její vstupní podmínka (storage.md, doporučení 3).
 
-**Velikost:** naměřeno ~4,4 KB na událost bez komprese, tedy ~2,2 TB pro 100 000 uživatelů × 5 000 událostí. Se zstd po řádcích v surové vrstvě 2,3 KB, se slovníkem na tenanta 1,9 KB (syntetická data). Zda komprimovat, se rozhodne ve fázi 1 podle reálných payloadů. Tabulky s těly kolem 1 KB nepoužívají `WITHOUT ROWID`. Kalendářová data nejsou objemový problém. Pošta bude.
+**Velikost:** naměřeno ~4,4 KB na událost bez komprese, tedy ~2,2 TB pro 100 000 uživatelů × 5 000 událostí. Se zstd po řádcích v surové vrstvě 2,3 KB, se slovníkem na tenanta 1,9 KB (syntetická data). Fáze 1 rozhodla nekomprimovat: živá těla Googlu mají průměrně 1 000 B (K8). Tabulky s těly kolem 1 KB nepoužívají `WITHOUT ROWID`. Kalendářová data nejsou objemový problém. Pošta bude.
 
 ### 4.4 Trvanlivost a zálohy
 
@@ -529,16 +529,16 @@ Podle rozhodnutí uživatele není cílem lokální replika v klientovi, ale to,
 | Přijetí zápisu (trvale v souboru outboxu) | p99 pod 10 ms; **p99 pod 20 ms během importu téhož tenanta**. Na btrfs bez PLP cíl 10 ms **splněn není** při 16 tenantech naráz; vstupní podmínkou fáze 3 je změřit dávkování nebo sdílený accept log | jeden commit s fsync v souboru outboxu; měřeno 1,7 ms s jedním zapisovatelem, 2,9–12,2 ms při 16 tenantech naráz, 7,7–16,1 ms během importu |
 | Viditelnost přijatého zápisu v API a v proudu změn | po promítnutí do hlavního souboru, typicky hned; během importu téhož tenanta až po rozepsané stránce **(neměřeno)** | zapisovatel tenanta |
 | Potvrzení zápisu poskytovatelem | medián pod 400 ms, p95 pod 1 s | jeden požadavek na teplém spojení; odezva poskytovatele |
-| Změna u poskytovatele → proud změn, s pushem | pod 500 ms od přijetí oznámení | jeden delta požadavek a commit |
+| Změna u poskytovatele → proud změn, s pushem | pod 500 ms od přijetí oznámení | jeden delta požadavek a commit; Google živě (K8): 3,0–7,5 s od uložení v UI po SSE, včetně čekání na oznámení, které K8 zvlášť neměřil |
 | Změna na jednom umístění → zapsaná na ostatních umístěních | medián pod 1 s od přijetí oznámení, má-li zdrojové umístění push | delta, sloučení do entity, jeden podmíněný zápis na každé další umístění, souběžně |
 | Totéž bez pushe (iCloud, obecný CalDAV, Google Tasks, People API) | interval dotazování: 15–30 s při aktivním zájmu aplikace, minuty jinak | protokol poskytovatele |
 | Inkrementální sync bez změn | jeden požadavek, pod 300 ms | odezva poskytovatele |
-| První data po připojení účtu | pod 1 s pro okno kolem dneška | jeden až dva požadavky |
+| První data po připojení účtu | pod 1 s pro okno kolem dneška | jeden až dva požadavky; Google živě (K8): asi 1,4 s od OAuth callbacku po celou první kolekci, okno samo neměřeno |
 | Úplný úvodní sync | měří se propustnost: tisíce položek za sekundu na účet | velikost stránky a kvóty poskytovatele |
 
 Čtyři poctivá omezení:
 
-- **Čísla závislá na poskytovateli jsou odhady.** Fáze 0 odezvu poskytovatelů neměřila, protože neměla živé účty. Změří ji živé kontroly na testovacích účtech, pro Google na konci fáze 1. Cíle se podle nich upraví.
+- **Čísla závislá na poskytovateli jsou odhady.** Fáze 0 odezvu poskytovatelů neměřila, protože neměla živé účty. Pro Google je změřila živá kontrola K8 na konci fáze 1 ([zpráva](../research/phase1/live-google.md)), ale jen po jednom vzorku na krok: cíle zatím zůstávají, percentily chybí. Ostatní poskytovatele změří jejich živé kontroly.
 - **Cíl přijetí během importu téhož tenanta je uvolněný na p99 pod 20 ms.** Na sdíleném disku bez PLP nesplní 10 ms ani SQLite, ani PostgreSQL (~11–37 ms). S dlouhým čtenářem stoupne chvost SQLite na 54–83 ms, proto jsou čtecí transakce omezené (kapitola 4.3). Na ext4/XFS a disku s PLP se neměřilo **(neověřeno)**.
 - **Cíl 10 ms pro přijetí při souběhu tenantů není na btrfs bez PLP splněný.** Při 16 tenantech zapisujících naráz vyšlo p99 2,9–12,2 ms mezi běhy. Dávkování nebo sdílený accept log s group commitem se změří před fází 3 jako její vstupní podmínka; bez výsledku fáze 3 nezačne.
 - **Dvě věci pod 1 s dostat nejde.** Zjištění cizí změny u poskytovatele bez pushe je omezené intervalem dotazování. A doba, za kterou poskytovatel oznámení pošle, je mimo naši kontrolu: Graph pro události latenci neuvádí vůbec.
@@ -1030,7 +1030,7 @@ Beta `events/delta` se sleduje, ale návrh na ní nestojí.
 - **Historie:** poslední stav, žurnál změn a záznamy o konfliktech; žádná auditní historie verzí.
 - **Úkoly z iCloudu** v první verzi nejsou.
 - **Série v Graphu:** rozhodne živý test T1 na začátku fáze 7; cíl je jedna položka na sérii ve v1.0 a dokumentace ho podporuje.
-- **Komprese surové vrstvy** (zstd po řádcích): rozhodne se ve fázi 1 podle reálných payloadů; bez ní ~4,4 KB na událost, s ní ~2,3 KB.
+- **Komprese surové vrstvy** (zstd po řádcích): ve fázi 1 rozhodnuto nekomprimovat. Živá těla Googlu mají průměrně 1 000 B (K8); syntetický odhad byl ~4,4 KB na celou událost bez komprese, ~2,3 KB s ní.
 
 ---
 

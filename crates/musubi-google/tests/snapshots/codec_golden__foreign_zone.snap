@@ -18,7 +18,7 @@ expression: decode(stringify! (foreign_zone))
       "roles": {
         "owner": true
       },
-      "participationStatus": "needs-action",
+      "participationStatus": "accepted",
       "expectReply": false
     }
   },

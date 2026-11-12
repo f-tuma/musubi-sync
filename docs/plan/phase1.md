@@ -317,7 +317,7 @@ K0 ─┬─ K1 úložiště ──┬─ K5 engine ─────────�
 - **Crates:** `musubi-testkit`.
 - **Umí:** `calendarList`, `events.list` s `pageToken`, `syncToken`, `timeMin`/`timeMax`, `showDeleted`, `maxResults` do 2500; prázdnou stránku s `nextPageToken`; `410` na prošlý token; `events.watch` a `channels.stop` s doručením oznámení na callback včetně hlaviček kanálu; token endpoint OAuth s obnovou a `invalid_grant`; `429` s `Retry-After`; nastavitelnou odezvu a velikost stránky; skriptované změny („za 2 s změň událost X a pošli oznámení").
 - **Přijetí:**
-  - vlastní testy serveru: tvar odpovědí odpovídá polím z dokumentace a fixtures se zaznamenanými odpověďmi z K8 (doplní se po živé kontrole);
+  - vlastní testy serveru: tvar odpovědí odpovídá polím z dokumentace a fixtures se zaznamenanými odpověďmi z K8 (doplněno v K8b: `crates/musubi-google/tests/fixtures/live/`, fake vrací `dateTime` v offsetu kalendáře jako Google);
   - stav serveru je deterministický ze seedu, takže crash test umí porovnat výsledek s pravdou;
   - každá odchylka od dokumentace je v souboru `FIDELITY.md` testkitu.
 - **Závisí na:** K0.
@@ -492,11 +492,11 @@ Kroky:
 5. **T8:** `events.watch` s `expiration` nastavenou na teď + 30 dní a druhý požadavek bez `expiration`; zapsat vrácené `expiration`.
 6. Nechat běžet přes noc; zkontrolovat, že se watch kanál obnovil podle `expiration` a nic se neztratilo.
 7. Zaznamenat odpovědi (bez osobních dat) pro fixtures K3 a velikost surových těl pro rozhodnutí o kompresi.
-8. Ověřit předpoklady adaptéru K4: jaký stav vrací Google na prošlý nebo odmítnutý `pageToken` uloženého kurzoru (K4 čte 400 jako `CursorExpired`) a zda `originalStartTime` přichází i bez `timeZone` (K4 pak čte čas v Etc/UTC; korelace porovnává okamžiky).
+8. Ověřit předpoklady adaptéru K4: jaký stav vrací Google na prošlý nebo odmítnutý `pageToken` uloženého kurzoru (K4 četl 400 jako `CursorExpired`) a zda `originalStartTime` přichází i bez `timeZone` (K4 pak čte čas v Etc/UTC; korelace porovnává okamžiky). **Výsledek:** vymyšlený `pageToken` dá `400 invalid`, vymyšlený `syncToken` `410`; K8b proto čte jako `CursorExpired` jen `410` a `400 invalid` u `pageToken` začne stránkování znovu (nejvýš dvakrát). `originalStartTime` přišel vždy s `timeZone`.
 
-9. **K8a:** odebírat veřejný kalendář svátků (např. `cs.czech#holiday@group.v.calendar.google.com`). Ze záznamu serveru zapsat status a tělo odpovědi na `events.watch`, na deltu se `syncToken` a zda poslední stránka úplného čtení nese `nextSyncToken`. Adaptér je teď loguje: „events.list: cursor expired“, „permanent provider error“ a „last events.list page without nextSyncToken“. Potvrdit nebo opravit odchylky „Quirks“ ve `crates/musubi-testkit/FIDELITY.md` **(neověřeno)**. Ověřit, že kolekce nepadá do smyčky: má `error` s odkladem a watch se po odmítnutí znovu zkouší nejdřív za den.
+9. **K8a:** odebírat veřejný kalendář svátků (např. `cs.czech#holiday@group.v.calendar.google.com`). Ze záznamu serveru zapsat status a tělo odpovědi na `events.watch`, na deltu se `syncToken` a zda poslední stránka úplného čtení nese `nextSyncToken`. Adaptér je teď loguje: „events.list: cursor expired“, „permanent provider error“ a „last events.list page without nextSyncToken“. Potvrdit nebo opravit odchylky „Quirks“ ve `crates/musubi-testkit/FIDELITY.md` **(neověřeno)**. Ověřit, že kolekce nepadá do smyčky: má `error` s odkladem a watch se po odmítnutí znovu zkouší nejdřív za den. **Výsledek:** úplné čtení nese `nextSyncToken`, ten hned vrací `410`, watch `400 pushNotSupportedForRequestedResource`; „Quirks" ve FIDELITY.md jsou ověřené. Pojistka držela, ale chyba zůstávala napořád; K8b takovou kolekci čte jen úplně v intervalu dotazování, bez chyby.
 
-Výsledek se zapíše do `docs/research/phase1/live-google.md` a podle něj se upraví čísla v kapitole 5.1 návrhu.
+Výsledek je v [`docs/research/phase1/live-google.md`](../research/phase1/live-google.md) a podle něj se upravila kapitola 5.1 návrhu. Shrnutí: B1 živě asi 1,4 s od OAuth callbacku po první kolekci (bez přesného t0); od uložení v UI po SSE 3,0–7,5 s; T8 dal bez `expiration` přesně 7 dní a s teď + 30 dní 30 dní; série, výskyty, celodenní a cizí zóna odpovídají UI. Kroky 1–5, 7–9 jsou hotové, krok 6 (obnova kanálu 17. 11.) doplní koordinátor.
 
 ## 7. CI
 
@@ -534,7 +534,7 @@ Přehled licencí pro distribuci (`cargo-about`) přijde s prvním vydáním bin
 - Vlastní VTIMEZONE a mapa Windows zón (fáze 2 a 7).
 - Ověřování tokenů z vnějšího IdP (OIDC, fáze 8).
 - Backend PostgreSQL, průběžný odvoz WAL, úložiště objektů. Zálohy jsou ve fázi 1 jen snímky.
-- Komprese surové vrstvy: rozhodne se po K8 podle reálných payloadů, implementace až potom.
+- Komprese surové vrstvy. Rozhodnuto po K8: živá těla Googlu mají průměrně 1 000 B (312–1 085 B, 219 těl), surová vrstva zůstává ve fázi 1 nekomprimovaná. Úspora zstd po řádcích na tak malých tělech se na živých datech neměřila; vrátíme se k ní se slovníkem na tenanta, až to ukáže velikost úložiště (pošta).
 - Group commit nebo sdílený accept log: měří se jako vstupní podmínka fáze 3.
 - Odchozí webhooky pro aplikace, export tenanta, generované SDK, obraz kontejneru, `cargo-about`.
 - Exportér metrik (Prometheus, OpenTelemetry). Metriky z podmínky 8 jsou ve fázi 1 v `stats()`, ve správcovském volání a v logu `tracing`.

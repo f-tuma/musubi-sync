@@ -18,7 +18,7 @@ expression: decode(stringify! (all_day))
       "roles": {
         "owner": true
       },
-      "participationStatus": "needs-action",
+      "participationStatus": "accepted",
       "expectReply": false
     }
   },

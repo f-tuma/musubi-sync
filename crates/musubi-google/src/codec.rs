@@ -37,7 +37,7 @@ use serde::Deserialize;
 pub struct GoogleCodec;
 
 impl Codec<Event> for GoogleCodec {
-    const MAPPING_VERSION: u32 = 1;
+    const MAPPING_VERSION: u32 = 2;
 
     fn decode(raw: &Raw) -> Decoded<CalendarEvent> {
         match decode(raw) {
@@ -132,7 +132,8 @@ fn decode(raw: &Raw) -> Res<CalendarEvent> {
         // Without `timeZone` the original start is read in Etc/UTC, never in
         // the exception's own zone (which may differ from the master's): the
         // engine correlates occurrences by instant, and `recurrence_id` with
-        // its zone names that instant exactly. K8 checks what Google sends.
+        // its zone names that instant exactly. Live Google (K8) always sent
+        // `timeZone` here, cancelled occurrences included.
         Some(t) => {
             let (dt, tz) = local_time(t)?;
             (Some(dt), tz)
@@ -415,8 +416,13 @@ fn participants(ev: &GEvent) -> BTreeMap<String, Participant> {
     }
     if let Some(o) = &ev.organizer {
         let key = o.email.clone().unwrap_or_else(|| "organizer".to_owned());
+        // Without an attendee entry the organizer is the event's owner, whom
+        // Google's UI shows as going: Google sends no `responseStatus` here.
         out.entry(key)
-            .or_insert_with(|| person(o))
+            .or_insert_with(|| Participant {
+                participation_status: ParticipationStatus::Accepted,
+                ..person(o)
+            })
             .roles
             .insert(ParticipantRole::Owner, true);
     }

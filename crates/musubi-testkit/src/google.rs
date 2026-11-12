@@ -191,8 +191,8 @@ impl Fault {
 }
 
 /// A way one calendar departs from normal behaviour, for [`FakeGoogle::quirk`].
-/// Each models a suspected cause of a loop seen live on a subscribed holiday
-/// calendar (FIDELITY.md, "Quirks"); none is confirmed against Google yet.
+/// The first three model suspected causes of a loop seen live on a subscribed
+/// holiday calendar; K8 confirmed two (FIDELITY.md, "Quirks").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quirk {
     /// `events.watch` answers `400 pushNotSupportedForRequestedResource`.
@@ -201,6 +201,9 @@ pub enum Quirk {
     ExpireEverySyncToken,
     /// The last page of a read carries no `nextSyncToken`.
     NoSyncToken,
+    /// Every `pageToken` of `events.list` answers `400 invalid`, as Google
+    /// answers a bogus one (K8).
+    RejectPageTokens,
 }
 
 /// A change to the fake's data; also the JSON form of scripted scenarios.
@@ -482,6 +485,15 @@ impl FakeGoogle {
         }
     }
 
+    /// Makes `calendar` behave normally again.
+    pub fn clear_quirks(&self, calendar: &str) {
+        let mut s = self.inner.lock();
+        let id = s.resolve(calendar);
+        if let Some(c) = s.calendars.get_mut(&id) {
+            c.quirks.clear();
+        }
+    }
+
     /// Changes the per-response delay.
     pub fn set_latency(&self, latency: Duration) {
         self.inner.lock().latency = latency;
@@ -730,6 +742,10 @@ impl State {
         let v = self.version;
         let primary = self.primary.clone();
         let cal = self.calendars.get_mut(&cal_id).expect("unknown calendar");
+        let cal_zone = cal.entry["timeZone"]
+            .as_str()
+            .and_then(|z| TimeZone::get(z).ok())
+            .unwrap_or(TimeZone::UTC);
         let id = match event["id"].as_str() {
             Some(id) => id.to_owned(),
             None => b32hex(v.wrapping_mul(0x9E37_79B9_7F4A_7C15)),
@@ -776,6 +792,7 @@ impl State {
                 }),
             );
         }
+        live_times(&mut event, &cal_zone);
         cal.events.insert(
             id.clone(),
             Ev {
@@ -786,6 +803,29 @@ impl State {
         );
         cal.changed = v;
         id
+    }
+}
+
+/// Times as live Google returns them (K8): every `dateTime` with the
+/// calendar zone's offset, whatever its `timeZone` says, and
+/// `originalStartTime` with a `timeZone`.
+fn live_times(event: &mut Value, cal_zone: &TimeZone) {
+    for k in ["start", "end", "originalStartTime"] {
+        let Some(t) = event.get_mut(k) else { continue };
+        if t.get("dateTime").is_none() {
+            continue;
+        }
+        if let Some(at) = when(t) {
+            t["dateTime"] = json!(at.display_with_offset(cal_zone.to_offset(at)).to_string());
+        }
+    }
+    let zone = event["start"]["timeZone"].as_str().map(str::to_owned);
+    if let Some(t) = event.get_mut("originalStartTime")
+        && t.get("dateTime").is_some()
+        && t.get("timeZone").is_none()
+    {
+        let name = zone.unwrap_or_else(|| cal_zone.iana_name().unwrap_or("UTC").to_owned());
+        t["timeZone"] = json!(name);
     }
 }
 
@@ -910,7 +950,8 @@ fn seed(s: &mut State, config: &Config) {
                     );
                 }
                 n => {
-                    // UTC, Prague and New York offsets; every tenth is local time without one.
+                    // UTC, Prague and New York zones; every tenth is local time without an
+                    // offset. `put` stores them in the calendar's offset, as Google does.
                     let zone = ["UTC", "Europe/Prague", "America/New_York"][i as usize % 3];
                     let tz = TimeZone::get(zone).expect("bundled tzdb");
                     let at = |t: Timestamp| {
@@ -1082,6 +1123,16 @@ fn bad_request(message: &str) -> Response {
     error(StatusCode::BAD_REQUEST, "global", "badRequest", message)
 }
 
+/// Live Google's answer to a page token it does not accept (K8).
+fn invalid_page_token() -> Response {
+    error(
+        StatusCode::BAD_REQUEST,
+        "global",
+        "invalid",
+        "Invalid page token value",
+    )
+}
+
 fn not_found() -> Response {
     error(StatusCode::NOT_FOUND, "global", "notFound", "Not Found")
 }
@@ -1212,7 +1263,7 @@ async fn calendar_list(AxState(g): St, uri: Uri, h: HeaderMap, Query(q): Params)
         None => 0,
         Some(t) => match decode::<usize>(t) {
             Some(n) => n,
-            None => return bad_request("Invalid page token"),
+            None => return invalid_page_token(),
         },
     };
     let mut entries: Vec<&Calendar> = s.calendars.values().collect();
@@ -1291,7 +1342,8 @@ fn events_list_inner(g: &Inner, cal: &str, q: Vec<(String, String)>) -> Result<R
         (Some(t), _) => {
             let pos: PageToken = decode(t)
                 .filter(|t: &PageToken| t.cal == cal_id)
-                .ok_or_else(|| bad_request("Invalid page token"))?;
+                .filter(|_| !c.quirks.contains(&Quirk::RejectPageTokens))
+                .ok_or_else(invalid_page_token)?;
             let stale =
                 |since| since < c.min_sync || c.quirks.contains(&Quirk::ExpireEverySyncToken);
             if pos.delta.is_some_and(|(since, _)| stale(since)) {

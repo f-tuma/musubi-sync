@@ -4,8 +4,11 @@
 endpoint closely enough for the Google adapter's transport tests (K4) and the
 crash tests (plan 6.2). This file lists every place where it knowingly
 behaves differently from Google's public documentation. Behaviour the
-documentation does not settle is listed too, marked *undocumented*; K8
-measures those against a real account.
+documentation does not settle is listed too, marked *undocumented*. K8
+(12. 11. 2026) measured some of them against a real account; those are
+marked *verified (K8)*, and its recorded bodies are in
+`crates/musubi-google/tests/fixtures/live/` (report:
+`docs/research/phase1/live-google.md`).
 
 Sources: the API reference for `calendarList.list`, `events.list`,
 `events.get`, `events.watch`, `channels.stop`, the "Synchronize resources
@@ -48,15 +51,18 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   docs. `Config::max_page_size` lowers the events page further, which Google
   is documented to do at will.
 - **Page tokens carry the original query.** Parameters sent next to
-  `pageToken` are ignored. Google expects the same parameters to be repeated
-  (*undocumented* what happens if they differ).
+  `pageToken` are ignored. Google documents that the same parameters must
+  be repeated, but live Google answered `200` to a valid page token sent
+  again, with different parameters too (*verified (K8)*).
 - **Page tokens never expire.** Google's can (*undocumented* lifetime).
 - **Sync tokens expire only when scripted** (`Change::ExpireSyncTokens`).
   Google expires them after an unspecified time, or after ACL and other
   server-side changes.
 - **An unreadable sync token, or one for another calendar, answers `410
-  fullSyncRequired`**, the same as an expired one. Google's answer to a
-  malformed token is *undocumented*. A malformed page token answers `400`.
+  fullSyncRequired`**, the same as an expired one; Google answers a bogus
+  sync token so (*verified (K8)*). A malformed page token answers `400
+  invalid` "Invalid page token value", as Google answers a bogus or
+  corrupted one (*verified (K8)*).
 - **Delta passes are snapshot-bounded.** An event changed after the first
   page of a delta pass is not served in that pass; it shows up in the next
   delta. Google gives no guarantee either way, so a correct client copes
@@ -88,7 +94,14 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 - **All-day dates are read as UTC midnight** for windowing. Google uses the
   calendar's time zone.
 - A `dateTime` without an offset is resolved in the event's `timeZone`
-  (IANA name, bundled tz database), as Google documents. A non-cancelled
+  (IANA name, bundled tz database), as Google documents.
+- **Every `dateTime` is served in the calendar's offset**, whatever offset it
+  was written with: `start`, `end` and `originalStartTime`. The event's zone
+  stays in `timeZone`, and `originalStartTime` always carries one (the
+  start's, else the calendar's). Live Google does this, cancelled
+  occurrences included (*verified (K8)*: an event in `America/New_York` came
+  as `…T16:30:00+01:00` on a Prague calendar). A UTC calendar gets `+00:00`;
+  whether Google writes `Z` there is *undocumented*. A non-cancelled
   event whose start is not a `date`, a `dateTime` with an offset, or a
   local `dateTime` with a known `timeZone` is a test bug: `put_event` panics.
 - A cancelled instance spans one second at its `originalStartTime`.
@@ -100,11 +113,18 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   reproducible from the seed. Etags have Google's shape, a quoted decimal
   number, but no relation to Google's values.
 - Server-filled defaults: `status`, `htmlLink`, `iCalUID`, `sequence`,
-  `creator`, `organizer` (both the account's primary address on every
-  calendar), `reminders`, `eventType`. `sequence` never increments.
+  `creator`, `organizer` (both the account's primary address with
+  `self:true` on every calendar), `reminders`, `eventType`. `sequence` never
+  increments. Live Google sends the same `creator`/`organizer` shape and
+  `eventType:"default"` for an event without attendees (*verified (K8)*).
+- **`visibility` is never filled in**, as live Google leaves it out for the
+  default visibility (*verified (K8)*). The adapter maps a missing
+  `visibility` to privacy `public`, which is JSCalendar's default, so the
+  canonical event omits it too.
 - **Deleted events keep only `kind`, `etag`, `id` and `status:"cancelled"`**,
   plus `recurringEventId` and `originalStartTime` for an instance. The docs
-  guarantee only `id`; real responses often carry more.
+  guarantee only `id`. A cancelled occurrence from live Google had exactly
+  these fields, with no `start` (*verified (K8)*).
 - **Tombstones are kept forever.** Google drops them after an *undocumented*
   time (about 30 days observed), after which a sync token from before the
   deletion must get `410`.
@@ -119,9 +139,9 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 - The events list `description` is always `""` and `updated` is the time of
   the calendar's last change.
 - Seeded timed events alternate between `UTC`, `Europe/Prague` and
-  `America/New_York`: their `dateTime` carries that zone's offset (`Z`,
-  `+01:00`/`+02:00`, `-05:00`/`-04:00`), and every tenth event is a local time
-  without an offset, resolved through `timeZone`.
+  `America/New_York`. They are written with that zone's offset, or (every
+  tenth) as a local time resolved through `timeZone`, and served in the
+  calendar's offset like any other event.
 
 ## Push channels
 
@@ -133,7 +153,10 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
   without connecting. Google delivers to any public HTTPS host.
 - Expiration is `min(requested expiration, now + params.ttl or
   default_watch_ttl, now + max_watch_ttl)`. Both default to 604 800 s
-  (7 days). Google's actual maximum is *undocumented* (T8 measures it).
+  (7 days). Live Google granted exactly 7 days without `expiration`, and the
+  full 30 days when asked for now + 30 days (T8, *verified (K8)*), so the
+  fake's 7-day cap is stricter than Google; its real maximum is still
+  *undocumented*. `channels.stop` answers `204` there.
   Channel expiration uses the wall clock, not the logical clock.
 - `type` accepts both `web_hook` and `webhook`. A repeated channel id
   answers `400`.
@@ -207,19 +230,21 @@ efficiently" and "Push notifications" guides, and the OAuth 2.0
 ## Quirks
 
 A subscribed public holiday calendar (`accessRole: reader`) put the engine
-into a full-read loop against real Google (12. 11. 2026). The response bodies
-were not logged, so the cause is unknown. `FakeGoogle::quirk` makes one
-calendar behave in each of the suspected ways. Each is **unverified; confirm
-in K8**. The adapter now logs the status and the first 300 bytes of the body
-for each case, so K8 can record Google's actual answer.
+into a full-read loop against real Google (12. 11. 2026). `FakeGoogle::quirk`
+makes one calendar behave in each of the suspected ways. K8 recorded what
+`en-gb.czech#holiday@group.v.calendar.google.com` actually does:
 
 - `Quirk::RefuseWatch`: `events.watch` answers `400 push
-  pushNotSupportedForRequestedResource`. Google refuses watches on some
-  calendars it does not own; the status and reason are **unverified; confirm
-  in K8**.
+  pushNotSupportedForRequestedResource`. *Verified (K8)*, status and reason,
+  on the holiday calendar.
 - `Quirk::ExpireEverySyncToken`: every `syncToken` answers `410
-  fullSyncRequired`, even the one the full read just returned. That Google
-  does this for any calendar is **unverified; confirm in K8**.
-- `Quirk::NoSyncToken`: the last page of a read has no `nextSyncToken`.
-  Google documents one on every last page; whether it is missing for some
-  calendars is **unverified; confirm in K8**.
+  fullSyncRequired`, even the one the full read just returned. *Verified
+  (K8)*: the holiday calendar's full read (209 items) ends with a
+  `nextSyncToken`, and that token answers `410` at once.
+- `Quirk::NoSyncToken`: the last page of a read has no `nextSyncToken`. Not
+  seen in K8: the holiday calendar sends one. Kept so the adapter's
+  full-read-only cursor stays tested.
+- `Quirk::RejectPageTokens`: every `pageToken` of `events.list` answers
+  `400 invalid`, as Google answers a bogus one (*verified (K8)*). Google was
+  not seen rejecting a valid token; the quirk tests the adapter's bounded
+  restart.
