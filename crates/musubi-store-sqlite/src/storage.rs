@@ -549,9 +549,9 @@ impl Shared {
                 drain.let_reads_in();
                 // Readers outside the gate (a backup) get the same bounded wait.
                 w.conn.busy_timeout(CKPT_WAIT)?;
-                // Non-blocking: the harness's kill lands around the checkpoint.
+                // The kill lands with the drain held and the WAL not yet reset.
                 #[cfg(feature = "crash-points")]
-                crate::crash::point("truncate", false);
+                crate::crash::point("truncate", true);
                 let r = w
                     .conn
                     .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0));
