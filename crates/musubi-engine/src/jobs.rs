@@ -22,7 +22,7 @@ use musubi_model::{
     Storage, SyncError, TenantId, TenantStore, TimeWindow,
 };
 
-use crate::{AccountRt, Engine, EngineError, after, blocking, ingest, sync_dedup};
+use crate::{AccountRt, CollectionRt, Engine, EngineError, after, blocking, ingest, sync_dedup};
 
 /// What becomes of a job after it ran.
 pub(crate) enum Outcome {
@@ -45,6 +45,16 @@ const REFRESH_EARLY: Duration = Duration::from_secs(60);
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
 /// Wait for a job whose collection another job is working on.
 const BUSY_WAIT: Duration = Duration::from_secs(1);
+/// Longest backoff of a failing job or of repeated full reads.
+const BACKOFF_CAP: Duration = Duration::from_secs(3600);
+/// A collection whose push channel the provider refused is polled only and
+/// asked for a channel again after this long (Google channels live ~7 days).
+const PUSH_RETRY: Duration = Duration::from_secs(86_400);
+
+/// `base` doubled `n` times, at most [`BACKOFF_CAP`].
+fn backoff(base: Duration, n: u32) -> Duration {
+    base.saturating_mul(1 << n.min(12)).min(BACKOFF_CAP)
+}
 
 impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     pub(crate) async fn run_job(&self, job: &Job) -> Outcome {
@@ -195,6 +205,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 }
             }
             EngineError::Sync(SyncError::Permanent(err)) => {
+                tracing::warn!(job = job.id.0, collection = ?col, error = %err, "permanent provider error");
                 self.record_error(rec.tenant, col, err.to_string(), true)
                     .await;
                 Outcome::Done
@@ -220,9 +231,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 
     fn retry(&self, job: &Job, e: impl std::fmt::Display) -> Outcome {
-        let wait = Duration::from_secs(10)
-            .saturating_mul(1 << job.attempts.min(12))
-            .min(Duration::from_secs(3600));
+        let wait = backoff(Duration::from_secs(10), job.attempts);
         tracing::warn!(job = job.id.0, error = %e, ?wait, "job failed; retrying");
         Outcome::Retry {
             due: after(self.now(), wait),
@@ -288,6 +297,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
 
     fn rt(&self, account: AccountId) -> AccountRt {
         self.with_rt(account, |rt| rt.clone())
+    }
+
+    fn with_col<R>(&self, id: CollectionId, f: impl FnOnce(&mut CollectionRt) -> R) -> R {
+        let mut map = self
+            .inner
+            .collections
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        f(map.entry(id).or_default())
     }
 
     fn with_rt<R>(&self, account: AccountId, f: impl FnOnce(&mut AccountRt) -> R) -> R {
@@ -645,18 +663,39 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         full: bool,
     ) -> Result<(), EngineError> {
         let now = self.now();
+        let c = &self.inner.config;
+        let full_reads = self.with_col(col.id, |rt| {
+            rt.full_reads = if full { rt.full_reads + 1 } else { 0 };
+            rt.full_reads
+        });
+        // A third full read without a delta between: the provider expires (or
+        // never gives) the cursor a full read ends with. One expiry right after
+        // a full read happens (a token aging out meanwhile); a repeat does not.
+        // Without this the next delta fails at once and the collection spins.
+        let backed_off = (full_reads > 2).then(|| backoff(c.poll_every, full_reads - 3));
+        let error = backed_off.map(|wait| {
+            tracing::warn!(collection = %col.id, full_reads, ?wait, "no usable delta cursor after a full read; backing off");
+            CollectionError {
+                message: format!(
+                    "no usable delta cursor after {full_reads} full reads in a row; next read in {} s",
+                    wait.as_secs()
+                ),
+                at: now,
+                permanent: false,
+            }
+        });
         self.set_status(rec.tenant, col.id, move |s| {
             if full {
                 s.coverage = Coverage::Full;
                 s.full_read_at = Some(now);
             }
             s.synced_at = Some(now);
-            s.error = None;
+            s.error = error;
         })
         .await?;
         let push = self.ensure_channel(rec, cx, col).await?;
-        let c = &self.inner.config;
         let every = match push {
+            _ if let Some(wait) = backed_off => wait,
             // A full read ends at its own snapshot, and a sync job arriving
             // during it only deferred to it; a new channel missed what changed
             // before it existed. One delta now picks both up.
@@ -699,6 +738,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         if channels.iter().any(|c| c.collection == id) {
             return Ok(Push::Existing);
         }
+        let now = self.now();
+        if self.with_col(id, |rt| rt.push_refused_until.is_some_and(|t| t > now)) {
+            return Ok(Push::None);
+        }
         match push.subscribe(cx, &col.remote.remote, callback).await {
             Ok(sub) => {
                 let ch = ChannelRecord {
@@ -711,6 +754,13 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     true => Push::Opened,
                     false => Push::None,
                 })
+            }
+            Err(SyncError::Permanent(e)) => {
+                tracing::warn!(collection = %id, error = %e, retry_in = ?PUSH_RETRY, "push channel refused; polling only");
+                self.with_col(id, |rt| {
+                    rt.push_refused_until = Some(after(now, PUSH_RETRY))
+                });
+                Ok(Push::None)
             }
             Err(e) => {
                 tracing::warn!(collection = %id, error = %e, "push channel not opened; polling");

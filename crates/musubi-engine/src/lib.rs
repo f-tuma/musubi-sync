@@ -151,6 +151,8 @@ struct Inner<S: Storage, C> {
     // Same shortcut: held by discovery, and by removal while it marks the account.
     account_locks: Mutex<HashMap<AccountId, Arc<tokio::sync::Mutex<()>>>>,
     accounts: Mutex<HashMap<AccountId, AccountRt>>,
+    // Same shortcut, and lost on restart: one extra full read or watch request per restart.
+    collections: Mutex<HashMap<CollectionId, CollectionRt>>,
     codec: PhantomData<fn() -> C>,
 }
 
@@ -161,6 +163,14 @@ struct AccountRt {
     limiter: Arc<dyn Limiter>,
     blocked_until: Option<Timestamp>,
     unauthorized: bool,
+}
+
+/// In-memory per-collection state: full reads ended since the last delta
+/// that worked, and until when a refused push channel is not asked for again.
+#[derive(Default)]
+struct CollectionRt {
+    full_reads: u32,
+    push_refused_until: Option<Timestamp>,
 }
 
 /// Background scheduler started by [`Engine::start`]; stops when dropped.
@@ -202,6 +212,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 locks: Default::default(),
                 account_locks: Default::default(),
                 accounts: Default::default(),
+                collections: Default::default(),
                 codec: PhantomData,
             }),
         }

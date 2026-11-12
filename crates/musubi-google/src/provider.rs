@@ -170,6 +170,8 @@ impl GoogleProvider {
         let stale_page =
             status == StatusCode::BAD_REQUEST && q.page.is_some() && q.pass != Pass::Window;
         if status == StatusCode::GONE || stale_page {
+            let body = resp.bytes().await.unwrap_or_default();
+            tracing::warn!(calendar = %col.0, status = status.as_u16(), body = %excerpt(&body), pass = ?q.pass, "events.list: cursor expired");
             return Err(SyncError::CursorExpired);
         }
         if !status.is_success() {
@@ -215,15 +217,22 @@ pub(crate) async fn error_for(resp: Response, now: Timestamp) -> SyncError {
         _ => {
             let err = HttpStatus {
                 status,
-                body: String::from_utf8_lossy(&body).chars().take(300).collect(),
+                body: excerpt(&body),
             };
             if status.is_server_error() {
                 SyncError::Transient(err.into())
             } else {
+                tracing::warn!(status = status.as_u16(), body = %err.body, "permanent provider error");
                 SyncError::Permanent(err.into())
             }
         }
     }
+}
+
+/// The first 300 bytes of an error body, for logs and error messages. Google's
+/// error bodies hold the error object only, no tokens or event data.
+fn excerpt(body: &[u8]) -> String {
+    String::from_utf8_lossy(&body[..body.len().min(300)]).into_owned()
 }
 
 /// `403` with a quota reason is throttling, not a permission error.
@@ -280,6 +289,9 @@ enum CursorState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         page: Option<String>,
     },
+    /// A read ended without `nextSyncToken`: no delta is possible, the next
+    /// sync is a full read again (the engine backs those off).
+    FullOnly,
 }
 
 impl CursorState {
@@ -311,9 +323,17 @@ impl Query {
                 Start::Window(w) => q(Pass::Window, Some(w), None, None),
             },
             // A cursor we cannot read (older format, corruption) is as good as expired.
-            Some(c) => match serde_json::from_slice(&c.0).map_err(|_| SyncError::CursorExpired)? {
-                CursorState::Full { page } => q(Pass::Full, None, None, Some(page)),
-                CursorState::Delta { sync, page } => q(Pass::Delta, None, Some(sync), page),
+            Some(c) => match serde_json::from_slice(&c.0) {
+                Ok(CursorState::Full { page }) => q(Pass::Full, None, None, Some(page)),
+                Ok(CursorState::Delta { sync, page }) => q(Pass::Delta, None, Some(sync), page),
+                Ok(CursorState::FullOnly) => {
+                    tracing::info!("no delta cursor (last read had no nextSyncToken); full read");
+                    return Err(SyncError::CursorExpired);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "unreadable cursor; full read");
+                    return Err(SyncError::CursorExpired);
+                }
             },
         })
     }
@@ -408,12 +428,13 @@ fn build_page(q: &Query, body: &[u8]) -> Result<(ChangePage, Option<Query>), Syn
             (cursor, Some(next))
         }
         None if q.pass == Pass::Window => (None, None),
-        None => {
-            let sync = resp
-                .next_sync_token
-                .ok_or_else(|| permanent("last events.list page without nextSyncToken"))?;
-            (Some(CursorState::Delta { sync, page: None }), None)
-        }
+        None => match resp.next_sync_token {
+            Some(sync) => (Some(CursorState::Delta { sync, page: None }), None),
+            None => {
+                tracing::warn!(pass = ?q.pass, "last events.list page without nextSyncToken");
+                (Some(CursorState::FullOnly), None)
+            }
+        },
     };
     let page = ChangePage {
         pass: q.pass,
@@ -816,9 +837,18 @@ mod tests {
         .unwrap();
         assert!(page.cursor.is_none() && !page.last);
 
+        // No nextSyncToken: the read completes, and its cursor asks for a full read.
+        let (page, next) = build_page(&query(Pass::Full), br#"{"items":[]}"#).unwrap();
+        assert!(page.last && next.is_none());
         assert!(matches!(
-            build_page(&query(Pass::Full), br#"{"items":[]}"#),
-            Err(SyncError::Permanent(_))
+            Query::start(
+                page.cursor,
+                FetchHint {
+                    start: Start::Full,
+                    page_size: None
+                }
+            ),
+            Err(SyncError::CursorExpired)
         ));
         assert!(matches!(
             Query::start(
