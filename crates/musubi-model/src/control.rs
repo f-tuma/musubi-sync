@@ -137,13 +137,15 @@ pub trait ControlStore: Send + Sync {
         count_attempt: bool,
     ) -> Result<(), StoreError>;
 
-    /// Inserts or replaces a watch channel (after subscribe or renewal).
+    /// Inserts or replaces a watch channel: pending before subscribe, open
+    /// after it.
     fn put_channel(&self, c: &ChannelRecord) -> Result<(), StoreError>;
 
     /// A channel by its id (webhook handler, see
     /// [`crate::provider::PushSource::channel_of`]); `None` if unknown. The
-    /// record carries the whole [`Subscription`], so the handler verifies the
-    /// notification without opening the tenant store.
+    /// record of an open channel carries the whole [`Subscription`], so the
+    /// handler verifies the notification without opening the tenant store; a
+    /// pending one is rejected.
     fn find_channel(&self, id: &ChannelId) -> Result<Option<ChannelRecord>, StoreError>;
 
     /// Channels of a tenant, or only of one of its accounts (unsubscribe before
@@ -157,7 +159,7 @@ pub trait ControlStore: Send + Sync {
     /// Removes a channel (after unsubscribe or expiry). Idempotent.
     fn delete_channel(&self, id: &ChannelId) -> Result<(), StoreError>;
 
-    /// Channels expiring before `before`, for renewal.
+    /// Open channels expiring before `before`, for renewal. Never pending ones.
     fn channels_expiring(&self, before: Timestamp) -> Result<Vec<ChannelRecord>, StoreError>;
 }
 
@@ -373,7 +375,7 @@ pub struct Job {
     pub spec: JobSpec,
 }
 
-/// A watch channel. Keyed by `sub.channel`.
+/// A watch channel. Keyed by [`ChannelRecord::id`].
 #[derive(Debug, Clone)]
 pub struct ChannelRecord {
     /// Tenant.
@@ -382,8 +384,38 @@ pub struct ChannelRecord {
     pub account: AccountId,
     /// Our id of the watched collection.
     pub collection: CollectionId,
+    /// Pending or open.
+    pub state: ChannelState,
+}
+
+/// State of a [`ChannelRecord`].
+#[derive(Debug, Clone)]
+pub enum ChannelState {
+    /// Stored before [`crate::provider::PushSource::subscribe`] with the id
+    /// passed to it; the reply has not been stored. The provider may or may
+    /// not run the channel, so the engine stops it by id. A pending channel
+    /// is never renewed and never accepts a notification.
+    Pending(ChannelId),
     /// The subscription as the adapter returned it: channel id, resource,
     /// secret token and expiration. Passed to
     /// [`crate::provider::PushSource::verify`] and `unsubscribe`.
-    pub sub: Subscription,
+    Open(Subscription),
+}
+
+impl ChannelRecord {
+    /// The channel id, the record's key.
+    pub fn id(&self) -> &ChannelId {
+        match &self.state {
+            ChannelState::Pending(id) => id,
+            ChannelState::Open(s) => &s.channel,
+        }
+    }
+
+    /// The subscription if the channel is open.
+    pub fn open(&self) -> Option<&Subscription> {
+        match &self.state {
+            ChannelState::Pending(_) => None,
+            ChannelState::Open(s) => Some(s),
+        }
+    }
 }

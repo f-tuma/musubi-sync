@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 
 use http::Uri;
 use jiff::{SignedDuration, Timestamp};
-use musubi_model::provider::{FetchHint, Pass, PushHint, Start};
+use musubi_model::provider::{ChannelId, FetchHint, Pass, PushHint, Start};
 use musubi_model::remote::{MediaType, Raw};
 use musubi_model::{
     AccountId, ChangePage, CollectionRef, Cursor, Provider, PushRejected, RemoteKey, RemoteObject,
@@ -244,9 +244,8 @@ fn push_notifications_are_verified_against_the_subscription() {
     let (fake, col) = setup();
     let cx = account_cx(AccountId::from_u128(1), NOW);
     let push = fake.push().unwrap();
-    let sub =
-        block_on(push.subscribe(&cx, &col, &Uri::from_static("https://example.invalid/hook")))
-            .unwrap();
+    let hook = Uri::from_static("https://example.invalid/hook");
+    let sub = block_on(push.subscribe(&cx, &col, &hook, &ChannelId("ch".into()))).unwrap();
     assert!(sub.expiration > NOW);
 
     let hello = FakeProvider::notification(&sub, true);

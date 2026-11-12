@@ -7,8 +7,8 @@ use std::time::Duration;
 use common::{TempDir, t};
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{
-    AccountRecord, AccountState, ApiKeyHash, ApiKeyRecord, ChannelRecord, JobKind, JobSpec, Lane,
-    OAuthPending, OAuthStateHash, Scope, SealedTokens,
+    AccountRecord, AccountState, ApiKeyHash, ApiKeyRecord, ChannelRecord, ChannelState, JobKind,
+    JobSpec, Lane, OAuthPending, OAuthStateHash, Scope, SealedTokens,
 };
 use musubi_model::provider::{ChannelId, Subscription};
 use musubi_model::{AccountId, CollectionId, CollectionRef, ControlStore, StoreError, TenantId};
@@ -53,13 +53,20 @@ fn channel(id: &str, account: AccountId, expires: i64) -> ChannelRecord {
         tenant: T1,
         account,
         collection: CollectionId::from_u128(5),
-        sub: Subscription {
+        state: ChannelState::Open(Subscription {
             channel: ChannelId(id.into()),
             collection: CollectionRef("primary".into()),
             resource: "res".into(),
             token: SecretString::from("tok"),
             expiration: t(expires),
-        },
+        }),
+    }
+}
+
+fn pending(id: &str, account: AccountId) -> ChannelRecord {
+    ChannelRecord {
+        state: ChannelState::Pending(ChannelId(id.into())),
+        ..channel(id, account, 0)
     }
 }
 
@@ -408,12 +415,10 @@ fn channels() {
     c.put_channel(&channel("ch2", A2, 50)).unwrap();
     c.put_channel(&channel("ch1", A1, 20)).unwrap(); // renewal replaces
     let ch = c.find_channel(&ChannelId("ch1".into())).unwrap().unwrap();
+    let sub = ch.open().unwrap();
+    assert_eq!((sub.expiration, sub.token.expose_secret()), (t(20), "tok"));
     assert_eq!(
-        (ch.sub.expiration, ch.sub.token.expose_secret()),
-        (t(20), "tok")
-    );
-    assert_eq!(
-        (ch.account, ch.collection, ch.sub.resource.as_str()),
+        (ch.account, ch.collection, sub.resource.as_str()),
         (A1, CollectionId::from_u128(5), "res")
     );
     assert_eq!(c.channels(T1, Some(A2)).unwrap().len(), 1);
@@ -422,12 +427,65 @@ fn channels() {
         .channels_expiring(t(30))
         .unwrap()
         .into_iter()
-        .map(|c| c.sub.channel.0)
+        .map(|c| c.id().0.clone())
         .collect();
     assert_eq!(exp, ["ch1"]);
     c.delete_channel(&ChannelId("ch1".into())).unwrap();
     c.delete_channel(&ChannelId("ch1".into())).unwrap();
     assert_eq!(c.channels(T1, None).unwrap().len(), 1);
+}
+
+#[test]
+fn pending_channels_are_listed_but_never_expire() {
+    let (_d, c) = open();
+    c.put_channel(&pending("p1", A1)).unwrap();
+    let ch = c.find_channel(&ChannelId("p1".into())).unwrap().unwrap();
+    assert!(matches!(&ch.state, ChannelState::Pending(id) if id.0 == "p1"));
+    assert_eq!(c.channels(T1, Some(A1)).unwrap().len(), 1);
+    assert!(
+        c.channels_expiring(jiff::Timestamp::MAX)
+            .unwrap()
+            .is_empty()
+    );
+    // The reply arrived: the open channel replaces the pending row.
+    c.put_channel(&channel("p1", A1, 10)).unwrap();
+    let ch = c.find_channel(&ChannelId("p1".into())).unwrap().unwrap();
+    assert_eq!(ch.open().unwrap().expiration, t(10));
+    assert_eq!(c.channels_expiring(t(30)).unwrap().len(), 1);
+}
+
+#[test]
+fn control_db_from_before_pending_channels_is_migrated() {
+    let d = TempDir::new();
+    let path = d.path().join("control.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE channels(
+               id TEXT PRIMARY KEY, tenant BLOB NOT NULL, account BLOB NOT NULL,
+               collection BLOB NOT NULL, remote TEXT NOT NULL, resource TEXT NOT NULL,
+               token TEXT NOT NULL, expiration INTEGER NOT NULL);
+             CREATE INDEX channels_tenant ON channels(tenant, account);
+             CREATE INDEX channels_expiration ON channels(expiration);",
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO channels VALUES ('old', ?1, ?2, ?3, 'primary', 'res', 'tok', 20)",
+            (
+                T1.to_bytes(),
+                A1.to_bytes(),
+                CollectionId::from_u128(5).to_bytes(),
+            ),
+        )
+        .unwrap();
+    }
+    for _ in 0..2 {
+        let c = SqliteControl::open(&path).unwrap();
+        let old = c.find_channel(&ChannelId("old".into())).unwrap().unwrap();
+        assert_eq!(old.open().unwrap().resource, "res");
+        c.put_channel(&pending("p1", A1)).unwrap();
+        assert_eq!(c.channels(T1, Some(A1)).unwrap().len(), 2);
+    }
 }
 
 #[test]

@@ -9,7 +9,7 @@ use common::{ADMIN_KEY, Node, event, next_event};
 use jiff::{SignedDuration, Timestamp};
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{
-    AccountRecord, AccountState, AccountTokens, ChannelRecord, JobKind, Lane, Scope,
+    AccountRecord, AccountState, AccountTokens, ChannelRecord, ChannelState, JobKind, Lane, Scope,
 };
 use musubi_model::provider::{ChannelId, Subscription};
 use musubi_model::{
@@ -453,15 +453,23 @@ async fn webhook_rejects_unknown_and_forged_and_enqueues_a_valid_one_fast() {
             tenant: a,
             account: acc,
             collection: col,
-            sub: Subscription {
+            state: ChannelState::Open(Subscription {
                 channel: ChannelId("ch-1".into()),
                 collection: CollectionRef("cal".into()),
                 resource: "res-1".into(),
                 token: "channel-secret".to_owned().into(),
                 expiration: Timestamp::now() + SignedDuration::from_hours(24),
-            },
+            }),
         })
         .expect("channel");
+    control
+        .put_channel(&ChannelRecord {
+            tenant: a,
+            account: acc,
+            collection: col,
+            state: ChannelState::Pending(ChannelId("ch-pending".into())),
+        })
+        .expect("pending channel");
     let hook = async |ch: &str, token: &str, resource: &str, state: &str| {
         n.http
             .post(n.url("/v1/webhooks/google"))
@@ -492,6 +500,13 @@ async fn webhook_rejects_unknown_and_forged_and_enqueues_a_valid_one_fast() {
         404
     );
     assert_eq!(hook("ch-1", "wrong-secret", "res-1", "exists").await, 401);
+    for state in ["sync", "exists"] {
+        assert_eq!(
+            hook("ch-pending", "", "res-1", state).await,
+            404,
+            "a pending channel accepts nothing"
+        );
+    }
     assert_eq!(
         hook("ch-1", "channel-secret", "res-other", "exists").await,
         404

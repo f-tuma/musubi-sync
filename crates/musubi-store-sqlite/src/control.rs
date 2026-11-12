@@ -16,11 +16,11 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use musubi_model::capability::ProviderId;
-use musubi_model::control::ChannelRecord;
 use musubi_model::control::{
     AccountRecord, AccountState, ApiKeyHash, ApiKeyRecord, ControlStore, Job, JobId, JobKind,
     JobSpec, Lane, LeaseId, OAuthPending, OAuthStateHash, SealedTokens,
 };
+use musubi_model::control::{ChannelRecord, ChannelState};
 use musubi_model::error::StoreError;
 use musubi_model::id::{AccountId, CollectionId, TenantId};
 use musubi_model::provider::{ChannelId, Subscription};
@@ -66,10 +66,11 @@ fn after(now: Timestamp, d: Duration) -> Result<Timestamp> {
 impl SqliteControl {
     /// Opens (creating if missing) the control database at `path`.
     pub fn open(path: &std::path::Path) -> Result<Self, StoreError> {
-        let writer = connect(path, "FULL", 1000)?;
+        let mut writer = connect(path, "FULL", 1000)?;
         writer
             .execute_batch(crate::schema::CONTROL)
             .map_err(crate::Error::from)?;
+        crate::schema::migrate_control(&mut writer)?;
         let reader = connect(path, "FULL", 1000)?;
         Ok(Self {
             writer: Mutex::new(writer),
@@ -152,20 +153,30 @@ const CHANNEL: &str =
 fn channel(r: &Row<'_>) -> rusqlite::Result<Result<ChannelRecord>> {
     let (id, tenant, account, collection): (String, [u8; 16], [u8; 16], [u8; 16]) =
         (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
-    let (remote, resource, token, expiration): (String, String, String, i64) =
-        (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
-    Ok(ts(expiration).map(|expiration| ChannelRecord {
-        tenant: TenantId::from_bytes(tenant),
-        account: AccountId::from_bytes(account),
-        collection: CollectionId::from_bytes(collection),
-        sub: Subscription {
-            channel: ChannelId(id),
-            collection: CollectionRef(remote),
-            resource,
-            token: SecretString::from(token),
-            expiration,
-        },
-    }))
+    type Open = (Option<String>, Option<String>, Option<String>, Option<i64>);
+    let (remote, resource, token, expiration): Open = (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
+    let id = ChannelId(id);
+    Ok((|| {
+        let state = match (remote, resource, token, expiration) {
+            (None, None, None, None) => ChannelState::Pending(id),
+            (Some(remote), Some(resource), Some(token), Some(expiration)) => {
+                ChannelState::Open(Subscription {
+                    channel: id,
+                    collection: CollectionRef(remote),
+                    resource,
+                    token: SecretString::from(token),
+                    expiration: ts(expiration)?,
+                })
+            }
+            _ => return Err(crate::corrupt(format!("channel {}: partly pending", id.0))),
+        };
+        Ok(ChannelRecord {
+            tenant: TenantId::from_bytes(tenant),
+            account: AccountId::from_bytes(account),
+            collection: CollectionId::from_bytes(collection),
+            state,
+        })
+    })())
 }
 
 fn collect<T>(
@@ -595,20 +606,20 @@ impl ControlStore for SqliteControl {
 
     fn put_channel(&self, ch: &ChannelRecord) -> Result<(), StoreError> {
         self.write(|c| {
-            let s = &ch.sub;
+            let s = ch.open();
             c.execute(
                 "INSERT OR REPLACE INTO channels(id, tenant, account, collection, remote, resource,
                    token, expiration)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
-                    s.channel.0,
+                    ch.id().0,
                     ch.tenant.to_bytes(),
                     ch.account.to_bytes(),
                     ch.collection.to_bytes(),
-                    s.collection.0,
-                    s.resource,
-                    s.token.expose_secret(),
-                    us(s.expiration)
+                    s.map(|s| &s.collection.0),
+                    s.map(|s| &s.resource),
+                    s.map(|s| s.token.expose_secret()),
+                    s.map(|s| us(s.expiration))
                 ],
             )?;
             Ok(())

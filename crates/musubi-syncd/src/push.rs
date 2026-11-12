@@ -30,7 +30,10 @@ pub(crate) async fn google(
                 .control
                 .find_channel(&id)?
                 .ok_or_else(ApiError::not_found)?;
-            match a.google.verify(&headers, &ch.sub) {
+            // A pending channel (reply not stored yet, or lost) has no token to
+            // verify against: as unknown as no row at all.
+            let sub = ch.open().ok_or_else(ApiError::not_found)?;
+            match a.google.verify(&headers, sub) {
                 Ok(PushHint::Handshake) => Ok(None),
                 Ok(PushHint::Changed) => Ok(Some(ch)),
                 Err(PushRejected::UnknownChannel) => Err(ApiError::not_found()),

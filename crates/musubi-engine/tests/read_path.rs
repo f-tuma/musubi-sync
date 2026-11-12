@@ -10,9 +10,11 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use musubi_engine::{CommitSink, Config, Engine};
 use musubi_model::capability::ProviderId;
-use musubi_model::control::{AccountRecord, AccountState, AccountTokens, JobKind, Lane};
+use musubi_model::control::{
+    AccountRecord, AccountState, AccountTokens, ChannelRecord, JobKind, JobSpec, Lane,
+};
 use musubi_model::journal::{ChangeOp, ChangeTarget};
-use musubi_model::provider::{Access, RemoteCollection};
+use musubi_model::provider::{Access, ChannelId, RemoteCollection};
 use musubi_model::store::{CollectionState, Coverage, RangePage, RangeQuery};
 use musubi_model::{
     AccountId, CalendarEvent, Change, Codec, CollectionId, CollectionRef, ControlStore, Decoded,
@@ -1251,4 +1253,137 @@ async fn channel_opened_while_the_account_is_paused_is_stopped() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Pending and open channel ids in the control store.
+fn channel_rows(h: &H) -> (Vec<ChannelId>, Vec<ChannelId>) {
+    let (pending, open): (Vec<_>, Vec<_>) = h
+        .control
+        .channels(TENANT, Some(ACCOUNT))
+        .unwrap()
+        .into_iter()
+        .partition(|c| c.open().is_none());
+    let ids = |v: Vec<ChannelRecord>| v.iter().map(|c| c.id().clone()).collect();
+    (ids(pending), ids(open))
+}
+
+#[tokio::test]
+async fn lost_subscribe_reply_leaves_a_pending_channel_the_next_sync_stops() {
+    let h = H::new();
+    h.put_at("a", 1);
+    // Google opened the channel; the reply never arrived (or the process
+    // died before storing it).
+    h.fake
+        .lose_subscribe_reply(SyncError::Transient("timeout".into()));
+    h.connect_and_sync().await;
+    let lost = h.fake.channels();
+    assert_eq!(lost.len(), 1, "running at the provider");
+    assert_eq!(
+        channel_rows(&h),
+        (lost.clone(), vec![]),
+        "stored as pending"
+    );
+
+    // A restarted node: a pending channel is not caught up and never renewed.
+    let engine = h.restart();
+    assert_eq!(engine.catch_up().await.unwrap(), 0);
+    h.control
+        .enqueue(&JobSpec {
+            tenant: TENANT,
+            lane: Lane::Background,
+            kind: JobKind::RenewChannel {
+                channel: lost[0].clone(),
+            },
+            priority: 0,
+            due: h.clock_now(),
+            dedup: None,
+        })
+        .unwrap();
+    engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().subscribe, 1, "not renewed");
+    assert_eq!(channel_rows(&h).0, lost);
+
+    // The next sync opens a channel and stops the lost one with its resource.
+    h.advance(h.config.poll_every + Duration::from_secs(1));
+    engine.run_until_idle().await.unwrap();
+    let (pending, open) = channel_rows(&h);
+    assert!(pending.is_empty(), "{pending:?}");
+    assert_eq!(open.len(), 1);
+    assert_ne!(open, lost);
+    assert_eq!(h.fake.channels(), open, "the lost channel is stopped");
+}
+
+#[tokio::test]
+async fn lost_renewal_reply_is_stopped_by_the_next_renewal() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    let (_, first) = channel_rows(&h);
+    assert_eq!(first.len(), 1);
+
+    h.fake
+        .lose_subscribe_reply(SyncError::Transient("timeout".into()));
+    // The fake's channels live 24 h; renewal is due at two thirds of that.
+    h.advance(Duration::from_secs(16 * 3600 + 1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.channels().len(), 2, "the lost one runs too");
+    let (lost, open) = channel_rows(&h);
+    assert_eq!((lost.len(), &open), (1, &first));
+
+    // The renewal retries, opens a third channel and stops both others.
+    h.advance(Duration::from_secs(3600));
+    h.engine.run_until_idle().await.unwrap();
+    let (pending, open) = channel_rows(&h);
+    assert!(pending.is_empty(), "{pending:?}");
+    assert_eq!(open.len(), 1);
+    assert!(!open.contains(&first[0]) && !open.contains(&lost[0]));
+    assert_eq!(h.fake.channels(), open);
+}
+
+#[tokio::test]
+async fn removal_stops_a_pending_channel_with_the_open_ones_resource() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.fake
+        .lose_subscribe_reply(SyncError::Transient("timeout".into()));
+    h.advance(Duration::from_secs(16 * 3600 + 1));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.channels().len(), 2);
+    assert_eq!(channel_rows(&h).0.len(), 1, "one pending");
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap();
+    assert!(h.fake.channels().is_empty(), "{:?}", h.fake.channels());
+    assert_eq!(channel_rows(&h), (vec![], vec![]));
+}
+
+#[tokio::test]
+async fn removal_forgets_a_pending_channel_it_cannot_stop() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake
+        .lose_subscribe_reply(SyncError::Transient("timeout".into()));
+    h.connect_and_sync().await;
+    assert_eq!(channel_rows(&h).0.len(), 1);
+
+    let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
+    engine.remove_account(ACCOUNT).await.unwrap();
+    assert_eq!(h.state(), None);
+    assert_eq!(channel_rows(&h), (vec![], vec![]));
+    // No resource id is known for it: it expires at the provider.
+    assert_eq!(h.fake.channels().len(), 1);
+}
+
+#[tokio::test]
+async fn refused_subscribe_leaves_no_pending_channel() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.fake.fail(
+        Op::Subscribe,
+        SyncError::Permanent("pushNotSupported".into()),
+    );
+    h.connect_and_sync().await;
+    assert_eq!(channel_rows(&h), (vec![], vec![]));
+    assert!(h.fake.channels().is_empty());
 }

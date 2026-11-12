@@ -106,14 +106,22 @@ pub trait Provider: Send + Sync {
 /// engine applies. The engine then runs a delta read.
 #[async_trait]
 pub trait PushSource: Send + Sync {
-    /// Opens a channel that calls `callback` when `col` changes. The returned
-    /// [`Subscription`] carries the expiration the provider actually granted;
-    /// the engine schedules renewal from it, never from a constant.
+    /// Opens a channel that calls `callback` when `col` changes. `channel` is
+    /// the caller-chosen id the provider must be able to stop the subscription
+    /// by later, even if this call's reply is lost (Google: the watch id; a
+    /// Graph adapter would carry it in `clientState` and find the subscription
+    /// by it). The engine stores it before the call, so a crash between the
+    /// call and storing the reply leaves a pending channel it can stop.
+    ///
+    /// The returned [`Subscription`] has `channel` as its id and carries the
+    /// expiration the provider actually granted; the engine schedules renewal
+    /// from it, never from a constant.
     async fn subscribe(
         &self,
         cx: &AccountCx,
         col: &CollectionRef,
         callback: &Uri,
+        channel: &ChannelId,
     ) -> Result<Subscription, SyncError>;
 
     /// Closes a channel. Closing an unknown or expired channel is `Ok`.

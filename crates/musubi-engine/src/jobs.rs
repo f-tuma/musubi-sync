@@ -9,9 +9,12 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use jiff::Timestamp;
 use musubi_model::control::{
-    AccountRecord, AccountState, AccountTokens, ChannelRecord, Job, JobKind, JobSpec, Lane,
+    AccountRecord, AccountState, AccountTokens, ChannelRecord, ChannelState, Job, JobKind, JobSpec,
+    Lane,
 };
-use musubi_model::provider::{AccountCx, FetchHint, Limiter, Pass, Start};
+use musubi_model::provider::{
+    AccountCx, ChannelId, FetchHint, Limiter, Pass, PushSource, Start, Subscription,
+};
 use musubi_model::remote::RemoteRef;
 use musubi_model::store::{
     CollectionError, CollectionState, CollectionStatus, Coverage, DiscoveryWrite, Include,
@@ -69,8 +72,9 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             JobKind::RenewChannel { channel } => {
                 let id = channel.clone();
                 match self.ctl(move |c| c.find_channel(&id)).await {
-                    Ok(Some(ch)) => (ch.account, Work::Renew(ch)),
-                    Ok(None) => return Outcome::Done,
+                    Ok(Some(ch)) if ch.open().is_some() => (ch.account, Work::Renew(ch)),
+                    // Gone, or pending: a pending channel is never renewed.
+                    Ok(_) => return Outcome::Done,
                     Err(e) => return self.retry(job, e),
                 }
             }
@@ -401,28 +405,112 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         cx: &AccountCx,
         id: CollectionId,
     ) -> Result<(), EngineError> {
-        let account = cx.account;
-        let channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
-        for ch in channels.iter().filter(|c| c.collection == id) {
-            self.drop_channel(cx, ch).await?;
-        }
+        let channels = self.collection_channels(tenant, cx.account, id).await?;
+        self.drop_channels(cx, &channels).await?;
         self.write(tenant, move |s| s.purge_collection(id)).await?;
         Ok(())
     }
 
-    /// Stops a push channel at the provider (best effort) and forgets it.
-    pub(crate) async fn drop_channel(
+    /// Push channel rows of one collection, pending and open.
+    async fn collection_channels(
+        &self,
+        tenant: TenantId,
+        account: AccountId,
+        id: CollectionId,
+    ) -> Result<Vec<ChannelRecord>, EngineError> {
+        let mut channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
+        channels.retain(|c| c.collection == id);
+        Ok(channels)
+    }
+
+    /// Stops push channels at the provider (best effort) and forgets them.
+    /// A pending one is stopped by its id with the resource of an open channel
+    /// of its collection in `chs` (Google accepts any watch's resource id of
+    /// the calendar); without one it is only forgotten and expires there.
+    pub(crate) async fn drop_channels(
         &self,
         cx: &AccountCx,
-        ch: &ChannelRecord,
+        chs: &[ChannelRecord],
     ) -> Result<(), EngineError> {
-        if let Some(push) = self.inner.provider.push()
-            && let Err(e) = push.unsubscribe(cx, &ch.sub).await
-        {
-            tracing::warn!(channel = %ch.sub.channel.0, error = %e, "unsubscribe failed");
+        for ch in chs {
+            let sub = match &ch.state {
+                ChannelState::Open(s) => Some(s.clone()),
+                ChannelState::Pending(id) => chs
+                    .iter()
+                    .filter(|o| o.collection == ch.collection)
+                    .find_map(ChannelRecord::open)
+                    .map(|known| pending_sub(id, known)),
+            };
+            if let (Some(push), Some(sub)) = (self.inner.provider.push(), sub)
+                && let Err(e) = push.unsubscribe(cx, &sub).await
+            {
+                tracing::warn!(channel = %sub.channel.0, error = %e, "unsubscribe failed");
+            }
+            let id = ch.id().clone();
+            self.ctl(move |c| c.delete_channel(&id)).await?;
         }
-        let id = ch.sub.channel.clone();
-        self.ctl(move |c| c.delete_channel(&id)).await
+        Ok(())
+    }
+
+    /// Stops the pending channels among `chs` (left by a lost subscribe reply
+    /// or a crash) with `known`'s resource and forgets them. One that cannot
+    /// be stopped now stays for the next try.
+    async fn stop_pending(
+        &self,
+        cx: &AccountCx,
+        push: &dyn PushSource,
+        chs: &[ChannelRecord],
+        known: &Subscription,
+    ) -> Result<(), EngineError> {
+        for ch in chs {
+            let ChannelState::Pending(id) = &ch.state else {
+                continue;
+            };
+            if *id == known.channel {
+                continue;
+            }
+            match push.unsubscribe(cx, &pending_sub(id, known)).await {
+                Ok(()) => {
+                    let id = id.clone();
+                    self.ctl(move |c| c.delete_channel(&id)).await?;
+                }
+                Err(e) => {
+                    tracing::warn!(channel = %id.0, error = %e, "pending channel not stopped");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Opens a channel under a fresh id that is stored as pending first, so a
+    /// lost reply or a crash leaves a row to stop the channel by. On success
+    /// the collection's earlier pending channels (`chs`) are stopped; on a
+    /// refusal the new row is removed. The caller stores the open channel.
+    async fn open_channel(
+        &self,
+        cx: &AccountCx,
+        push: &dyn PushSource,
+        callback: &http::Uri,
+        tenant: TenantId,
+        col: &CollectionState,
+        chs: &[ChannelRecord],
+    ) -> Result<Result<Subscription, SyncError>, EngineError> {
+        let id = new_channel_id(col.id);
+        let pending = ChannelRecord {
+            tenant,
+            account: col.account,
+            collection: col.id,
+            state: ChannelState::Pending(id.clone()),
+        };
+        self.ctl(move |c| c.put_channel(&pending)).await?;
+        let res = push.subscribe(cx, &col.remote.remote, callback, &id).await;
+        match &res {
+            Ok(sub) => self.stop_pending(cx, push, chs, sub).await?,
+            Err(SyncError::Permanent(_)) => self.ctl(move |c| c.delete_channel(&id)).await?,
+            // The channel may be open: the row stays until it is stopped.
+            Err(_) => {}
+        }
+        Ok(res)
     }
 
     /// The read state machine of one collection (plan ch. 5, proposal 3.1).
@@ -759,8 +847,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         self.enqueue(job).await
     }
 
-    /// Opens a push channel for the collection unless one exists; failing
-    /// to open one only means polling.
+    /// Opens a push channel for the collection unless one is open; failing
+    /// to open one only means polling. Stops pending channels left behind.
     async fn ensure_channel(
         &self,
         rec: &AccountRecord,
@@ -773,27 +861,23 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             return Ok(Push::None);
         };
         let (tenant, account, id) = (rec.tenant, rec.id, col.id);
-        let channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
-        if channels.iter().any(|c| c.collection == id) {
+        let channels = self.collection_channels(tenant, account, id).await?;
+        if let Some(open) = channels.iter().find_map(ChannelRecord::open) {
+            self.stop_pending(cx, push, &channels, open).await?;
             return Ok(Push::Existing);
         }
         let now = self.now();
         if self.with_col(id, |rt| rt.push_refused_until.is_some_and(|t| t > now)) {
             return Ok(Push::None);
         }
-        match push.subscribe(cx, &col.remote.remote, callback).await {
-            Ok(sub) => {
-                let ch = ChannelRecord {
-                    tenant,
-                    account,
-                    collection: id,
-                    sub,
-                };
-                Ok(match self.put_channel(cx, ch).await? {
-                    true => Push::Opened,
-                    false => Push::None,
-                })
-            }
+        match self
+            .open_channel(cx, push, callback, tenant, col, &channels)
+            .await?
+        {
+            Ok(sub) => Ok(match self.put_channel(cx, tenant, id, sub).await? {
+                true => Push::Opened,
+                false => Push::None,
+            }),
             Err(SyncError::Permanent(e)) => {
                 self.refuse_push(id, &e);
                 Ok(Push::None)
@@ -812,28 +896,42 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         self.with_col(id, |rt| rt.push_refused_until = Some(until));
     }
 
-    /// Stores a new channel and schedules its renewal at two thirds of its
-    /// life. Returns false, after stopping it, if the account is no longer
-    /// syncing (a removal that started while it was being opened).
-    async fn put_channel(&self, cx: &AccountCx, ch: ChannelRecord) -> Result<bool, EngineError> {
-        let state = self.account(ch.account).await?.map(|r| r.state);
+    /// Stores a new open channel (replacing its pending row) and schedules its
+    /// renewal at two thirds of its life. Returns false, after stopping it, if
+    /// the account is no longer syncing (a removal that started while it was
+    /// being opened).
+    async fn put_channel(
+        &self,
+        cx: &AccountCx,
+        tenant: TenantId,
+        collection: CollectionId,
+        sub: Subscription,
+    ) -> Result<bool, EngineError> {
+        let account = cx.account;
+        let state = self.account(account).await?.map(|r| r.state);
+        let ch = ChannelRecord {
+            tenant,
+            account,
+            collection,
+            state: ChannelState::Open(sub.clone()),
+        };
         if !matches!(state, Some(AccountState::Active | AccountState::Connecting)) {
-            self.drop_channel(cx, &ch).await?;
+            self.drop_channels(cx, std::slice::from_ref(&ch)).await?;
             return Ok(false);
         }
         let now = self.now();
-        let left = (ch.sub.expiration.as_second() - now.as_second()).max(0);
+        let left = (sub.expiration.as_second() - now.as_second()).max(0);
         let renew = Timestamp::from_second(now.as_second() + (left * 2 / 3).max(60))
-            .unwrap_or(ch.sub.expiration);
+            .unwrap_or(sub.expiration);
         let job = JobSpec {
             tenant: ch.tenant,
             lane: Lane::Background,
             kind: JobKind::RenewChannel {
-                channel: ch.sub.channel.clone(),
+                channel: sub.channel.clone(),
             },
             priority: 0,
             due: renew,
-            dedup: Some(format!("renew:{}", ch.sub.channel.0)),
+            dedup: Some(format!("renew:{}", sub.channel.0)),
         };
         // The renewal job names the channel, so the channel row goes first.
         self.ctl(move |c| c.put_channel(&ch)).await?;
@@ -848,14 +946,20 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             && let Some(col) = self.collection(old.tenant, old.collection).await?
             && !col.gone
         {
-            let sub = match push.subscribe(cx, &col.remote.remote, callback).await {
+            let channels = self
+                .collection_channels(old.tenant, old.account, old.collection)
+                .await?;
+            let opened = self
+                .open_channel(cx, push, callback, old.tenant, &col, &channels)
+                .await?;
+            let sub = match opened {
                 Ok(sub) => sub,
                 // Refused now: like a first refusal, the collection is polled
                 // only. Its row would otherwise read as a live channel until
                 // long after Google's has expired.
                 Err(SyncError::Permanent(e)) => {
                     self.refuse_push(col.id, &e);
-                    self.drop_channel(cx, old).await?;
+                    self.drop_channels(cx, std::slice::from_ref(old)).await?;
                     let now = self.now();
                     return self
                         .enqueue(sync_job(old.tenant, old.account, col.id, Lane::Sync, now))
@@ -863,18 +967,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 }
                 Err(e) => return Err(e.into()),
             };
-            self.put_channel(
-                cx,
-                ChannelRecord {
-                    tenant: old.tenant,
-                    account: old.account,
-                    collection: old.collection,
-                    sub,
-                },
-            )
-            .await?;
+            self.put_channel(cx, old.tenant, old.collection, sub)
+                .await?;
         }
-        self.drop_channel(cx, old).await
+        self.drop_channels(cx, std::slice::from_ref(old)).await
     }
 
     /// Moves the occurrence index horizon of the tenant's series forward.
@@ -1048,5 +1144,33 @@ impl Limiter for Pacer {
         let mut next = self.next.lock().await;
         tokio::time::sleep_until(*next).await;
         *next = (*next).max(tokio::time::Instant::now()) + spacing;
+    }
+}
+
+/// A fresh channel id: the collection and the wall-clock time in nanoseconds,
+/// strictly increasing within the process. Ids of a crashed run differ by time.
+/// 46 characters of `[0-9a-v-]`, within Google's 64 of `[A-Za-z0-9-_+/=]`.
+fn new_channel_id(col: CollectionId) -> ChannelId {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+    let mut last = LAST.load(Ordering::Relaxed);
+    loop {
+        let n = now.max(last.saturating_add(1));
+        match LAST.compare_exchange_weak(last, n, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return ChannelId(format!("{col}-{n}")),
+            Err(seen) => last = seen,
+        }
+    }
+}
+
+/// The subscription to stop a pending channel by: its id, with the resource
+/// and collection of a known channel of the same collection.
+fn pending_sub(id: &ChannelId, known: &Subscription) -> Subscription {
+    Subscription {
+        channel: id.clone(),
+        ..known.clone()
     }
 }
