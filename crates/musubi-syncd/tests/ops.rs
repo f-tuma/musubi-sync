@@ -7,10 +7,11 @@ use std::path::Path;
 use std::process::{Child, Command, Output};
 use std::time::Duration;
 
+use common::whole::World;
 use common::{ADMIN_KEY, config_json, event};
 use musubi_model::{AccountId, Storage, TenantId, TenantStore};
 use musubi_store_sqlite::SqliteStorage;
-use musubi_testkit::google::FakeGoogle;
+use musubi_testkit::google::{Endpoint, FakeGoogle, Fault};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_musubi-syncd");
@@ -282,4 +283,34 @@ async fn stop_signal_ends_serve_with_a_stream_open() {
         assert!(status.success(), "{sig}: {status:?}");
         drop(stream);
     }
+}
+
+/// A permanent provider error is logged once, by the engine with its job
+/// and collection, not again by the adapter.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_permanent_provider_error_is_logged_once() {
+    let w = World::start(Default::default(), &[]).await;
+    w.converge(Duration::from_secs(30), |w| !w.fake.channels().is_empty())
+        .await;
+    let forbidden = Fault {
+        status: 403,
+        domain: "global",
+        reason: "forbidden",
+        message: "Forbidden",
+        retry_after: None,
+    };
+    w.fake.fail(Endpoint::EventsList, forbidden, 1);
+    // Notified: the delta answers 403.
+    let start = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24);
+    let when = json!({ "dateTime": start.to_string(), "timeZone": "UTC" });
+    w.fake.put_event(
+        &w.fake.primary(),
+        json!({ "summary": "x", "start": when, "end": when }),
+    );
+    let mark = "permanent provider error";
+    let line = w.node().wait_line(mark, Duration::from_secs(30));
+    assert!(line.is_some(), "{}", w.node().tail(40));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let log = w.node().tail(usize::MAX);
+    assert_eq!(log.matches(mark).count(), 1, "{log}");
 }
