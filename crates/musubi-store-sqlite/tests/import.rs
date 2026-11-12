@@ -78,8 +78,11 @@ fn import_keeps_wal_bounded() {
     );
     assert_eq!(st.items, EVENTS as u64);
     assert!(reads > 0);
+    // The 256 MB autocheckpoint fuse would pass any run, and the bodies alone
+    // are over 200 MB, so this proves the resets keep the WAL down. CI peaks
+    // at 133-150 MB (41 MB locally); 192 MB leaves room for a slow runner.
     assert!(
-        st.wal_max_bytes <= 256 << 20,
+        st.wal_max_bytes <= 192 << 20,
         "largest WAL {} bytes",
         st.wal_max_bytes
     );
