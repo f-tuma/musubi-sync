@@ -10,6 +10,7 @@ use std::time::Duration;
 use common::whole::{BIN, World, check_store, head};
 use jiff::SignedDuration;
 use musubi_testkit::google::{self, Seed};
+use musubi_testkit::harness::ADMIN_KEY;
 use serde_json::{Value, json};
 
 /// The whole journal and every occurrence within 400 days of the fake's
@@ -174,4 +175,86 @@ async fn backup_during_sync_restores_its_state_and_catches_up_without_duplicates
                 .and_then(|c| c["seq"].as_u64())
                 .expect("head")
     );
+}
+
+/// Item rows in a tenant's `main.db`; every page of a full read adds its
+/// items (the journal moves only when the read finishes).
+fn items(db: &std::path::Path) -> i64 {
+    common::whole::open(db)
+        .query_row("SELECT count(*) FROM items", [], |r| r.get(0))
+        .expect("items")
+}
+
+/// Backups taken back to back while the initial full read commits page
+/// after page: some span a page commit, every one holds whole pages only
+/// and passes SQLite's integrity check, and one that spanned a commit
+/// restores and finishes the sync.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn backups_across_page_commits_hold_whole_pages() {
+    const PAGE: i64 = 100;
+    const EVENTS: i64 = 1000;
+    let fake = google::Config {
+        seed: Seed {
+            seed: 65,
+            calendars: 1,
+            events: EVENTS as u32,
+        },
+        max_page_size: PAGE as u32,
+        ..google::Config::default()
+    };
+    let mut w = World::start(fake, &[]).await;
+    let main = w.data().join("tenants").join(&w.tenant).join("main.db");
+    // Google's rate limit spaces the pages ~100 ms apart; a backup takes a
+    // few ms, so back to back they catch commits in flight.
+    let (mut across, mut n) = (None, 0);
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_secs(60) {
+        let to = w.dir.path().join(format!("backup-{n}"));
+        n += 1;
+        let before = items(&main);
+        let (s, v) = w
+            .api
+            .call(
+                "POST",
+                "/v1/admin/backup",
+                Some(ADMIN_KEY),
+                Some(json!({ "to": to })),
+            )
+            .await
+            .expect("backup");
+        assert_eq!(s, 201, "{v}");
+        let after = items(&main);
+        let copy = to.join("tenants").join(&w.tenant).join("main.db");
+        let at = items(&copy);
+        assert!(
+            before <= at && at <= after,
+            "{at} not in {before}..={after}"
+        );
+        assert_eq!(at % PAGE, 0, "a backup with part of a page");
+        let ok: String = common::whole::open(&copy)
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .expect("integrity check");
+        assert_eq!(ok, "ok");
+        if before < after && at > 0 {
+            across = Some(to);
+        }
+        if after >= EVENTS - PAGE {
+            break;
+        }
+    }
+    let backup = across.unwrap_or_else(|| panic!("none of {n} backups spanned a page commit"));
+
+    w.kill();
+    std::fs::remove_dir_all(w.data()).expect("lose the data");
+    let cfg = w.config.to_str().expect("utf8").to_owned();
+    run(&[
+        "restore",
+        "--config",
+        &cfg,
+        "--from",
+        backup.to_str().expect("utf8"),
+    ]);
+    w.serve(&[]);
+    w.converge(Duration::from_secs(60), |_| true).await;
+    check_store(&w);
 }
