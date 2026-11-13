@@ -128,11 +128,7 @@ fn overlaps(i: &Instance, w: &std::ops::Range<Timestamp>) -> bool {
 }
 
 proptest! {
-    // `with_cases` would silently override `PROPTEST_CASES`; keep the variable usable.
-    #![proptest_config(ProptestConfig {
-        cases: std::env::var("PROPTEST_CASES").ok().and_then(|c| c.parse().ok()).unwrap_or(512),
-        ..ProptestConfig::default()
-    })]
+    #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
     fn expand_invariants(s in series(), offset in -720i64..24 * 300, len in 0i64..24 * 200, limit in 0usize..300) {
