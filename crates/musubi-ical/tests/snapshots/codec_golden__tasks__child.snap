@@ -1,0 +1,35 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: task (stringify! (child))
+---
+{
+  "uid": "task-child-1@example.com",
+  "title": "Draft the outline",
+  "description": "First pass only.",
+  "start": "2026-11-12T09:00:00",
+  "due": "2026-11-13T17:00:00",
+  "timeZone": "Europe/Prague",
+  "showWithoutTime": false,
+  "progress": "in-process",
+  "percentComplete": 40,
+  "hidden": false,
+  "priority": 1,
+  "relatedTo": "task-parent-1@example.com",
+  "alerts": {
+    "1": {
+      "trigger": {
+        "@type": "OffsetTrigger",
+        "offset": "-PT1H",
+        "relativeTo": "end"
+      },
+      "action": "display"
+    }
+  },
+  "keywords": [
+    "Q4",
+    "Writing"
+  ],
+  "created": "2026-11-01T08:00:00Z",
+  "updated": "2026-11-08T10:15:00Z",
+  "sequence": 0
+}

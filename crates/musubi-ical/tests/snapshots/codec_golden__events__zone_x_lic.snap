@@ -1,0 +1,17 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (zone_x_lic))
+---
+{
+  "uid": "x-lic-1@example.com",
+  "title": "Concert",
+  "start": "2026-12-05T19:30:00",
+  "timeZone": "Europe/Vienna",
+  "duration": "PT2H30M",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

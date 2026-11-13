@@ -1,0 +1,26 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: task (stringify! (recurring))
+---
+{
+  "uid": "task-weekly-1@example.com",
+  "title": "Water the plants",
+  "start": "2026-11-09T08:00:00",
+  "due": "2026-11-09T20:00:00",
+  "timeZone": "Etc/UTC",
+  "showWithoutTime": false,
+  "progress": "needs-action",
+  "hidden": false,
+  "priority": 0,
+  "recurrenceRules": [
+    "FREQ=WEEKLY;BYDAY=MO"
+  ],
+  "recurrenceOverrides": {
+    "2026-11-16T08:00:00": {
+      "due": "2026-11-16T20:00:00",
+      "progress": "completed",
+      "progressUpdated": "2026-11-16T09:00:00Z"
+    }
+  },
+  "sequence": 0
+}

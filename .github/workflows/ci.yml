@@ -96,8 +96,8 @@ jobs:
       # `bench` runs the musubi-syncd binary next to it.
       - run: cargo build --release --locked -p musubi-syncd -p musubi-testkit --bins
       - run: target/release/bench --smoke
-      # B8 and B9 are crate benches: musubi-testkit may not depend on google or recurrence.
-      - run: cargo bench --locked -p musubi-google -p musubi-recurrence --benches
+      # B8, B9 and D3 are crate benches: musubi-testkit may not depend on google, recurrence or ical.
+      - run: cargo bench --locked -p musubi-google -p musubi-recurrence -p musubi-ical --benches
         env:
           MUSUBI_BENCH_SMOKE: "1"
 
@@ -123,7 +123,7 @@ jobs:
       - if: ${{ !cancelled() }}
         run: target/release/bench
       - if: ${{ !cancelled() }}
-        run: cargo bench --locked -p musubi-google -p musubi-recurrence --benches
+        run: cargo bench --locked -p musubi-google -p musubi-recurrence -p musubi-ical --benches
       # The recurrence fuzz harness (K2) is the `fuzz-recurrence` job.
 
   fuzz-recurrence:

@@ -997,7 +997,13 @@ name = "musubi-ical"
 version = "0.0.0"
 dependencies = [
  "calcard",
+ "insta",
+ "jiff",
  "musubi-model",
+ "musubi-recurrence",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

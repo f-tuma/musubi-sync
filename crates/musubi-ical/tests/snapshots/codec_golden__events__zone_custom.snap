@@ -1,0 +1,23 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (zone_custom))
+---
+{
+  "uid": "custom-zone-1@example.com",
+  "title": "Weekly review",
+  "start": "2026-11-02T09:00:00",
+  "timeZone": "/Musubi Central",
+  "timeZones": {
+    "/Musubi Central": "MCT-1MCST-2,M3.5.0/2,M10.5.0/3"
+  },
+  "duration": "PT1H",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "recurrenceRules": [
+    "FREQ=WEEKLY;BYDAY=MO"
+  ],
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

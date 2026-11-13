@@ -1,0 +1,43 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (exceptions_only))
+---
+{
+  "uid": "invite-1@example.com",
+  "recurrenceId": "2026-12-03T15:00:00",
+  "recurrenceIdTimeZone": "Etc/UTC",
+  "title": "Sync",
+  "start": "2026-12-03T15:00:00",
+  "timeZone": "Etc/UTC",
+  "duration": "PT30M",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "recurrenceOverrides": {
+    "2026-12-10T15:00:00": {
+      "start": "2026-12-10T16:00:00",
+      "title": "Sync (later)"
+    }
+  },
+  "participants": {
+    "alex@example.com": {
+      "email": "alex@example.com",
+      "roles": {
+        "owner": true
+      },
+      "participationStatus": "accepted",
+      "expectReply": false
+    },
+    "blake@example.com": {
+      "email": "blake@example.com",
+      "roles": {
+        "attendee": true
+      },
+      "participationStatus": "accepted",
+      "expectReply": false
+    }
+  },
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

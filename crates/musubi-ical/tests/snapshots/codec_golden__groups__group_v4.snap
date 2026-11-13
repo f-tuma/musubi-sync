@@ -1,0 +1,12 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: group (stringify! (group_v4))
+---
+{
+  "uid": "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+  "name": "Book club",
+  "members": [
+    "3f6c2a1e-4b5d-4e6f-8a7b-9c0d1e2f3a4b",
+    "mailto:guest@example.com"
+  ]
+}

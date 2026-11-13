@@ -1,0 +1,20 @@
+BEGIN:VCARD
+VERSION:4.0
+PRODID:-//musubi-sync//fixture vcard4//EN
+UID:urn:uuid:6f1c1b8e-2d3a-4e5f-9a8b-7c6d5e4f3a2b
+KIND:individual
+FN:Riley Example
+N:Example;Riley;;;
+EMAIL;TYPE=work;PREF=1:riley@example.com
+EMAIL;TYPE=home;PREF=2:riley.home@example.org
+TEL;VALUE=uri;TYPE="voice,cell";PREF=1:tel:+1-555-0142
+ADR;TYPE=work;LABEL="1 Example Plaza\nMetropolis":;;1 Example Plaza;Metropolis;;10001;USA
+ORG:Example Org
+TITLE:Engineer
+URL:https://example.org/riley
+ANNIVERSARY:20150612
+BDAY:--0704
+PHOTO:https://example.org/riley.jpg
+NOTE:Synthetic vCard 4.0 card.
+REV:20261104T101010Z
+END:VCARD

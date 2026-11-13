@@ -1,0 +1,80 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (timed))
+---
+{
+  "uid": "timed-1@example.com",
+  "title": "Planning review",
+  "description": "Quarterly planning.\nBring the numbers.",
+  "locations": {
+    "location": {
+      "name": "Room 4"
+    }
+  },
+  "start": "2026-11-10T17:00:00",
+  "timeZone": "Europe/Prague",
+  "duration": "PT1H30M",
+  "showWithoutTime": false,
+  "status": "tentative",
+  "freeBusyStatus": "free",
+  "privacy": "private",
+  "participants": {
+    "alex@example.com": {
+      "name": "Alex Example",
+      "email": "alex@example.com",
+      "roles": {
+        "owner": true,
+        "chair": true
+      },
+      "participationStatus": "accepted",
+      "expectReply": false
+    },
+    "blake@example.com": {
+      "name": "Blake Sample",
+      "email": "Blake@Example.com",
+      "roles": {
+        "attendee": true
+      },
+      "participationStatus": "needs-action",
+      "expectReply": true
+    },
+    "casey@example.org": {
+      "name": "Casey Test",
+      "email": "casey@example.org",
+      "roles": {
+        "optional": true
+      },
+      "participationStatus": "declined",
+      "expectReply": false
+    }
+  },
+  "alerts": {
+    "1": {
+      "trigger": {
+        "@type": "OffsetTrigger",
+        "offset": "-PT15M",
+        "relativeTo": "start"
+      },
+      "action": "display"
+    },
+    "2": {
+      "trigger": {
+        "@type": "OffsetTrigger",
+        "offset": "PT0S",
+        "relativeTo": "end"
+      },
+      "action": "email"
+    },
+    "3": {
+      "trigger": {
+        "@type": "AbsoluteTrigger",
+        "when": "2026-11-10T15:00:00Z"
+      },
+      "action": "display"
+    }
+  },
+  "useDefaultAlerts": false,
+  "created": "2026-11-08T10:10:10Z",
+  "updated": "2026-11-08T10:15:00Z",
+  "sequence": 2
+}

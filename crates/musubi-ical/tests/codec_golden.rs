@@ -1,0 +1,177 @@
+//! Golden fixtures for `IcalCodec` and `VCardCodec` (plan K2, chapter 8.4):
+//! one snapshot per shape, plus the explicit K2 acceptance checks.
+
+use musubi_ical::{IcalCodec, VCardCodec};
+use musubi_model::provider::{Codec, Decoded};
+use musubi_model::remote::MediaType;
+use musubi_model::{Contact, ContactGroup, Event, Kind, Raw, Task};
+
+fn raw(path: &str) -> Raw {
+    let path = format!("{}/tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
+    let body = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let media_type = if path.ends_with(".vcf") {
+        MediaType::VCard
+    } else {
+        MediaType::Calendar
+    };
+    Raw { media_type, body }
+}
+
+fn decode<K: Kind, C: Codec<K>>(path: &str) -> K::Canonical {
+    match C::decode(&raw(path)) {
+        Decoded::Canonical(item) => item,
+        Decoded::Unsupported { reason } => panic!("{path}: unsupported: {reason}"),
+        _ => panic!("{path}: unexpected decode result"),
+    }
+}
+
+fn event(name: &str) -> musubi_model::CalendarEvent {
+    decode::<Event, IcalCodec>(&format!("events/{name}.ics"))
+}
+
+fn task(name: &str) -> musubi_model::CalendarTask {
+    decode::<Task, IcalCodec>(&format!("tasks/{name}.ics"))
+}
+
+fn contact(name: &str) -> musubi_model::ContactCard {
+    decode::<Contact, VCardCodec>(&format!("contacts/{name}.vcf"))
+}
+
+fn group(name: &str) -> musubi_model::ContactGroupCard {
+    decode::<ContactGroup, VCardCodec>(&format!("contacts/{name}.vcf"))
+}
+
+macro_rules! golden {
+    ($decode:ident: $($name:ident),* $(,)?) => {$(
+        #[test]
+        fn $name() {
+            insta::assert_json_snapshot!($decode(stringify!($name)));
+        }
+    )*};
+}
+
+mod events {
+    use super::event;
+    golden!(event:
+        timed,
+        utc,
+        all_day,
+        floating,
+        series,
+        exceptions_only,
+        zone_x_lic,
+        zone_path_prefix,
+        zone_custom,
+        zone_fixed_offset,
+        zone_unconvertible,
+    );
+}
+
+mod tasks {
+    use super::task;
+    golden!(task: child, completed, recurring);
+}
+
+mod contacts {
+    use super::contact;
+    golden!(contact: vcard3_apple, vcard4, org);
+}
+
+mod groups {
+    use super::group;
+    golden!(group: group_apple, group_v4);
+}
+
+/// Every step of the zone chain (chapter 3.7) on its own fixture.
+#[test]
+fn zone_chain_steps() {
+    let cases = [
+        ("timed", "Europe/Prague"),
+        ("zone_x_lic", "Europe/Vienna"),
+        ("series", "Europe/Berlin"),
+        ("zone_path_prefix", "Europe/Paris"),
+    ];
+    for (name, zone) in cases {
+        let e = event(name);
+        assert_eq!(e.time_zone.as_deref(), Some(zone), "{name}");
+        assert!(e.time_zones.is_empty(), "{name}: IANA zone needs no entry");
+    }
+    for (name, posix) in [
+        ("zone_custom", "MCT-1MCST-2,M3.5.0/2,M10.5.0/3"),
+        ("zone_fixed_offset", "MFT-5:30"),
+    ] {
+        let e = event(name);
+        let id = e.time_zone.clone().expect("zoned");
+        assert!(id.starts_with('/'), "{name}: {id}");
+        assert_eq!(e.time_zones.get(&id).map(String::as_str), Some(posix));
+        jiff::tz::TimeZone::posix(posix).expect("valid POSIX TZ");
+    }
+}
+
+#[test]
+fn unconvertible_zone_stays_unresolved() {
+    let e = event("zone_unconvertible");
+    assert_eq!(e.time_zone.as_deref(), Some("/Musubi Historic"));
+    assert!(e.time_zones.is_empty(), "no entry: the zone is unresolved");
+    assert_eq!(
+        e.start,
+        "2026-11-16T10:00:00".parse().unwrap(),
+        "wall time kept"
+    );
+}
+
+#[test]
+fn master_with_two_exceptions_is_one_item() {
+    let e = event("series");
+    assert!(e.recurrence_id.is_none());
+    let at = |key: &str| &e.recurrence_overrides[&key.parse().unwrap()];
+    let moved = at("2026-11-16T09:00:00");
+    assert_eq!(moved["start"], "2026-11-16T10:00:00");
+    assert_eq!(moved["title"], "Standup (moved)");
+    let cancelled = at("2026-11-30T09:00:00");
+    assert_eq!(cancelled["status"], "cancelled");
+    assert!(!cancelled.contains_key("start"), "starts at its key");
+    // EXDATE and RDATE share the map (JSCalendar), next to the two exceptions.
+    assert_eq!(at("2026-11-23T09:00:00")["excluded"], true);
+    assert!(at("2026-11-25T09:00:00").is_empty());
+    assert_eq!(e.recurrence_overrides.len(), 4);
+}
+
+#[test]
+fn exceptions_only_resource_uses_the_earliest_exception() {
+    let e = event("exceptions_only");
+    assert_eq!(e.title, "Sync");
+    assert_eq!(e.start, "2026-12-03T15:00:00".parse().unwrap());
+    assert_eq!(
+        e.recurrence_id,
+        Some("2026-12-03T15:00:00".parse().unwrap())
+    );
+    assert_eq!(e.recurrence_overrides.len(), 1);
+    let later = &e.recurrence_overrides[&"2026-12-10T15:00:00".parse().unwrap()];
+    assert_eq!(later["start"], "2026-12-10T16:00:00");
+}
+
+fn unsupported<T>(d: Decoded<T>) -> bool {
+    matches!(d, Decoded::Unsupported { .. })
+}
+
+#[test]
+fn wrong_kind_is_unsupported() {
+    assert!(unsupported(<IcalCodec as Codec<Task>>::decode(&raw(
+        "events/timed.ics"
+    ))));
+    assert!(unsupported(<IcalCodec as Codec<Event>>::decode(&raw(
+        "tasks/child.ics"
+    ))));
+    assert!(unsupported(<VCardCodec as Codec<ContactGroup>>::decode(
+        &raw("contacts/vcard4.vcf")
+    )));
+    assert!(unsupported(<VCardCodec as Codec<Contact>>::decode(&raw(
+        "contacts/group_v4.vcf"
+    ))));
+    let mut vcard_as_calendar = raw("contacts/vcard4.vcf");
+    vcard_as_calendar.media_type = MediaType::Calendar;
+    assert!(unsupported(<VCardCodec as Codec<Contact>>::decode(
+        &vcard_as_calendar
+    )));
+}

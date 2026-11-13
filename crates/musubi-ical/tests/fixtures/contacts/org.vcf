@@ -1,0 +1,9 @@
+BEGIN:VCARD
+VERSION:4.0
+PRODID:-//musubi-sync//fixture organization//EN
+UID:urn:uuid:0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+KIND:org
+FN:Example Hardware Store
+ORG:Example Hardware Store
+TEL;TYPE=work:+1 555 0111
+END:VCARD

@@ -1,0 +1,27 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Apple Inc.//iPhone OS 18.0//EN
+N:Sample;Jordan;Lee;Dr.;PhD
+FN:Dr. Jordan Lee Sample PhD
+NICKNAME:Jo
+ORG:Example Corp;Research
+TITLE:Lead Scientist
+item1.EMAIL;type=INTERNET;type=WORK;type=pref:jordan@example.com
+item2.EMAIL;type=INTERNET:jordan.home@example.net
+item2.X-ABLabel:_$!<Other>!$_
+TEL;type=CELL;type=VOICE;type=pref:+1 555 0100
+item3.TEL:+1 555 0199
+item3.X-ABLabel:Lab
+item4.ADR;type=HOME;type=pref:;;1 Example Street;Springfield;IL;62701;USA
+item4.X-ABADR:us
+item5.URL;type=pref:https://example.com/jordan
+item5.X-ABLabel:_$!<HomePage>!$_
+X-SOCIALPROFILE;type=mastodon:https://social.example/@jordan
+IMPP;X-SERVICE-TYPE=Jabber;type=HOME:xmpp:jordan@example.com
+BDAY;X-APPLE-OMIT-YEAR=1604:1604-03-15
+NOTE:Synthetic Apple-style card.
+PHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJ
+ CQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/
+UID:3f6c2a1e-4b5d-4e6f-8a7b-9c0d1e2f3a4b
+REV:2026-11-04T10:10:10Z
+END:VCARD
