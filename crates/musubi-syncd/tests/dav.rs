@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use common::Node;
 use musubi_model::capability::ProviderId;
-use musubi_model::{ControlStore, TenantId};
+use musubi_model::control::{AccountRecord, AccountState};
+use musubi_model::{AccountId, ControlStore, TenantId};
 use musubi_testkit::dav::{Config as DavConfig, FakeDav, Fault, Host, Kind, Req};
 use musubi_testkit::google::{Endpoint, Fault as GFault};
 use serde_json::{Value, json};
@@ -264,10 +265,7 @@ async fn a_redirect_during_sync_requires_reauthorisation_and_reconnect_resumes()
         .iter()
         .filter_map(|c| c["error"]["message"].as_str().map(str::to_owned))
         .collect();
-    assert!(
-        errors.iter().any(|e| e.contains("EndpointMoved")),
-        "{errors:?}"
-    );
+    assert!(errors.iter().any(|e| e == "endpoint_moved"), "{errors:?}");
     assert_eq!(outside(&d), 0);
 
     // The user confirms the password again: the same account, active.
@@ -327,6 +325,71 @@ async fn a_reconnect_to_another_principal_is_refused_and_changes_nothing() {
     body["account"] = json!(id);
     let (s, v) = connect(&n, &t, body).await;
     assert_eq!((s, &v["id"]), (200, &json!(id)), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connect_cut_short_before_its_endpoint_is_finished_by_the_next() {
+    let n = private_node().await;
+    let d = dav(DavConfig::default()).await;
+    let t = tenant(&n).await;
+    // What a failure after the account row and before the endpoint leaves.
+    let id = AccountId::from_u128(7);
+    n.app
+        .control()
+        .upsert_account(&AccountRecord {
+            id,
+            tenant: t.id,
+            provider: ProviderId("dav".into()),
+            subject: format!("{}{}", d.url(Host::Caldav), d.principal()),
+            state: AccountState::Connecting,
+        })
+        .expect("row");
+
+    let (s, v) = connect(&n, &t, generic(&d, "secret")).await;
+    assert_eq!((s, &v["id"]), (200, &json!(id)), "{v}");
+    assert_eq!(v["username"], "alice", "{v}");
+    assert!(n.app.control().endpoint(id).expect("read").is_some());
+
+    // Without its endpoint, another principal is still refused.
+    let other = dav(DavConfig::default()).await;
+    let id = AccountId::from_u128(8);
+    n.app
+        .control()
+        .upsert_account(&AccountRecord {
+            id,
+            tenant: t.id,
+            provider: ProviderId("dav".into()),
+            subject: "https://elsewhere.example/principal/".into(),
+            state: AccountState::Connecting,
+        })
+        .expect("row");
+    let mut body = generic(&other, "secret");
+    body["account"] = json!(id);
+    let (s, v) = connect(&n, &t, body).await;
+    assert_eq!((s, &v["error"]), (400, &json!("subject_mismatch")), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn simultaneous_first_connects_make_one_account() {
+    let n = private_node().await;
+    let d = dav(DavConfig {
+        latency: Duration::from_millis(20),
+        ..DavConfig::default()
+    })
+    .await;
+    // Each round a new tenant, so every connect may be the first; the
+    // `deleting` guard in the handler serialises them (without it: 409).
+    for _ in 0..10 {
+        let t = tenant(&n).await;
+        let all =
+            futures_util::future::join_all((0..4).map(|_| connect(&n, &t, generic(&d, "secret"))))
+                .await;
+        for (s, v) in &all {
+            assert_eq!((*s, &v["id"]), (200, &all[0].1["id"]), "{v}");
+        }
+        let accounts = n.app.control().accounts(t.id).expect("accounts");
+        assert_eq!(accounts.len(), 1, "{accounts:?}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

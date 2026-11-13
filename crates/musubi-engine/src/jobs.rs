@@ -252,9 +252,22 @@ impl<S: Storage + 'static> Engine<S> {
             EngineError::Sync(SyncError::ReauthRequired { .. } | SyncError::Unauthorized) => {
                 self.with_rt(rec, |rt| rt.unauthorized = false);
                 tracing::warn!(account = %rec.id, error = %e, "account requires sign-in");
-                // The reason (e.g. `EndpointMoved`) reaches the user on the collection.
-                self.record_error(rec.tenant, col, e.to_string(), true)
-                    .await;
+                // The reason's stable name (`endpoint_moved`, `rejected`) on every
+                // collection of the account, also when a discovery raised it.
+                let code = match &e {
+                    EngineError::Sync(SyncError::ReauthRequired { reason }) => {
+                        serde_json::to_value(reason)
+                            .ok()
+                            .and_then(|v| v.as_str().map(str::to_owned))
+                    }
+                    _ => None,
+                }
+                .unwrap_or_else(|| "rejected".into());
+                let cols = self.collections(rec.tenant).await.unwrap_or_default();
+                for c in cols.iter().filter(|c| c.account == rec.id && !c.gone) {
+                    self.record_error(rec.tenant, Some(c.id), code.clone(), true)
+                        .await;
+                }
                 let id = rec.id;
                 match self
                     .ctl(move |c| c.set_account_state(id, AccountState::ReauthRequired))
@@ -503,8 +516,8 @@ impl<S: Storage + 'static> Engine<S> {
         let was_missing = self.ctl(move |c| c.missing(account)).await?;
         // `missing`: the kinds without permission after this round. `keep`:
         // the kinds whose stored collections stay although the listing lacks
-        // them (plan 3.5).
-        let (mut collections, complete, missing, keep, endpoint) =
+        // them (plan 3.5). `skipped`: a kind was not listed this round.
+        let (mut collections, complete, missing, keep, skipped, endpoint) =
             match cx.provider.discover(cx).await {
                 Ok(d) => {
                     // A kind in both lists is unauthorised.
@@ -516,15 +529,16 @@ impl<S: Storage + 'static> Engine<S> {
                     // An incomplete kind keeps its stored permission state.
                     let mut missing = d.unauthorized.clone();
                     missing.extend(was_missing.iter().filter(|k| incomplete.contains(k)));
+                    let skipped = !incomplete.is_empty();
                     let mut keep = d.unauthorized;
                     keep.extend(incomplete);
-                    (d.collections, true, missing, keep, d.endpoint)
+                    (d.collections, true, missing, keep, skipped, d.endpoint)
                 }
                 // A partial listing only adds and updates: a missing calendar
                 // is not gone, and no missing permission is cleared.
                 Err(SyncError::PartialDiscovery { found, source }) => {
                     tracing::warn!(%account, error = %source, "partial discovery");
-                    (found, false, was_missing.clone(), Vec::new(), None)
+                    (found, false, was_missing.clone(), Vec::new(), true, None)
                 }
                 Err(e) => return Err(e.into()),
             };
@@ -611,7 +625,6 @@ impl<S: Storage + 'static> Engine<S> {
         }
         let c = &self.inner.config;
         // A kind skipped this round is asked again soon, not in hours.
-        let skipped = !complete || keep.iter().any(|k| !missing.contains(k));
         let every = if skipped {
             REDISCOVER_QUIET.min(c.rediscover_every)
         } else {

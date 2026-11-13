@@ -847,6 +847,9 @@ async fn incomplete_kind_keeps_its_stored_missing_state() {
     assert_eq!(missing, [EntityKind::Contact, EntityKind::Task]);
     assert_eq!(h.sync_due("tasks"), None, "still parked");
     assert!(!h.collection("tasks").unwrap().gone);
+    // Tasks was skipped although already missing: asked again soon.
+    let quiet = Duration::try_from(discover_due(&h).unwrap() - h.clock_now()).unwrap();
+    assert!(quiet <= Duration::from_secs(15 * 60), "{quiet:?}");
 
     // Probe works and grants Tasks again: cleared.
     h.fake.set_unauthorized(vec![]);

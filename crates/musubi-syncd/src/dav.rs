@@ -5,6 +5,9 @@
 //! the reason and stores nothing. A reconnect (with `account`, or a new
 //! connect that finds the same subject) must find every principal the stored
 //! account has, else `400 subject_mismatch` and the account stays as it was.
+//! The three writes are separate commits: an account left without its
+//! endpoint by a failure between them is finished by the next connect to the
+//! same principal.
 //! The password is never logged or returned.
 
 use std::sync::Arc;
@@ -136,7 +139,8 @@ pub(crate) async fn connect(
     let account = req.account;
     let rec = app
         .run(move |a| {
-            // Held until the account exists, so a deletion lists it.
+            // Held until the account exists, so a deletion lists it. It also
+            // serialises connects: two to one principal cannot both create it.
             let deleting = a.deleting();
             if deleting.contains(&tenant) {
                 return Err(StoreError::NotFound.into());
@@ -150,10 +154,20 @@ pub(crate) async fn connect(
             .filter(|x| x.tenant == tenant && x.provider == provider);
             let rec = match existing {
                 Some(mut acc) => {
-                    let stored = a.control.endpoint(acc.id)?.ok_or_else(|| {
-                        reason("subject_mismatch", "the account has no stored principal")
-                    })?;
-                    Principals::check_reconnect(&stored, &found).map_err(connect_error)?;
+                    match a.control.endpoint(acc.id)? {
+                        Some(stored) => {
+                            Principals::check_reconnect(&stored, &found).map_err(connect_error)?
+                        }
+                        // A connect cut short before its endpoint was stored:
+                        // the same principal finishes it.
+                        None if acc.subject == subject => {}
+                        None => {
+                            return Err(reason(
+                                "subject_mismatch",
+                                "the account has no stored principal",
+                            ));
+                        }
+                    }
                     if acc.state == AccountState::ReauthRequired {
                         acc.state = AccountState::Active;
                     }
