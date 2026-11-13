@@ -17,7 +17,8 @@ The toolchain is pinned in `rust-toolchain.toml`. `.cargo/config.toml` sets
 ## Dependency direction
 
 Each crate has one job. Internal dependencies only point down
-([docs/plan/phase1.md](docs/plan/phase1.md), chapter 2):
+([docs/plan/phase1.md](docs/plan/phase1.md) and
+[docs/plan/phase2.md](docs/plan/phase2.md), chapter 2):
 
 | Crate | May depend on (`[dependencies]`, `[build-dependencies]`) |
 | --- | --- |
@@ -25,18 +26,22 @@ Each crate has one job. Internal dependencies only point down
 | `musubi-recurrence` | nothing internal |
 | `musubi-store-sqlite` | `musubi-model` |
 | `musubi-google` | `musubi-model` |
+| `musubi-ical` | `musubi-model`; iCalendar and vCard codecs, pure functions |
+| `musubi-dav` | `musubi-model`, `musubi-ical` |
 | `musubi-engine` | `musubi-model`, `musubi-recurrence` |
 | `musubi-syncd` | all of the above |
 | `musubi-testkit` | `musubi-model` (`publish = false`, used only as a dev-dependency and for its own binaries) |
 
 Rules:
 
-- The engine knows neither SQLite nor Google. It works against the traits in
-  `musubi-model`. Its tests may use `musubi-store-sqlite` and `musubi-testkit` as
-  dev-dependencies, but never `musubi-google`: the path engine + Google adapter +
-  fake Google server is tested in `musubi-syncd`.
-- Adapters know neither the engine nor the store.
-- Only `musubi-syncd` uses `musubi-store-sqlite` and `musubi-google` directly.
+- The engine knows neither SQLite nor any provider. It works against the traits
+  and canonical types in `musubi-model` and gets codecs from a registry. Its tests
+  may use `musubi-store-sqlite` and `musubi-testkit` as dev-dependencies, but
+  never `musubi-google`, `musubi-dav` or `musubi-ical`: the path engine + adapter
+  + fake server is tested in `musubi-syncd`.
+- Adapters know neither the engine nor the store. `musubi-dav` uses the codecs
+  of `musubi-ical`; `musubi-ical` uses only `musubi-model`.
+- Only `musubi-syncd` uses `musubi-store-sqlite` and the adapters directly.
 - Any other dev-dependency between workspace crates is allowed.
 
 ### How it is checked

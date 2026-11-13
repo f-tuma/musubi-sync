@@ -21,13 +21,13 @@ use musubi_model::capability::{
 use musubi_model::error::BoxError;
 use musubi_model::event::AlertAction;
 use musubi_model::provider::{
-    Access, AccessToken, BoxStream, Clock, Discovery, FetchHint, Pass, PushSource,
-    RemoteCollection, Start,
+    Access, AccessToken, BoxStream, Clock, Credential, Discovery, FetchHint, Pass, PushSource,
+    RemoteCollection, Start, TokenRefresh,
 };
 use musubi_model::remote::{MediaType, RemoteRef};
 use musubi_model::{
     AccountCx, ChangePage, CollectionRef, Cursor, EntityKind, Provider, ProviderDescriptor, Raw,
-    RemoteKey, RemoteObject, SyncError, TimeWindow, Validator,
+    ReauthReason, RemoteKey, RemoteObject, SyncError, TimeWindow, Validator,
 };
 use reqwest::header::RETRY_AFTER;
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -121,8 +121,11 @@ impl GoogleProvider {
         cx: &AccountCx,
         req: RequestBuilder,
     ) -> Result<Response, SyncError> {
+        let Credential::Bearer(token) = &cx.credential else {
+            return Err(permanent("Google needs an OAuth bearer token"));
+        };
         cx.limiter.acquire().await;
-        req.bearer_auth(cx.token.expose_secret())
+        req.bearer_auth(token.expose_secret())
             .send()
             .await
             .map_err(|e| SyncError::Transient(e.into()))
@@ -355,6 +358,7 @@ impl Query {
             None => match hint.start {
                 Start::Full => q(Pass::Full, None, None, None),
                 Start::Window(w) => q(Pass::Window, Some(w), None, None),
+                _ => return Err(permanent("unsupported start of a read")),
             },
             // A cursor we cannot read (older format, corruption) is as good as expired.
             Some(c) => match serde_json::from_slice(&c.0) {
@@ -413,12 +417,14 @@ fn remote_object(raw: &RawValue, meta: &EventMeta) -> RemoteObject {
             format!("sha256:{hex}")
         }
     };
-    RemoteObject {
-        key: RemoteKey(meta.id.clone()),
-        validator: Validator(validator),
+    let mut object = RemoteObject::new(
+        RemoteKey(meta.id.clone()),
+        EntityKind::Event,
+        Validator(validator),
         raw,
-        master: meta.recurring_event_id.clone().map(RemoteKey),
-    }
+    );
+    object.master = meta.recurring_event_id.clone().map(RemoteKey);
+    object
 }
 
 /// Turns one `events.list` response into a page and the next request.
@@ -470,13 +476,9 @@ fn build_page(q: &Query, body: &[u8]) -> Result<(ChangePage, Option<Query>), Syn
             }
         },
     };
-    let page = ChangePage {
-        pass: q.pass,
-        upserts,
-        removals,
-        cursor: cursor.map(|c| c.to_cursor()),
-        last: next.is_none(),
-    };
+    let mut page = ChangePage::new(q.pass, cursor.map(|c| c.to_cursor()), next.is_none());
+    page.upserts = upserts;
+    page.removals = removals;
     Ok((page, next))
 }
 
@@ -502,19 +504,17 @@ struct CalendarListEntry {
 
 impl From<CalendarListEntry> for RemoteCollection {
     fn from(c: CalendarListEntry) -> Self {
-        RemoteCollection {
-            remote: CollectionRef(c.id),
-            kind: EntityKind::Event,
-            name: c.summary_override.or(c.summary).unwrap_or_default(),
-            time_zone: c.time_zone,
-            access: match c.access_role.as_deref() {
-                Some("owner") => Access::Owner,
-                Some("writer") => Access::Writer,
-                Some("freeBusyReader") => Access::FreeBusyReader,
-                _ => Access::Reader,
-            },
-            primary: c.primary,
-        }
+        let access = match c.access_role.as_deref() {
+            Some("owner") => Access::Owner,
+            Some("writer") => Access::Writer,
+            Some("freeBusyReader") => Access::FreeBusyReader,
+            _ => Access::Reader,
+        };
+        let name = c.summary_override.or(c.summary).unwrap_or_default();
+        let mut col = RemoteCollection::new(CollectionRef(c.id), EntityKind::Event, name, access);
+        col.time_zone = c.time_zone;
+        col.primary = c.primary;
+        col
     }
 }
 
@@ -556,49 +556,39 @@ impl Provider for GoogleProvider {
             // Relative popup/e-mail only.
             ("alerts", Fidelity::Approximate),
         ];
-        ProviderDescriptor {
-            id: ProviderId("google".into()),
-            kinds: vec![KindCapabilities {
-                kind: EntityKind::Event,
-                read: true,
-                // Phase 1 is read-only.
-                write: false,
-                conditional_update: ConditionalWrite::StrongValidator,
-                conditional_delete: ConditionalWrite::Unproven,
-                client_id: Some(ClientIdRule {
-                    charset: ClientIdCharset::Base32HexLower,
-                    min_len: 5,
-                    max_len: 1024,
-                }),
-            }],
-            delta: DeltaSupport::SyncToken,
-            push: PushSupport::Webhook,
-            recurrence: RecurrenceSupport::Full,
-            zones: vec![ZoneSupport::Iana],
-            scheduling: SchedulingCapabilities {
-                mode: SchedulingMode::ProviderSide,
-                invite_suppression: InviteSuppression::WholeRequest,
-                organizer_writes_reply: false,
-            },
-            field_fidelity: fidelity
-                .into_iter()
-                .map(|(k, v)| (k.to_owned(), v))
-                .collect::<BTreeMap<_, _>>(),
-            // extendedProperties.private
-            hidden_marker: true,
-            reminders: ReminderCapabilities {
-                relative: true,
-                absolute: false,
-                actions: vec![AlertAction::Display, AlertAction::Email],
-                max_per_item: Some(5),
-            },
-            tasks: None,
-            limits: Limits {
-                max_page_size: MAX_PAGE,
-                requests_per_minute: Some(600),
-                max_batch: Some(1000),
-            },
-        }
+        let mut events = KindCapabilities::new(
+            EntityKind::Event,
+            DeltaSupport::SyncToken,
+            PushSupport::Webhook,
+        );
+        // Phase 1 is read-only.
+        events.conditional_update = ConditionalWrite::StrongValidator;
+        events.conditional_delete = ConditionalWrite::Unproven;
+        events.client_id = Some(ClientIdRule::new(ClientIdCharset::Base32HexLower, 5, 1024));
+        let mut limits = Limits::new(MAX_PAGE);
+        limits.requests_per_minute = Some(600);
+        limits.max_batch = Some(1000);
+        let mut d = ProviderDescriptor::new(ProviderId("google".into()), vec![events], limits);
+        d.recurrence = RecurrenceSupport::Full;
+        d.zones = vec![ZoneSupport::Iana];
+        d.scheduling = SchedulingCapabilities::new(
+            SchedulingMode::ProviderSide,
+            InviteSuppression::WholeRequest,
+            false,
+        );
+        d.field_fidelity = fidelity
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect::<BTreeMap<_, _>>();
+        // extendedProperties.private
+        d.hidden_marker = true;
+        d.reminders = ReminderCapabilities::new(
+            true,
+            false,
+            vec![AlertAction::Display, AlertAction::Email],
+            Some(5),
+        );
+        d
     }
 
     async fn discover(&self, cx: &AccountCx) -> Result<Discovery, SyncError> {
@@ -631,7 +621,7 @@ impl Provider for GoogleProvider {
             found.extend(list.items.into_iter().map(RemoteCollection::from));
             match list.next_page_token {
                 Some(next) => page = Some(next),
-                None => return Ok(Discovery { collections: found }),
+                None => return Ok(Discovery::new(found)),
             }
         }
     }
@@ -703,6 +693,17 @@ impl Provider for GoogleProvider {
         Ok(out)
     }
 
+    fn oauth(&self) -> Option<&dyn TokenRefresh> {
+        Some(self)
+    }
+
+    fn push(&self) -> Option<&dyn PushSource> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl TokenRefresh for GoogleProvider {
     async fn refresh(&self, refresh_token: &SecretString) -> Result<AccessToken, SyncError> {
         let form = [
             ("grant_type", "refresh_token"),
@@ -721,18 +722,19 @@ impl Provider for GoogleProvider {
         if status.is_success() {
             let t: TokenResponse = serde_json::from_slice(&body(resp).await?)
                 .map_err(|e| permanent(format!("token response: {e}")))?;
-            return Ok(AccessToken {
-                access: t.access_token.into(),
-                // Google always sends it; an hour is its documented lifetime.
-                expires_in: Duration::from_secs(t.expires_in.unwrap_or(3600)),
-                rotated_refresh: t.refresh_token.map(Into::into),
-            });
+            // Google always sends `expires_in`; an hour is its documented lifetime.
+            let expires_in = Duration::from_secs(t.expires_in.unwrap_or(3600));
+            let mut token = AccessToken::new(t.access_token.into(), expires_in);
+            token.rotated_refresh = t.refresh_token.map(Into::into);
+            return Ok(token);
         }
         if status == StatusCode::BAD_REQUEST || status == StatusCode::UNAUTHORIZED {
             let body = body(resp).await?;
             // RFC 6749 5.2: the grant is revoked, expired or for another client.
             return match serde_json::from_slice::<TokenError>(&body) {
-                Ok(e) if e.error == "invalid_grant" => Err(SyncError::ReauthRequired),
+                Ok(e) if e.error == "invalid_grant" => Err(SyncError::ReauthRequired {
+                    reason: ReauthReason::Rejected,
+                }),
                 _ => Err(SyncError::Permanent(
                     HttpStatus {
                         status,
@@ -743,10 +745,6 @@ impl Provider for GoogleProvider {
             };
         }
         Err(error_for(resp, self.clock.now()).await)
-    }
-
-    fn push(&self) -> Option<&dyn PushSource> {
-        Some(self)
     }
 }
 
@@ -818,14 +816,7 @@ mod tests {
         assert_eq!(page.removals, [RemoteKey("gone".into())]);
         assert!(page.last && next.is_none());
         assert_eq!(
-            Query::start(
-                page.cursor,
-                FetchHint {
-                    start: Start::Full,
-                    page_size: None
-                }
-            )
-            .unwrap(),
+            Query::start(page.cursor, FetchHint::new(Start::Full)).unwrap(),
             Query {
                 sync: Some("s2".into()),
                 ..query(Pass::Delta)
@@ -848,14 +839,7 @@ mod tests {
         let mid = br#"{"items":[],"nextPageToken":"p2"}"#;
         let (page, next) = build_page(&query(Pass::Full), mid).unwrap();
         assert!(!page.last && page.upserts.is_empty());
-        let resumed = Query::start(
-            page.cursor,
-            FetchHint {
-                start: Start::Full,
-                page_size: None,
-            },
-        )
-        .unwrap();
+        let resumed = Query::start(page.cursor, FetchHint::new(Start::Full)).unwrap();
         assert_eq!(Some(resumed.clone()), next);
         assert_eq!(
             resumed,
@@ -870,14 +854,7 @@ mod tests {
             ..query(Pass::Delta)
         };
         let (page, _) = build_page(&delta, mid).unwrap();
-        let resumed = Query::start(
-            page.cursor,
-            FetchHint {
-                start: Start::Full,
-                page_size: None,
-            },
-        )
-        .unwrap();
+        let resumed = Query::start(page.cursor, FetchHint::new(Start::Full)).unwrap();
         assert_eq!(
             resumed,
             Query {
@@ -900,22 +877,13 @@ mod tests {
         let (page, next) = build_page(&query(Pass::Full), br#"{"items":[]}"#).unwrap();
         assert!(page.last && next.is_none());
         assert!(matches!(
-            Query::start(
-                page.cursor,
-                FetchHint {
-                    start: Start::Full,
-                    page_size: None
-                }
-            ),
+            Query::start(page.cursor, FetchHint::new(Start::Full)),
             Err(SyncError::CursorExpired)
         ));
         assert!(matches!(
             Query::start(
                 Some(Cursor(b"garbage".to_vec())),
-                FetchHint {
-                    start: Start::Full,
-                    page_size: None
-                }
+                FetchHint::new(Start::Full)
             ),
             Err(SyncError::CursorExpired)
         ));

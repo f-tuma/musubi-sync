@@ -142,6 +142,35 @@ pub trait TenantStore: Send {
     /// Size and checkpoint metrics (phase 0 condition 8).
     fn stats(&self) -> Result<StoreStats, StoreError>;
 
+    /// Live entities of `kind` with a placement in one of `collections`, in
+    /// [`EntityId`] order, starting after `after`, at most `limit` (keyset
+    /// paging: a full page continues after its last id). Never tombstones,
+    /// never entities of another kind. With `inc.placements` the views carry
+    /// their placements. For kinds without occurrences (tasks, contacts,
+    /// groups; docs/plan/phase2.md 4.1).
+    fn list_entities(
+        &self,
+        kind: EntityKind,
+        collections: &[CollectionId],
+        after: Option<EntityId>,
+        limit: u32,
+        inc: Include,
+    ) -> Result<Vec<EntityView>, StoreError>;
+
+    /// Live items of `kind` whose stored schema or mapping version differs
+    /// from `schema_version` or `mapping_version`, in [`ItemId`] order,
+    /// starting after `after`, at most `limit`, each with its raw content.
+    /// Input of the re-decode after a version change (docs/plan/phase2.md 10,
+    /// point 1).
+    fn stale_items(
+        &self,
+        kind: EntityKind,
+        schema_version: u32,
+        mapping_version: u32,
+        after: Option<ItemId>,
+        limit: u32,
+    ) -> Result<Vec<ItemView>, StoreError>;
+
     /// Records the result of discovery for one account: adds new collections
     /// (assigning [`CollectionId`]s), updates changed ones and, only if
     /// `d.complete`, marks the account's collections missing from the list as
@@ -166,6 +195,15 @@ pub trait TenantStore: Send {
     ///
     /// `NotFound` if the collection does not exist.
     fn apply_page(&mut self, p: &PageWrite) -> Result<Seq, StoreError>;
+
+    /// Re-decodes items of `col` from their stored raw content: replaces
+    /// canonical form, versions, correlation and occurrences of the item with
+    /// each `w.key`, without a new raw body, validator or cursor. A write whose
+    /// `raw_hash` no longer matches the stored one (the item changed since it
+    /// was read) and a key without a live item are skipped. A journal entry
+    /// only where the canonical form changed; returns the head (unchanged if
+    /// none did). `NotFound` if the collection does not exist.
+    fn redecode(&mut self, col: CollectionId, items: &[ItemWrite]) -> Result<Seq, StoreError>;
 
     /// Ends the full read `read` of `col`: tombstones live items it did not see
     /// (their entities and occurrences with them), clears

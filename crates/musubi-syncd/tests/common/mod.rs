@@ -191,14 +191,12 @@ pub fn t(h: i64) -> Timestamp {
 }
 
 pub fn remote(name: &str) -> RemoteCollection {
-    RemoteCollection {
-        remote: CollectionRef(name.into()),
-        kind: EntityKind::Event,
-        name: name.into(),
-        time_zone: None,
-        access: Access::Owner,
-        primary: false,
-    }
+    RemoteCollection::new(
+        CollectionRef(name.into()),
+        EntityKind::Event,
+        name,
+        Access::Owner,
+    )
 }
 
 /// A one-hour event at hour `h`.

@@ -23,7 +23,8 @@ use musubi_model::control::{
 use musubi_model::control::{ChannelRecord, ChannelState};
 use musubi_model::error::StoreError;
 use musubi_model::id::{AccountId, CollectionId, TenantId};
-use musubi_model::provider::{ChannelId, Subscription};
+use musubi_model::kind::EntityKind;
+use musubi_model::provider::{ChannelId, Endpoint, Subscription};
 use musubi_model::remote::CollectionRef;
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Row, Transaction, TransactionBehavior, params,
@@ -160,13 +161,13 @@ fn channel(r: &Row<'_>) -> rusqlite::Result<Result<ChannelRecord>> {
         let state = match (remote, resource, token, expiration) {
             (None, None, None, None) => ChannelState::Pending(id),
             (Some(remote), Some(resource), Some(token), Some(expiration)) => {
-                ChannelState::Open(Subscription {
-                    channel: id,
-                    collection: CollectionRef(remote),
+                ChannelState::Open(Subscription::new(
+                    id,
+                    CollectionRef(remote),
                     resource,
-                    token: SecretString::from(token),
-                    expiration: ts(expiration)?,
-                })
+                    SecretString::from(token),
+                    ts(expiration)?,
+                ))
             }
             _ => return Err(crate::corrupt(format!("channel {}: partly pending", id.0))),
         };
@@ -368,6 +369,21 @@ impl ControlStore for SqliteControl {
                 .optional()?;
             Ok(t.flatten().map(SealedTokens))
         })
+    }
+
+    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
+    fn set_endpoint(&self, _id: AccountId, _e: &Endpoint) -> Result<(), StoreError> {
+        todo!("K1")
+    }
+
+    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
+    fn endpoint(&self, _id: AccountId) -> Result<Option<Endpoint>, StoreError> {
+        todo!("K1")
+    }
+
+    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
+    fn set_missing(&self, _id: AccountId, _kinds: &[EntityKind]) -> Result<(), StoreError> {
+        todo!("K1")
     }
 
     fn put_oauth_state(&self, s: &OAuthPending) -> Result<(), StoreError> {

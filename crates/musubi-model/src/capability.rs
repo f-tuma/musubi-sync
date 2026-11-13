@@ -1,8 +1,8 @@
 //! Provider capabilities (proposal 6.2), exposed in the API so applications can
 //! hide a feature before the user tries it.
 //!
-//! Phase 1 only reads, but the descriptor reports write capabilities from the
-//! start. Values are facts about the provider, verified in phase 0
+//! Phases 1 and 2 only read, but the descriptor reports write capabilities
+//! from the start. Values are facts about the provider, verified in phase 0
 //! (docs/research/phase0/providers.md) or marked `Unproven`.
 
 use std::collections::BTreeMap;
@@ -19,16 +19,17 @@ pub struct ProviderId(pub String);
 
 /// What a provider can do. Returned by [`crate::provider::Provider::descriptor`];
 /// constant for the lifetime of the adapter.
+///
+/// Non-exhaustive: build it with [`ProviderDescriptor::new`] and set the other
+/// fields by assignment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ProviderDescriptor {
     /// Provider name.
     pub id: ProviderId,
-    /// Supported kinds with read/write capabilities each.
+    /// Supported kinds with their capabilities, including the default delta
+    /// and push mechanism of each.
     pub kinds: Vec<KindCapabilities>,
-    /// How changes are found.
-    pub delta: DeltaSupport,
-    /// How changes are announced.
-    pub push: PushSupport,
     /// How much of RFC 5545 recurrence round-trips.
     pub recurrence: RecurrenceSupport,
     /// Time-zone identifier systems the provider accepts and returns.
@@ -49,11 +50,44 @@ pub struct ProviderDescriptor {
     pub limits: Limits,
 }
 
+impl ProviderDescriptor {
+    /// A descriptor that claims nothing beyond `kinds` and `limits`: no
+    /// recurrence, no zones, no scheduling, no field fidelity, no hidden
+    /// marker, no reminders, no tasks.
+    pub fn new(id: ProviderId, kinds: Vec<KindCapabilities>, limits: Limits) -> Self {
+        ProviderDescriptor {
+            id,
+            kinds,
+            recurrence: RecurrenceSupport::None,
+            zones: Vec::new(),
+            scheduling: SchedulingCapabilities::new(
+                SchedulingMode::None,
+                InviteSuppression::None,
+                false,
+            ),
+            field_fidelity: BTreeMap::new(),
+            hidden_marker: false,
+            reminders: ReminderCapabilities::new(false, false, Vec::new(), None),
+            tasks: None,
+            limits,
+        }
+    }
+}
+
 /// Capabilities for one kind.
+///
+/// Non-exhaustive: build it with [`KindCapabilities::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct KindCapabilities {
     /// The kind.
     pub kind: EntityKind,
+    /// How changes of collections of this kind are found, unless the
+    /// collection says otherwise ([`crate::provider::RemoteCollection::delta`]).
+    pub delta: DeltaSupport,
+    /// How changes of collections of this kind are announced, unless the
+    /// collection says otherwise ([`crate::provider::RemoteCollection::push`]).
+    pub push: PushSupport,
     /// Items of this kind can be read.
     pub read: bool,
     /// Items of this kind can be written (phase 3).
@@ -66,9 +100,27 @@ pub struct KindCapabilities {
     pub client_id: Option<ClientIdRule>,
 }
 
+impl KindCapabilities {
+    /// A readable, not writable kind with unconditional writes and no
+    /// client-chosen ids.
+    pub fn new(kind: EntityKind, delta: DeltaSupport, push: PushSupport) -> Self {
+        KindCapabilities {
+            kind,
+            delta,
+            push,
+            read: true,
+            write: false,
+            conditional_update: ConditionalWrite::None,
+            conditional_delete: ConditionalWrite::None,
+            client_id: None,
+        }
+    }
+}
+
 /// Strength of conditional writes (`If-Match`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ConditionalWrite {
     /// The provider rejects a write with a stale validator (`412`), verified.
     StrongValidator,
@@ -80,6 +132,7 @@ pub enum ConditionalWrite {
 
 /// Format the provider requires for client-chosen remote ids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ClientIdRule {
     /// Allowed characters.
     pub charset: ClientIdCharset,
@@ -87,6 +140,17 @@ pub struct ClientIdRule {
     pub min_len: u16,
     /// Maximum length in characters.
     pub max_len: u16,
+}
+
+impl ClientIdRule {
+    /// A rule with these characters and length bounds.
+    pub fn new(charset: ClientIdCharset, min_len: u16, max_len: u16) -> Self {
+        ClientIdRule {
+            charset,
+            min_len,
+            max_len,
+        }
+    }
 }
 
 /// Character sets of [`ClientIdRule`].
@@ -102,6 +166,7 @@ pub enum ClientIdCharset {
 /// Delta mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DeltaSupport {
     /// Server sync token (Google `syncToken`, DAV sync-collection).
     SyncToken,
@@ -116,6 +181,7 @@ pub enum DeltaSupport {
 /// Push mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PushSupport {
     /// HTTPS callback; [`crate::provider::Provider::push`] returns a [`crate::provider::PushSource`].
     Webhook,
@@ -126,6 +192,7 @@ pub enum PushSupport {
 /// Recurrence support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RecurrenceSupport {
     /// Any RFC 5545 rule round-trips.
     Full,
@@ -140,6 +207,7 @@ pub enum RecurrenceSupport {
 /// Time-zone identifier systems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ZoneSupport {
     /// IANA names (`Europe/Prague`).
     Iana,
@@ -151,6 +219,7 @@ pub enum ZoneSupport {
 
 /// Invitations and replies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SchedulingCapabilities {
     /// Who delivers invitations.
     pub mode: SchedulingMode,
@@ -160,9 +229,25 @@ pub struct SchedulingCapabilities {
     pub organizer_writes_reply: bool,
 }
 
+impl SchedulingCapabilities {
+    /// Scheduling capabilities with these values.
+    pub fn new(
+        mode: SchedulingMode,
+        invite_suppression: InviteSuppression,
+        organizer_writes_reply: bool,
+    ) -> Self {
+        SchedulingCapabilities {
+            mode,
+            invite_suppression,
+            organizer_writes_reply,
+        }
+    }
+}
+
 /// Who delivers invitations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SchedulingMode {
     /// The provider sends them (Google, Graph).
     ProviderSide,
@@ -175,6 +260,7 @@ pub enum SchedulingMode {
 /// Invitation suppression on write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum InviteSuppression {
     /// Not possible.
     None,
@@ -187,6 +273,7 @@ pub enum InviteSuppression {
 /// Fidelity of one field on this provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Fidelity {
     /// Round-trips unchanged.
     Exact,
@@ -198,6 +285,7 @@ pub enum Fidelity {
 
 /// Reminder capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReminderCapabilities {
     /// Offsets relative to start are supported.
     pub relative: bool,
@@ -209,8 +297,27 @@ pub struct ReminderCapabilities {
     pub max_per_item: Option<u32>,
 }
 
-/// Task capabilities (no task kind in phase 1; reported for completeness).
+impl ReminderCapabilities {
+    /// Reminder capabilities with these values.
+    pub fn new(
+        relative: bool,
+        absolute: bool,
+        actions: Vec<AlertAction>,
+        max_per_item: Option<u32>,
+    ) -> Self {
+        ReminderCapabilities {
+            relative,
+            absolute,
+            actions,
+            max_per_item,
+        }
+    }
+}
+
+/// Task capabilities; `None` in [`ProviderDescriptor::tasks`] when the provider
+/// has no task kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TaskCapabilities {
     /// Due is a date only; a time is dropped (Google Tasks).
     pub due_date_only: bool,
@@ -220,14 +327,48 @@ pub struct TaskCapabilities {
     pub recurrence: bool,
 }
 
-/// Paging and rate limits.
+impl TaskCapabilities {
+    /// Task capabilities with these values.
+    pub fn new(due_date_only: bool, subtasks: bool, recurrence: bool) -> Self {
+        TaskCapabilities {
+            due_date_only,
+            subtasks,
+            recurrence,
+        }
+    }
+}
+
+/// Paging, batching, concurrency and rate limits.
+///
+/// Non-exhaustive: build it with [`Limits::new`] and set the other fields by
+/// assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Limits {
     /// Largest page the provider returns (Google events: 2500). A [`crate::provider::ChangePage`]
-    /// never holds more objects than this.
+    /// never holds more objects plus stubs than this.
     pub max_page_size: u32,
     /// Requests per minute per user, if documented (Google: 600).
     pub requests_per_minute: Option<u32>,
-    /// Calls per batch request, if batching exists (Google: 1000).
+    /// Most refs the engine passes to one [`crate::provider::Provider::fetch`]
+    /// call. How the adapter splits that call further (HTTP batch, one DAV
+    /// `multiget`) is its own business. `None`: the engine uses 100. Google
+    /// 1000, generic DAV 50, iCloud 20.
     pub max_batch: Option<u32>,
+    /// Most requests the engine runs at once for one account (all its
+    /// collections together). `None`: no limit (Google). DAV and iCloud: 2.
+    #[serde(default)]
+    pub max_concurrency_per_account: Option<u32>,
+}
+
+impl Limits {
+    /// Limits with this page size and no rate, batch or concurrency limit.
+    pub fn new(max_page_size: u32) -> Self {
+        Limits {
+            max_page_size,
+            requests_per_minute: None,
+            max_batch: None,
+            max_concurrency_per_account: None,
+        }
+    }
 }

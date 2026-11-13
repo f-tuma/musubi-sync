@@ -10,7 +10,8 @@ use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use jiff::{SignedDuration, Timestamp};
 use musubi_google::{GoogleConfig, GoogleProvider};
 use musubi_model::provider::{
-    Access, ChannelId, Clock, FetchHint, Pass, PushHint, PushSource, Start, Subscription,
+    Access, ChannelId, Clock, Credential, FetchHint, Pass, PushHint, PushSource, Start,
+    Subscription, TokenRefresh,
 };
 use musubi_model::remote::RemoteRef;
 use musubi_model::{
@@ -47,7 +48,7 @@ async fn env(config: Config) -> Env {
     google.token_url = g.token_url().parse().unwrap();
     let p = GoogleProvider::new(google, Arc::new(WallClock)).unwrap();
     let mut cx = account_cx(AccountId::from_u128(1), Timestamp::now());
-    cx.token = g.access_token().into();
+    cx.credential = Credential::Bearer(g.access_token().into());
     cx.clock = Arc::new(WallClock);
     let cal = CollectionRef(g.primary());
     Env { g, p, cx, cal }
@@ -65,10 +66,7 @@ fn seeded(events: u32) -> Config {
 }
 
 fn full() -> FetchHint {
-    FetchHint {
-        start: Start::Full,
-        page_size: None,
-    }
+    FetchHint::new(Start::Full)
 }
 
 impl Env {
@@ -169,15 +167,7 @@ async fn initial_window_reads_only_the_window() {
     )
     .unwrap();
 
-    let pages = e
-        .read_ok(
-            None,
-            FetchHint {
-                start: Start::Window(window),
-                page_size: None,
-            },
-        )
-        .await;
+    let pages = e.read_ok(None, FetchHint::new(Start::Window(window))).await;
     assert!(
         pages
             .iter()
@@ -199,10 +189,8 @@ async fn full_read_pages_across_empty_pages_and_resumes_from_its_cursor() {
         ..seeded(40)
     })
     .await;
-    let hint = FetchHint {
-        start: Start::Full,
-        page_size: NonZeroU32::new(5),
-    };
+    let mut hint = FetchHint::new(Start::Full);
+    hint.page_size = NonZeroU32::new(5);
     let pages = e.read_ok(None, hint).await;
 
     assert!(
@@ -304,10 +292,8 @@ async fn rejected_page_token_restarts_the_pass() {
 async fn page_tokens_rejected_again_and_again_end_the_pass() {
     let e = env(seeded(6)).await;
     e.g.quirk(&e.cal.0, Quirk::RejectPageTokens);
-    let hint = FetchHint {
-        start: Start::Full,
-        page_size: NonZeroU32::new(2),
-    };
+    let mut hint = FetchHint::new(Start::Full);
+    hint.page_size = NonZeroU32::new(2);
     let out = e.read(None, hint).await;
     let err = out.last().unwrap().as_ref().unwrap_err();
     assert!(matches!(err, SyncError::Transient(_)), "{err:?}");
@@ -388,7 +374,9 @@ async fn refresh_issues_tokens_and_revoked_grant_needs_reauth() {
         Err(SyncError::Unauthorized)
     ));
     let old = e.g.refresh_token();
-    let t = e.p.refresh(&SecretString::from(old.clone())).await.unwrap();
+    let t = TokenRefresh::refresh(&e.p, &SecretString::from(old.clone()))
+        .await
+        .unwrap();
     assert_eq!(t.expires_in, Duration::from_secs(3599));
     let rotated = t
         .rotated_refresh
@@ -399,15 +387,19 @@ async fn refresh_issues_tokens_and_revoked_grant_needs_reauth() {
 
     // The new access token works.
     let mut cx = account_cx(AccountId::from_u128(1), Timestamp::now());
-    cx.token = t.access;
+    cx.credential = Credential::Bearer(t.access);
     assert!(e.p.discover(&cx).await.is_ok());
 
     // Rotation revoked the old refresh token; revocation kills the new one.
-    let err = e.p.refresh(&SecretString::from(old)).await.unwrap_err();
-    assert!(matches!(err, SyncError::ReauthRequired), "{err:?}");
+    let err = TokenRefresh::refresh(&e.p, &SecretString::from(old))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SyncError::ReauthRequired { .. }), "{err:?}");
     e.g.revoke_refresh_token(&rotated);
-    let err = e.p.refresh(&SecretString::from(rotated)).await.unwrap_err();
-    assert!(matches!(err, SyncError::ReauthRequired), "{err:?}");
+    let err = TokenRefresh::refresh(&e.p, &SecretString::from(rotated))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SyncError::ReauthRequired { .. }), "{err:?}");
 }
 
 #[tokio::test]
@@ -538,10 +530,8 @@ async fn watch_create_renew_cancel_and_verify() {
             .await
             .unwrap();
     assert_eq!(c.resource, b.resource, "one resource id per calendar");
-    let pending = Subscription {
-        channel: ChannelId("chan-c".into()),
-        ..b.clone()
-    };
+    let mut pending = b.clone();
+    pending.channel = ChannelId("chan-c".into());
     e.p.unsubscribe(&e.cx, &pending).await.unwrap();
     assert!(e.g.channels().is_empty());
 }

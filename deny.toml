@@ -55,6 +55,11 @@ skip = [
     # ring 0.17 uses getrandom 0.2; tempfile (data directories of the musubi-testkit
     # `bench` binary, K7) uses 0.4. Drop when ring moves on.
     { crate = "getrandom@0.2", reason = "ring 0.17 still uses getrandom 0.2" },
+    # calcard 0.3 (musubi-ical, phase 2 K0) hashes with ahash 0.8, whose default
+    # `runtime-rng` uses getrandom 0.3 (and r-efi 5 on UEFI); proptest and tempfile
+    # are on getrandom 0.4. Drop when ahash moves on.
+    { crate = "getrandom@0.3", reason = "ahash 0.8 (calcard) still uses getrandom 0.3" },
+    { crate = "r-efi@5", reason = "getrandom 0.3 (ahash, calcard) still uses r-efi 5" },
 ]
 
 [sources]

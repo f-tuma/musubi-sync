@@ -70,6 +70,7 @@ fn item_write<C: Codec<Event>>(
             .map(|json| (ev, json))
             .map_err(|e| e.to_string()),
         Decoded::Unsupported { reason } => Err(reason),
+        _ => Err("unsupported decode result".to_owned()),
     };
     let (canonical, correlation, occurrences) = match decoded {
         Ok((ev, json)) => {
@@ -310,15 +311,18 @@ mod tests {
     }
 
     fn obj(key: &str, ev: &CalendarEvent, master: Option<&str>) -> RemoteObject {
-        RemoteObject {
-            key: RemoteKey(key.into()),
-            validator: Validator("v1".into()),
-            raw: Raw {
-                media_type: MediaType::Json,
-                body: serde_json::to_vec(ev).unwrap(),
-            },
-            master: master.map(|m| RemoteKey(m.into())),
-        }
+        let raw = Raw {
+            media_type: MediaType::Json,
+            body: serde_json::to_vec(ev).unwrap(),
+        };
+        let mut o = RemoteObject::new(
+            RemoteKey(key.into()),
+            EntityKind::Event,
+            Validator("v1".into()),
+            raw,
+        );
+        o.master = master.map(|m| RemoteKey(m.into()));
+        o
     }
 
     const INDEX: Index = Index {

@@ -35,7 +35,7 @@ pub(crate) async fn google(
             let sub = ch.open().ok_or_else(ApiError::not_found)?;
             match a.google.verify(&headers, sub) {
                 Ok(PushHint::Handshake) => Ok(None),
-                Ok(PushHint::Changed) => Ok(Some(ch)),
+                Ok(PushHint::Changed | _) => Ok(Some(ch)),
                 Err(PushRejected::UnknownChannel) => Err(ApiError::not_found()),
                 Err(PushRejected::BadToken) => Err(ApiError::unauthorized()),
                 Err(PushRejected::Expired) => Err(ApiError::new(

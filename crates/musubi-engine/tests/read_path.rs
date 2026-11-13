@@ -11,15 +11,15 @@ use jiff::{SignedDuration, Timestamp};
 use musubi_engine::{CommitSink, Config, Engine};
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{
-    AccountRecord, AccountState, AccountTokens, ChannelRecord, JobKind, JobSpec, Lane,
+    AccountRecord, AccountState, AccountTokens, ChannelRecord, Credentials, JobKind, JobSpec, Lane,
 };
 use musubi_model::journal::{ChangeOp, ChangeTarget};
 use musubi_model::provider::{Access, ChannelId, RemoteCollection};
 use musubi_model::store::{CollectionState, Coverage, RangePage, RangeQuery};
 use musubi_model::{
     AccountId, CalendarEvent, Change, Codec, CollectionId, CollectionRef, ControlStore, Decoded,
-    EntityId, EntityKind, Event, Raw, RemoteKey, Seq, Storage, StoreError, SyncError, TenantId,
-    TenantStore, TimeWindow, TokenVault,
+    EntityId, EntityKind, Event, Raw, ReauthReason, RemoteKey, Seq, Storage, StoreError, SyncError,
+    TenantId, TenantStore, TimeWindow, TokenVault,
 };
 use musubi_store_sqlite::{SqliteControl, SqliteStorage};
 use musubi_testkit::{
@@ -72,14 +72,9 @@ fn cal(name: &str) -> CollectionRef {
 }
 
 fn meta(name: &str) -> RemoteCollection {
-    RemoteCollection {
-        remote: cal(name),
-        kind: EntityKind::Event,
-        name: name.into(),
-        time_zone: None,
-        access: Access::Owner,
-        primary: name == "cal1",
-    }
+    let mut c = RemoteCollection::new(cal(name), EntityKind::Event, name, Access::Owner);
+    c.primary = name == "cal1";
+    c
 }
 
 impl H {
@@ -108,11 +103,11 @@ impl H {
         vault
             .store(
                 ACCOUNT,
-                &AccountTokens {
+                &Credentials::OAuth(AccountTokens {
                     refresh: SecretString::from("refresh"),
                     access: SecretString::from("access"),
                     access_until: Timestamp::now() + SignedDuration::from_hours(24 * 365 * 10),
-                },
+                }),
             )
             .unwrap();
         let fake = FakeProvider::new();
@@ -668,7 +663,12 @@ async fn reauth_required_marks_the_account_and_stops_polling() {
     let h = H::new();
     h.put_at("a", 1);
     h.connect_and_sync().await;
-    h.fake.fail(Op::Page, SyncError::ReauthRequired);
+    h.fake.fail(
+        Op::Page,
+        SyncError::ReauthRequired {
+            reason: ReauthReason::Rejected,
+        },
+    );
     h.advance(h.config.poll_every_push + Duration::from_secs(1));
     h.engine.run_until_idle().await.unwrap();
     assert_eq!(
@@ -962,19 +962,30 @@ struct AccountVault {
 }
 
 impl TokenVault for AccountVault {
-    fn load(&self, account: AccountId) -> Result<Option<AccountTokens>, StoreError> {
+    fn load(&self, account: AccountId) -> Result<Option<Credentials>, StoreError> {
         if self.control.account(account)?.is_none() {
             return Ok(None);
         }
         self.inner.load(account)
     }
 
-    fn store(&self, account: AccountId, t: &AccountTokens) -> Result<(), StoreError> {
+    fn store(&self, account: AccountId, t: &Credentials) -> Result<(), StoreError> {
         self.inner.store(account, t)
     }
 }
 
 impl H {
+    /// Makes the stored access token due, so the next job refreshes it.
+    fn expire_access(&self) {
+        let Some(Credentials::OAuth(mut tokens)) = self.vault.load(ACCOUNT).unwrap() else {
+            panic!("the account has OAuth tokens");
+        };
+        tokens.access_until = self.clock_now();
+        self.vault
+            .store(ACCOUNT, &Credentials::OAuth(tokens))
+            .unwrap();
+    }
+
     fn account_vault(&self) -> Arc<dyn TokenVault> {
         Arc::new(AccountVault {
             control: self.control.clone(),
@@ -1092,9 +1103,7 @@ async fn removal_keeps_channels_and_tokens_when_a_refresh_fails_transiently() {
     h.put_at("a", 1);
     h.connect_and_sync().await;
     // An expired access token: the removal refreshes it first, and that fails.
-    let mut tokens = h.vault.load(ACCOUNT).unwrap().unwrap();
-    tokens.access_until = h.clock_now();
-    h.vault.store(ACCOUNT, &tokens).unwrap();
+    h.expire_access();
     h.fake
         .fail(Op::Refresh, SyncError::Transient("network".into()));
 
@@ -1116,10 +1125,13 @@ async fn removal_without_a_grant_forgets_the_channels() {
     let h = H::new();
     h.put_at("a", 1);
     h.connect_and_sync().await;
-    let mut tokens = h.vault.load(ACCOUNT).unwrap().unwrap();
-    tokens.access_until = h.clock_now();
-    h.vault.store(ACCOUNT, &tokens).unwrap();
-    h.fake.fail(Op::Refresh, SyncError::ReauthRequired);
+    h.expire_access();
+    h.fake.fail(
+        Op::Refresh,
+        SyncError::ReauthRequired {
+            reason: ReauthReason::Rejected,
+        },
+    );
 
     let engine = h.engine_with::<CanonicalCodec>(h.account_vault());
     engine.remove_account(ACCOUNT).await.unwrap();
@@ -1440,7 +1452,9 @@ async fn failed_delta_probe_after_a_day_rearms_full_reads_only() {
 async fn subscribe_that_made_no_channel_leaves_no_pending_row() {
     for err in [
         SyncError::RateLimited { retry_after: None },
-        SyncError::ReauthRequired,
+        SyncError::ReauthRequired {
+            reason: ReauthReason::Rejected,
+        },
     ] {
         let h = H::new();
         h.put_at("a", 1);

@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::id::Seq;
+use crate::kind::EntityKind;
 use crate::provider::RemoteCollection;
 
 /// Any underlying error, kept as the source for logs.
@@ -16,14 +19,20 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[non_exhaustive]
 pub enum SyncError {
     /// The grant is gone (OAuth `invalid_grant`, revoked access, 401 after a
-    /// fresh token). The engine moves the account to "requires sign-in" and stops
-    /// polling it until the user reconnects. Token refresh is the engine's job;
-    /// the adapter never retries this itself.
-    #[error("account requires re-authorisation")]
-    ReauthRequired,
+    /// fresh token, rejected Basic credentials) or the account's server moved
+    /// out of reach of its credentials. The engine moves the account to
+    /// "requires sign-in" and stops polling it until the user reconnects.
+    /// Token refresh is the engine's job; the adapter never retries this itself.
+    #[error("account requires re-authorisation ({reason:?})")]
+    ReauthRequired {
+        /// Why; shown to the user with the account.
+        reason: ReauthReason,
+    },
     /// The provider rejected the access token (`401`): expired early, clock skew.
-    /// The engine calls [`crate::provider::Provider::refresh`] and retries once;
-    /// a second `Unauthorized` right after a refresh is handled as `ReauthRequired`.
+    /// The engine calls [`crate::provider::TokenRefresh::refresh`] and retries
+    /// once; a second `Unauthorized` right after a refresh is handled as
+    /// `ReauthRequired`. Only for providers with
+    /// [`crate::provider::Provider::oauth`]; others return `ReauthRequired`.
     #[error("access token rejected")]
     Unauthorized,
     /// The provider throttled us (Google `429`, `403 rateLimitExceeded`). The
@@ -47,6 +56,24 @@ pub enum SyncError {
     /// ([`crate::store::CollectionStatus`]) and does not retry until something changes.
     #[error("permanent provider error")]
     Permanent(#[source] BoxError),
+    /// The collection or the principal is gone (`404`) or redirects to another
+    /// address inside the account's allowed origins. The engine queues a
+    /// discovery of the account and runs the collection's job after it. A
+    /// redirect outside the allowed origins is `ReauthRequired` with
+    /// [`ReauthReason::EndpointMoved`] instead.
+    #[error("collection moved; rediscovery required")]
+    Rediscover,
+    /// The account lacks the permission for `kind` (Google `403`
+    /// `insufficientPermissions` / `ACCESS_TOKEN_SCOPE_INSUFFICIENT`), e.g. the
+    /// user revoked a scope. Not `Unauthorized`: refreshing does not help. The
+    /// engine marks the collection `missing_scope`, does not retry it and
+    /// queues a discovery, whose [`crate::provider::Discovery::unauthorized`]
+    /// then lists the kind.
+    #[error("missing permission for {kind}")]
+    MissingScope {
+        /// The kind the account may not read.
+        kind: EntityKind,
+    },
     /// Discovery listed some collections but could not finish. The engine uses
     /// `found` to add and update collections but must not treat a collection
     /// missing from it as deleted.
@@ -58,6 +85,21 @@ pub enum SyncError {
         #[source]
         source: BoxError,
     },
+}
+
+/// Why an account needs the user to sign in again
+/// ([`SyncError::ReauthRequired`]). Stored names are `snake_case`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ReauthReason {
+    /// The provider rejected the credentials: OAuth `invalid_grant` or revoked
+    /// access, a `401` right after a refresh, a `401` to Basic credentials
+    /// (for iCloud: the app-specific password is no longer valid).
+    Rejected,
+    /// The server redirected outside the origins the account's password may be
+    /// sent to (`endpoint_moved`). Nothing was sent there.
+    EndpointMoved,
 }
 
 /// Why a push notification was rejected by [`crate::provider::PushSource::verify`].

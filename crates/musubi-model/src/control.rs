@@ -6,8 +6,8 @@
 //! of the engine (jobs) and the webhook handler (channels). Every operation is
 //! one transaction; writes are durable when the call returns (`synchronous=FULL`).
 //!
-//! [`TokenVault`] is the engine's view of account tokens: plain tokens in,
-//! plain tokens out. `musubi-syncd` implements it over
+//! [`TokenVault`] is the engine's view of account credentials: plain
+//! [`Credentials`] in, plain credentials out. `musubi-syncd` implements it over
 //! [`ControlStore::write_tokens`] and [`ControlStore::read_tokens`] with
 //! encryption bound to tenant and account.
 //!
@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::capability::ProviderId;
 use crate::error::StoreError;
 use crate::id::{AccountId, CollectionId, TenantId};
-use crate::provider::{ChannelId, Subscription};
+use crate::kind::EntityKind;
+use crate::provider::{ChannelId, Endpoint, Subscription};
 
 /// Control plane store. Implemented by `musubi-store-sqlite`.
 pub trait ControlStore: Send + Sync {
@@ -79,6 +80,23 @@ pub trait ControlStore: Send + Sync {
 
     /// The sealed token blob; `None` if none was written. Opened by `musubi-syncd`.
     fn read_tokens(&self, id: AccountId) -> Result<Option<SealedTokens>, StoreError>;
+
+    /// Replaces the account's non-secret [`Endpoint`] (server address and
+    /// discovered state, docs/plan/phase2.md 3.5), stored as JSON in
+    /// `accounts.endpoint`. The engine calls it when
+    /// [`crate::provider::Discovery::endpoint`] is `Some`. `NotFound` if the
+    /// account is absent.
+    fn set_endpoint(&self, id: AccountId, e: &Endpoint) -> Result<(), StoreError>;
+
+    /// The account's endpoint; `None` if none was written (Google never
+    /// writes one). `NotFound` if the account is absent.
+    fn endpoint(&self, id: AccountId) -> Result<Option<Endpoint>, StoreError>;
+
+    /// Replaces the kinds the account has no permission for
+    /// ([`crate::provider::Discovery::unauthorized`], docs/plan/phase2.md 6.1),
+    /// stored as a JSON array in `accounts.missing`. An empty slice clears it.
+    /// `NotFound` if the account is absent.
+    fn set_missing(&self, id: AccountId, kinds: &[EntityKind]) -> Result<(), StoreError>;
 
     /// Stores a pending OAuth sign-in under the hash of its `state` parameter
     /// and deletes expired ones. `AlreadyExists` on a hash collision.
@@ -163,25 +181,54 @@ pub trait ControlStore: Send + Sync {
     fn channels_expiring(&self, before: Timestamp) -> Result<Vec<ChannelRecord>, StoreError>;
 }
 
-/// Account tokens as the engine sees them, in plain form.
+/// Account credentials as the engine sees them, in plain form.
 ///
 /// Implemented by `musubi-syncd` over the sealed blob of [`ControlStore`]
-/// (AEAD bound to tenant and account). Synchronous; writes are durable on return.
+/// (AES-256-GCM, additional data bound to tenant and account). Synchronous;
+/// writes are durable on return.
+///
+/// The variant is chosen by the account's provider (`accounts.provider`), never
+/// by the blob's content: `google` reads and writes [`Credentials::OAuth`],
+/// `dav` and `icloud` [`Credentials::Basic`]. The two are sealed under
+/// different additional data, so one is never opened as the other:
+///
+/// - `OAuth` exactly in the phase-1 format (no variant tag, `musubi-tokens-v1`),
+///   so phase-1 blobs open unchanged;
+/// - `Basic` as `{ username, password }` under `musubi-basic-v1`.
 pub trait TokenVault: Send + Sync {
-    /// The account's tokens; `None` if none were stored. `Corrupt` if the blob
-    /// cannot be opened (wrong key, moved to another account).
-    fn load(&self, account: AccountId) -> Result<Option<AccountTokens>, StoreError>;
+    /// The account's credentials; `None` if none were stored. `NotFound` if
+    /// the account is absent. `Corrupt` if the blob cannot be opened (wrong
+    /// key, moved to another account, sealed as the other variant).
+    fn load(&self, account: AccountId) -> Result<Option<Credentials>, StoreError>;
 
-    /// Replaces the account's tokens.
+    /// Replaces the account's credentials. A variant that does not match the
+    /// account's provider is an error and stores nothing.
     ///
-    /// After [`crate::provider::Provider::refresh`] returned a rotated refresh
-    /// token, the engine stores it here and uses the new access token only after
-    /// this returned `Ok` (proposal 7): the old refresh token is already invalid,
-    /// so losing the new one would force the user to sign in again.
-    fn store(&self, account: AccountId, t: &AccountTokens) -> Result<(), StoreError>;
+    /// After [`crate::provider::TokenRefresh::refresh`] returned a rotated
+    /// refresh token, the engine stores it here and uses the new access token
+    /// only after this returned `Ok` (proposal 7): the old refresh token is
+    /// already invalid, so losing the new one would force the user to sign in
+    /// again.
+    fn store(&self, account: AccountId, c: &Credentials) -> Result<(), StoreError>;
 }
 
-/// Tokens of one account. `Debug` shows no secret.
+/// Secrets of one account, in memory only. `Debug` shows no secret.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Credentials {
+    /// OAuth tokens (Google).
+    OAuth(AccountTokens),
+    /// Username and password for HTTP Basic (DAV; on iCloud an app-specific
+    /// password). Never refreshed.
+    Basic {
+        /// User name.
+        username: String,
+        /// Password.
+        password: SecretString,
+    },
+}
+
+/// OAuth tokens of one account. `Debug` shows no secret.
 #[derive(Debug, Clone)]
 pub struct AccountTokens {
     /// OAuth refresh token.

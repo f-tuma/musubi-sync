@@ -320,7 +320,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 Ok(cx) => gone_ok(self.drop_channels(&cx, &channels).await)?,
                 // Without a grant the channels cannot be stopped; they expire.
                 // Any other failure retries the removal, which keeps the tokens.
-                Err(EngineError::Sync(SyncError::ReauthRequired)) => {
+                Err(EngineError::Sync(SyncError::ReauthRequired { .. })) => {
                     tracing::warn!(%account, "no grant to stop push channels with");
                     for ch in channels {
                         gone_ok(self.ctl(move |c| c.delete_channel(ch.id())).await)?;
@@ -648,14 +648,12 @@ mod tests {
     const TENANT: TenantId = TenantId::from_u128(0x7e);
 
     fn collection(name: String) -> RemoteCollection {
-        RemoteCollection {
-            remote: CollectionRef(name.clone()),
-            kind: EntityKind::Event,
+        RemoteCollection::new(
+            CollectionRef(name.clone()),
+            EntityKind::Event,
             name,
-            time_zone: None,
-            access: Access::Owner,
-            primary: false,
-        }
+            Access::Owner,
+        )
     }
 
     /// Writes cancelled at random moments while the writer keeps retiring:

@@ -1,18 +1,24 @@
 //! Type test of the paging contract (docs/plan/phase1.md, K0): the `Provider`
 //! interface can be implemented without `unsafe` or `todo!()`, and a consumer
 //! written against it handles empty mid-stream pages, cursor resume, deltas,
-//! expired cursors and window reads.
+//! expired cursors and window reads. Phase 2 K0: a collection with ctag+etag
+//! delta lists its full read as stubs whose bodies come from `fetch`.
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
 use http::Uri;
 use jiff::{SignedDuration, Timestamp};
-use musubi_model::provider::{ChannelId, FetchHint, Pass, PushHint, Start};
-use musubi_model::remote::{MediaType, Raw};
+use musubi_model::capability::{
+    DeltaSupport, KindCapabilities, Limits, ProviderDescriptor, ProviderId, PushSupport,
+};
+use musubi_model::provider::{
+    Access, ChannelId, FetchHint, Pass, PushHint, RemoteCollection, Start, Stub,
+};
+use musubi_model::remote::{MediaType, Raw, RemoteRef};
 use musubi_model::{
-    AccountId, ChangePage, CollectionRef, Cursor, Provider, PushRejected, RemoteKey, RemoteObject,
-    SyncError, TimeWindow, Validator,
+    AccountId, ChangePage, CollectionRef, Cursor, EntityKind, Provider, PushRejected, RemoteKey,
+    RemoteObject, SyncError, TimeWindow, Validator,
 };
 use musubi_testkit::{FakeObject, FakeProvider, account_cx, block_on, collect};
 
@@ -20,15 +26,15 @@ const NOW: Timestamp = Timestamp::constant(1_794_000_000, 0);
 
 fn obj(key: &str, span: Option<(i64, i64)>) -> FakeObject {
     FakeObject {
-        object: RemoteObject {
-            key: RemoteKey(key.into()),
-            validator: Validator(format!("\"{key}-v1\"")),
-            raw: Raw {
+        object: RemoteObject::new(
+            RemoteKey(key.into()),
+            EntityKind::Event,
+            Validator(format!("\"{key}-v1\"")),
+            Raw {
                 media_type: MediaType::Json,
                 body: format!("{{\"id\":\"{key}\"}}").into_bytes(),
             },
-            master: None,
-        },
+        ),
         span: span.map(|(a, b)| {
             (
                 NOW + SignedDuration::from_hours(a),
@@ -39,10 +45,7 @@ fn obj(key: &str, span: Option<(i64, i64)>) -> FakeObject {
 }
 
 fn hint(start: Start) -> FetchHint {
-    FetchHint {
-        start,
-        page_size: None,
-    }
+    FetchHint::new(start)
 }
 
 /// Reads a stream the way the engine does: stop after `last` or the first error.
@@ -266,4 +269,64 @@ fn push_notifications_are_verified_against_the_subscription() {
         push.verify(&http::HeaderMap::new(), &sub),
         Err(PushRejected::Malformed(_))
     ));
+}
+
+/// Five objects in a listed collection with the given per-collection delta.
+fn listed(fake: &FakeProvider, delta: Option<DeltaSupport>) -> CollectionRef {
+    let col = CollectionRef("dav".into());
+    let mut meta = RemoteCollection::new(col.clone(), EntityKind::Event, "dav", Access::Owner);
+    meta.delta = delta;
+    fake.add_collection(meta);
+    for k in ["a", "b", "c", "d", "e"] {
+        fake.put(&col, obj(k, None));
+    }
+    col
+}
+
+fn stubs(pages: &[ChangePage]) -> Vec<Stub> {
+    pages.iter().flat_map(|p| p.stubs.clone()).collect()
+}
+
+#[test]
+fn ctag_etag_collection_lists_stubs_and_fetch_returns_bodies() {
+    let fake = FakeProvider::new();
+    let col = listed(&fake, Some(DeltaSupport::CtagEtag));
+    let pages = read(&fake, &col, None, Start::Full).unwrap();
+    assert!(keys(&pages).is_empty(), "no bodies in a stub listing");
+    let listed = stubs(&pages);
+    let names: Vec<_> = listed.iter().map(|s| s.key.0.as_str()).collect();
+    assert_eq!(names, ["a", "b", "c", "d", "e"]);
+    assert!(
+        listed
+            .iter()
+            .all(|s| s.validator == Some(Validator(format!("\"{}-v1\"", s.key.0))))
+    );
+
+    let cx = account_cx(AccountId::from_u128(1), NOW);
+    let refs: Vec<_> = listed[..2]
+        .iter()
+        .map(|s| RemoteRef {
+            collection: col.clone(),
+            key: s.key.clone(),
+        })
+        .collect();
+    let bodies = block_on(fake.fetch(&cx, &refs)).unwrap();
+    assert_eq!(bodies, [obj("a", None).object, obj("b", None).object]);
+}
+
+#[test]
+fn delta_choice_falls_back_from_the_collection_to_the_kind() {
+    let kind = KindCapabilities::new(EntityKind::Event, DeltaSupport::CtagEtag, PushSupport::None);
+    let d = ProviderDescriptor::new(ProviderId("dav".into()), vec![kind], Limits::new(2));
+    let fake = FakeProvider::new().with_descriptor(d);
+    assert_eq!(fake.descriptor().kinds[0].delta, DeltaSupport::CtagEtag);
+
+    let col = listed(&fake, None);
+    let pages = read(&fake, &col, None, Start::Full).unwrap();
+    assert_eq!(stubs(&pages).len(), 5, "the kind's ctag+etag applies");
+
+    let col = listed(&fake, Some(DeltaSupport::SyncToken));
+    let pages = read(&fake, &col, None, Start::Full).unwrap();
+    assert!(stubs(&pages).is_empty(), "the collection's own delta wins");
+    assert_eq!(keys(&pages), ["a", "b", "c", "d", "e"]);
 }

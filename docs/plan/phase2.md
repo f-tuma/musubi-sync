@@ -81,7 +81,7 @@ Nové externí závislosti a proč:
 | `quick-xml` (s `serialize`) | `musubi-dav` | WebDAV odpovědi; malé, bez C |
 | žádný nový HTTP klient | `musubi-dav` | stejný `reqwest` (rustls, `ring`) jako `musubi-google` |
 
-Licence obou nových závislostí je potřeba ověřit v K0 přes `cargo deny check` **(neověřeno: calcard deklaruje Apache-2.0 OR MIT)**. DNS SRV z RFC 6764 se nedělá (kapitola 5.1), proto `hickory-resolver` nepřibývá.
+Licence obou nových závislostí ověřil K0 přes `cargo deny check`: `calcard` je Apache-2.0 OR MIT, `quick-xml` MIT. `calcard` přes `ahash` 0.8 přináší druhé verze `getrandom` (0.3) a `r-efi` (5); obě mají v `deny.toml` výjimku s důvodem. `calcard` se bere bez výchozí vlastnosti `jmap`, protože `musubi-ical` mapuje na vlastní profily JSCalendar a JSContact. DNS SRV z RFC 6764 se nedělá (kapitola 5.1), proto `hickory-resolver` nepřibývá.
 
 ## 3. Změny modelu a kontraktu adaptéru
 

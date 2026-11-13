@@ -9,11 +9,11 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use jiff::Timestamp;
 use musubi_model::control::{
-    AccountRecord, AccountState, AccountTokens, ChannelRecord, ChannelState, Job, JobKind, JobSpec,
-    Lane,
+    AccountRecord, AccountState, AccountTokens, ChannelRecord, ChannelState, Credentials, Job,
+    JobKind, JobSpec, Lane,
 };
 use musubi_model::provider::{
-    AccountCx, ChannelId, FetchHint, Limiter, Pass, PushSource, Start, Subscription,
+    AccountCx, ChannelId, Credential, FetchHint, Limiter, Pass, PushSource, Start, Subscription,
 };
 use musubi_model::remote::RemoteRef;
 use musubi_model::store::{
@@ -21,8 +21,8 @@ use musubi_model::store::{
     OccurrenceWrite, PageWrite, SeriesExtension,
 };
 use musubi_model::{
-    AccountId, ChangePage, Codec, CollectionId, Cursor, EntityKind, Event, ReadId, RemoteKey, Seq,
-    Storage, SyncError, TenantId, TenantStore, TimeWindow,
+    AccountId, ChangePage, Codec, CollectionId, Cursor, EntityKind, Event, ReadId, ReauthReason,
+    RemoteKey, Seq, Storage, SyncError, TenantId, TenantStore, TimeWindow,
 };
 
 use crate::{AccountRt, CollectionRt, Engine, EngineError, after, blocking, ingest, sync_dedup};
@@ -190,7 +190,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     .await;
                 self.retry(job, e)
             }
-            EngineError::Sync(SyncError::ReauthRequired | SyncError::Unauthorized) => {
+            EngineError::Sync(SyncError::ReauthRequired { .. } | SyncError::Unauthorized) => {
                 self.with_rt(rec.id, |rt| rt.unauthorized = false);
                 tracing::warn!(account = %rec.id, "account requires sign-in");
                 let id = rec.id;
@@ -268,37 +268,60 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         }
     }
 
-    /// The account's provider context, refreshing the access token when it is
-    /// about to expire or `force` is set.
+    /// The account's provider context. OAuth: refreshes the access token when
+    /// it is about to expire or `force` is set, if the provider has
+    /// [`musubi_model::Provider::oauth`]. Basic credentials are used as they are.
     pub(crate) async fn cx(
         &self,
         account: AccountId,
         force: bool,
     ) -> Result<AccountCx, EngineError> {
         let vault = self.inner.vault.clone();
-        let tokens = blocking(move || Ok(vault.load(account)?))
-            .await?
-            .ok_or(SyncError::ReauthRequired)?;
-        let now = self.now();
-        let tokens = if force || tokens.access_until <= after(now, REFRESH_EARLY) {
-            let t = self.inner.provider.refresh(&tokens.refresh).await?;
-            let fresh = AccountTokens {
-                refresh: t.rotated_refresh.unwrap_or(tokens.refresh),
-                access: t.access,
-                access_until: after(now, t.expires_in),
-            };
-            let (vault, stored) = (self.inner.vault.clone(), fresh.clone());
-            blocking(move || Ok(vault.store(account, &stored)?)).await?;
-            fresh
-        } else {
-            tokens
+        let creds =
+            blocking(move || Ok(vault.load(account)?))
+                .await?
+                .ok_or(SyncError::ReauthRequired {
+                    reason: ReauthReason::Rejected,
+                })?;
+        let credential = match creds {
+            Credentials::OAuth(tokens) => {
+                Credential::Bearer(self.access(account, tokens, force).await?)
+            }
+            Credentials::Basic { username, password } => Credential::Basic { username, password },
+            _ => return Err(SyncError::Permanent("unsupported credentials".into()).into()),
         };
-        Ok(AccountCx {
+        Ok(AccountCx::new(
             account,
-            token: tokens.access,
-            limiter: self.rt(account).limiter,
-            clock: self.inner.clock.clone(),
-        })
+            credential,
+            self.rt(account).limiter,
+            self.inner.clock.clone(),
+        ))
+    }
+
+    /// A usable access token: `tokens.access`, or a refreshed one stored first.
+    async fn access(
+        &self,
+        account: AccountId,
+        tokens: AccountTokens,
+        force: bool,
+    ) -> Result<secrecy::SecretString, EngineError> {
+        let now = self.now();
+        let Some(oauth) = self.inner.provider.oauth() else {
+            return Ok(tokens.access);
+        };
+        if !force && tokens.access_until > after(now, REFRESH_EARLY) {
+            return Ok(tokens.access);
+        }
+        let t = oauth.refresh(&tokens.refresh).await?;
+        let fresh = AccountTokens {
+            refresh: t.rotated_refresh.unwrap_or(tokens.refresh),
+            access: t.access,
+            access_until: after(now, t.expires_in),
+        };
+        let access = fresh.access.clone();
+        let vault = self.inner.vault.clone();
+        blocking(move || Ok(vault.store(account, &Credentials::OAuth(fresh))?)).await?;
+        Ok(access)
     }
 
     fn rt(&self, account: AccountId) -> AccountRt {
@@ -513,7 +536,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             Err(
                 SyncError::Permanent(_)
                 | SyncError::RateLimited { .. }
-                | SyncError::ReauthRequired
+                | SyncError::ReauthRequired { .. }
                 | SyncError::Unauthorized,
             ) => self.ctl(move |c| c.delete_channel(&id)).await?,
             // The channel may be open (lost reply, timeout, 5xx): the row
@@ -669,10 +692,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         start: Start,
         read: Option<ReadId>,
     ) -> Result<(), EngineError> {
-        let hint = FetchHint {
-            start,
-            page_size: self.inner.config.page_size,
-        };
+        let mut hint = FetchHint::new(start);
+        hint.page_size = self.inner.config.page_size;
         let mut pages = self
             .inner
             .provider
@@ -699,10 +720,17 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let ChangePage {
             pass,
             upserts,
+            stubs,
             removals,
             cursor,
             last,
+            ..
         } = page;
+        if !stubs.is_empty() {
+            // shortcut: no provider of phase 1 lists stubs; K5 fetches their bodies.
+            let msg = "pages with stubs are not supported yet";
+            return Err(SyncError::Permanent(msg.into()).into());
+        }
         let c = &self.inner.config;
         let now = self.now();
         let index = ingest::Index {
@@ -763,13 +791,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     .collect();
                 let found = self.inner.provider.fetch(cx, &refs).await?;
                 if !found.is_empty() {
-                    let page = ChangePage {
-                        pass: Pass::Full,
-                        upserts: found,
-                        removals: Vec::new(),
-                        cursor: None,
-                        last: false,
-                    };
+                    let mut page = ChangePage::new(Pass::Full, None, false);
+                    page.upserts = found;
                     self.ingest(tenant, id, page, Some(r)).await?;
                 }
                 if !more {
@@ -1181,8 +1204,7 @@ fn new_channel_id(col: CollectionId) -> ChannelId {
 /// The subscription to stop a pending channel by: its id, with the resource
 /// and collection of a known channel of the same collection.
 fn pending_sub(id: &ChannelId, known: &Subscription) -> Subscription {
-    Subscription {
-        channel: id.clone(),
-        ..known.clone()
-    }
+    let mut sub = known.clone();
+    sub.channel = id.clone();
+    sub
 }
