@@ -17,13 +17,16 @@
 //! `kid` names the token key (first byte of SHA-256 of a domain tag and the
 //! key) for rotation (proposal ch. 7). The associated data is
 //! `musubi-tokens-v1 | 0x01 | kid | tenant (16) | account (16)`, so a blob
-//! copied to another account or tenant row fails to open.
+//! copied to another account or tenant row fails to open. Basic credentials
+//! (DAV, iCloud) use the same layout over `{"username","password"}` with the
+//! tag `musubi-basic-v1`, so one variant never opens as the other.
 
 use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jiff::Timestamp;
+use musubi_model::capability::ProviderId;
 use musubi_model::control::{AccountTokens, Credentials, Scope, SealedTokens};
 use musubi_model::{AccountId, ControlStore, StoreError, TenantId, TokenVault};
 use musubi_store_sqlite::SqliteControl;
@@ -31,12 +34,14 @@ use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use secrecy::{ExposeSecret, SecretString};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 const TOKEN_PREFIX: &str = "mt1.";
 const SEAL_VERSION: u8 = 1;
 const SEAL_AAD: &[u8] = b"musubi-tokens-v1";
+const BASIC_AAD: &[u8] = b"musubi-basic-v1";
 /// Version, key id and nonce.
 const HEAD: usize = 2 + NONCE_LEN;
 
@@ -138,9 +143,15 @@ struct Plain<S> {
     until: Timestamp,
 }
 
-fn aad(kid: u8, tenant: TenantId, account: AccountId) -> Vec<u8> {
+#[derive(Serialize, Deserialize)]
+struct Basic<S> {
+    username: S,
+    password: S,
+}
+
+fn aad(tag: &[u8], kid: u8, tenant: TenantId, account: AccountId) -> Vec<u8> {
     [
-        SEAL_AAD,
+        tag,
         &[SEAL_VERSION, kid],
         &tenant.to_bytes(),
         &account.to_bytes(),
@@ -158,6 +169,7 @@ impl Sealer {
         }
     }
 
+    /// Seals OAuth tokens in the phase-1 format.
     pub(crate) fn seal(
         &self,
         tenant: TenantId,
@@ -169,22 +181,7 @@ impl Sealer {
             access: t.access.expose_secret(),
             until: t.access_until,
         };
-        let mut buf = Zeroizing::new(serde_json::to_vec(&plain).expect("tokens serialise"));
-        let nonce = random::<NONCE_LEN>();
-        let mut out = Vec::with_capacity(HEAD + buf.len() + AES_256_GCM.tag_len());
-        out.extend_from_slice(&[SEAL_VERSION, self.kid]);
-        out.extend_from_slice(&nonce);
-        let tag = self
-            .key
-            .seal_in_place_separate_tag(
-                Nonce::assume_unique_for_key(nonce),
-                Aad::from(aad(self.kid, tenant, account)),
-                &mut buf[..],
-            )
-            .expect("AES-GCM input below its size limit");
-        out.extend_from_slice(&buf);
-        out.extend_from_slice(tag.as_ref());
-        SealedTokens(out)
+        self.seal_json(SEAL_AAD, tenant, account, &plain)
     }
 
     pub(crate) fn open(
@@ -193,6 +190,71 @@ impl Sealer {
         account: AccountId,
         sealed: &SealedTokens,
     ) -> Result<AccountTokens, StoreError> {
+        let p: Plain<String> = self.open_json(SEAL_AAD, tenant, account, sealed)?;
+        Ok(AccountTokens {
+            refresh: SecretString::from(p.refresh),
+            access: SecretString::from(p.access),
+            access_until: p.until,
+        })
+    }
+
+    pub(crate) fn seal_basic(
+        &self,
+        tenant: TenantId,
+        account: AccountId,
+        username: &str,
+        password: &SecretString,
+    ) -> SealedTokens {
+        let plain = Basic {
+            username,
+            password: password.expose_secret(),
+        };
+        self.seal_json(BASIC_AAD, tenant, account, &plain)
+    }
+
+    /// Username and password sealed by [`Sealer::seal_basic`].
+    pub(crate) fn open_basic(
+        &self,
+        tenant: TenantId,
+        account: AccountId,
+        sealed: &SealedTokens,
+    ) -> Result<(String, SecretString), StoreError> {
+        let b: Basic<String> = self.open_json(BASIC_AAD, tenant, account, sealed)?;
+        Ok((b.username, SecretString::from(b.password)))
+    }
+
+    fn seal_json<T: Serialize>(
+        &self,
+        tag: &[u8],
+        tenant: TenantId,
+        account: AccountId,
+        plain: &T,
+    ) -> SealedTokens {
+        let mut buf = Zeroizing::new(serde_json::to_vec(plain).expect("secrets serialise"));
+        let nonce = random::<NONCE_LEN>();
+        let mut out = Vec::with_capacity(HEAD + buf.len() + AES_256_GCM.tag_len());
+        out.extend_from_slice(&[SEAL_VERSION, self.kid]);
+        out.extend_from_slice(&nonce);
+        let tag = self
+            .key
+            .seal_in_place_separate_tag(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(aad(tag, self.kid, tenant, account)),
+                &mut buf[..],
+            )
+            .expect("AES-GCM input below its size limit");
+        out.extend_from_slice(&buf);
+        out.extend_from_slice(tag.as_ref());
+        SealedTokens(out)
+    }
+
+    fn open_json<T: DeserializeOwned>(
+        &self,
+        tag: &[u8],
+        tenant: TenantId,
+        account: AccountId,
+        sealed: &SealedTokens,
+    ) -> Result<T, StoreError> {
         let bad = || StoreError::Corrupt("sealed tokens do not open for this account".into());
         let b = &sealed.0;
         if b.len() < HEAD || b[0] != SEAL_VERSION {
@@ -209,16 +271,28 @@ impl Sealer {
             .key
             .open_in_place(
                 nonce,
-                Aad::from(aad(self.kid, tenant, account)),
+                Aad::from(aad(tag, self.kid, tenant, account)),
                 &mut buf[..],
             )
             .map_err(|_| bad())?;
-        let p: Plain<String> = serde_json::from_slice(plain).map_err(|_| bad())?;
-        Ok(AccountTokens {
-            refresh: SecretString::from(p.refresh),
-            access: SecretString::from(p.access),
-            access_until: p.until,
-        })
+        serde_json::from_slice(plain).map_err(|_| bad())
+    }
+}
+
+/// Which [`Credentials`] variant an account holds, by its provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    OAuth,
+    Basic,
+}
+
+fn kind(p: &ProviderId) -> Result<Kind, StoreError> {
+    match p.0.as_str() {
+        "google" => Ok(Kind::OAuth),
+        "dav" | "icloud" => Ok(Kind::Basic),
+        other => Err(StoreError::Backend(
+            format!("no credentials kind for provider {other}").into(),
+        )),
     }
 }
 
@@ -233,25 +307,32 @@ impl TokenVault for Vault {
         let Some(a) = self.control.account(account)? else {
             return Ok(None);
         };
-        match self.control.read_tokens(account)? {
-            Some(sealed) => self
-                .sealer
-                .open(a.tenant, account, &sealed)
-                .map(|t| Some(Credentials::OAuth(t))),
-            None => Ok(None),
-        }
+        let Some(sealed) = self.control.read_tokens(account)? else {
+            return Ok(None);
+        };
+        Ok(Some(match kind(&a.provider)? {
+            Kind::OAuth => Credentials::OAuth(self.sealer.open(a.tenant, account, &sealed)?),
+            Kind::Basic => {
+                let (username, password) = self.sealer.open_basic(a.tenant, account, &sealed)?;
+                Credentials::Basic { username, password }
+            }
+        }))
     }
 
     fn store(&self, account: AccountId, c: &Credentials) -> Result<(), StoreError> {
-        // shortcut: OAuth only (phase 1 format); K1 adds Basic under `musubi-basic-v1`.
-        let Credentials::OAuth(t) = c else {
-            return Err(StoreError::Backend(
-                "this vault stores OAuth tokens only (Basic comes in K1)".into(),
-            ));
-        };
         let a = self.control.account(account)?.ok_or(StoreError::NotFound)?;
-        self.control
-            .write_tokens(account, &self.sealer.seal(a.tenant, account, t))
+        let sealed = match (kind(&a.provider)?, c) {
+            (Kind::OAuth, Credentials::OAuth(t)) => self.sealer.seal(a.tenant, account, t),
+            (Kind::Basic, Credentials::Basic { username, password }) => self
+                .sealer
+                .seal_basic(a.tenant, account, username, password),
+            (k, _) => {
+                return Err(StoreError::Backend(
+                    format!("provider {} takes {k:?} credentials", a.provider.0).into(),
+                ));
+            }
+        };
+        self.control.write_tokens(account, &sealed)
     }
 }
 
@@ -284,6 +365,322 @@ mod tests {
         let mut flipped = sealed.clone();
         *flipped.0.last_mut().unwrap() ^= 1;
         assert!(s.open(t, a, &flipped).is_err(), "tampered");
+    }
+
+    #[test]
+    fn basic_credentials_open_only_as_basic_for_their_account() {
+        let s = Sealer::new(&[7; 32]);
+        let (t, a) = (TenantId::from_u128(1), AccountId::from_u128(2));
+        let pw = SecretString::from("app-specific");
+        let sealed = s.seal_basic(t, a, "me@example.com", &pw);
+        let (user, back) = s.open_basic(t, a, &sealed).unwrap();
+        assert_eq!(user, "me@example.com");
+        assert_eq!(back.expose_secret(), "app-specific");
+        assert!(s.open_basic(t, AccountId::from_u128(3), &sealed).is_err());
+        assert!(s.open_basic(TenantId::from_u128(9), a, &sealed).is_err());
+        // The variants use different additional data.
+        assert!(s.open(t, a, &sealed).is_err(), "Basic opened as OAuth");
+        let oauth = s.seal(t, a, &tokens());
+        assert!(s.open_basic(t, a, &oauth).is_err(), "OAuth opened as Basic");
+    }
+
+    fn vault() -> (tempfile::TempDir, Vault) {
+        let d = tempfile::tempdir().unwrap();
+        let control = SqliteControl::open(&d.path().join("control.db")).unwrap();
+        control.insert_tenant(TenantId::from_u128(1)).unwrap();
+        let v = Vault {
+            control: Arc::new(control),
+            sealer: Arc::new(Sealer::new(&[7; 32])),
+        };
+        (d, v)
+    }
+
+    fn add_account(v: &Vault, id: u128, provider: &str) -> AccountId {
+        let id = AccountId::from_u128(id);
+        v.control
+            .upsert_account(&musubi_model::control::AccountRecord {
+                id,
+                tenant: TenantId::from_u128(1),
+                provider: ProviderId(provider.into()),
+                subject: format!("s{id}"),
+                state: musubi_model::control::AccountState::Active,
+            })
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn vault_picks_the_variant_by_provider() {
+        let (_d, v) = vault();
+        let google = add_account(&v, 1, "google");
+        let dav = add_account(&v, 2, "dav");
+        let icloud = add_account(&v, 3, "icloud");
+        let basic = || Credentials::Basic {
+            username: "u".into(),
+            password: SecretString::from("p"),
+        };
+        assert!(v.load(google).unwrap().is_none());
+        assert!(v.load(AccountId::from_u128(99)).unwrap().is_none());
+
+        v.store(google, &Credentials::OAuth(tokens())).unwrap();
+        assert!(matches!(
+            v.load(google).unwrap(),
+            Some(Credentials::OAuth(_))
+        ));
+        for id in [dav, icloud] {
+            v.store(id, &basic()).unwrap();
+            let Some(Credentials::Basic { username, password }) = v.load(id).unwrap() else {
+                panic!("Basic expected");
+            };
+            assert_eq!((username.as_str(), password.expose_secret()), ("u", "p"));
+        }
+
+        // A mismatched variant is refused and the stored blob stays.
+        let before = v.control.read_tokens(google).unwrap();
+        assert!(v.store(google, &basic()).is_err());
+        assert_eq!(v.control.read_tokens(google).unwrap(), before);
+        let before = v.control.read_tokens(dav).unwrap();
+        assert!(v.store(dav, &Credentials::OAuth(tokens())).is_err());
+        assert_eq!(v.control.read_tokens(dav).unwrap(), before);
+        let none = add_account(&v, 4, "icloud");
+        assert!(v.store(none, &Credentials::OAuth(tokens())).is_err());
+        assert!(v.control.read_tokens(none).unwrap().is_none());
+
+        // A blob moved to another account's row does not open there.
+        v.control.write_tokens(icloud, &before.unwrap()).unwrap();
+        assert!(matches!(v.load(icloud), Err(StoreError::Corrupt(_))));
+        // Nor does an OAuth blob in a Basic account's row.
+        let oauth = v.control.read_tokens(google).unwrap().unwrap();
+        v.control.write_tokens(dav, &oauth).unwrap();
+        assert!(matches!(v.load(dav), Err(StoreError::Corrupt(_))));
+    }
+
+    /// Phase-1 code and schema, copied verbatim from commit b2e7758
+    /// (`schema.rs` `CONTROL`, `crypto.rs` `Plain`, `aad`, `seal`, `open`).
+    mod phase1 {
+        use super::*;
+
+        pub const CONTROL: &str = r#"
+CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+INSERT OR IGNORE INTO meta VALUES ('lease', 0);
+CREATE TABLE IF NOT EXISTS tenants(id BLOB PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS api_keys(
+  hash BLOB PRIMARY KEY, tenant BLOB NOT NULL, scope TEXT NOT NULL,
+  created INTEGER NOT NULL, revoked INTEGER);
+CREATE INDEX IF NOT EXISTS api_keys_tenant ON api_keys(tenant);
+CREATE TABLE IF NOT EXISTS accounts(
+  id BLOB PRIMARY KEY, tenant BLOB NOT NULL, provider TEXT NOT NULL, subject TEXT NOT NULL,
+  state TEXT NOT NULL, tokens BLOB,
+  UNIQUE(tenant, provider, subject));
+CREATE TABLE IF NOT EXISTS oauth_states(
+  hash BLOB PRIMARY KEY, tenant BLOB NOT NULL, provider TEXT NOT NULL, account BLOB,
+  verifier TEXT NOT NULL, expires INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS oauth_states_expires ON oauth_states(expires);
+CREATE TABLE IF NOT EXISTS jobs(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, tenant BLOB NOT NULL, account BLOB,
+  lane TEXT NOT NULL, kind TEXT NOT NULL, priority INTEGER NOT NULL, due INTEGER NOT NULL,
+  dedup TEXT, lease INTEGER, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS jobs_due ON jobs(lane, priority DESC, due);
+CREATE INDEX IF NOT EXISTS jobs_tenant ON jobs(tenant);
+CREATE INDEX IF NOT EXISTS jobs_account ON jobs(account) WHERE account IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_dedup ON jobs(tenant, dedup)
+  WHERE dedup IS NOT NULL AND lease IS NULL;
+CREATE TABLE IF NOT EXISTS channels(
+  id TEXT PRIMARY KEY, tenant BLOB NOT NULL, account BLOB NOT NULL, collection BLOB NOT NULL,
+  remote TEXT, resource TEXT, token TEXT, expiration INTEGER);
+CREATE INDEX IF NOT EXISTS channels_tenant ON channels(tenant, account);
+CREATE INDEX IF NOT EXISTS channels_expiration ON channels(expiration);
+"#;
+
+        const SEAL_VERSION: u8 = 1;
+        const SEAL_AAD: &[u8] = b"musubi-tokens-v1";
+        const HEAD: usize = 2 + NONCE_LEN;
+
+        pub struct Sealer {
+            key: LessSafeKey,
+            kid: u8,
+        }
+
+        #[derive(Serialize, Deserialize)]
+        struct Plain<S> {
+            refresh: S,
+            access: S,
+            until: Timestamp,
+        }
+
+        fn aad(kid: u8, tenant: TenantId, account: AccountId) -> Vec<u8> {
+            [
+                SEAL_AAD,
+                &[SEAL_VERSION, kid],
+                &tenant.to_bytes(),
+                &account.to_bytes(),
+            ]
+            .concat()
+        }
+
+        impl Sealer {
+            pub fn new(key: &[u8; 32]) -> Self {
+                let kid = sha256(&[b"musubi-token-key".as_slice(), key].concat())[0];
+                let key = UnboundKey::new(&AES_256_GCM, key).expect("32-byte AES-256 key");
+                Self {
+                    key: LessSafeKey::new(key),
+                    kid,
+                }
+            }
+
+            pub fn seal(
+                &self,
+                tenant: TenantId,
+                account: AccountId,
+                t: &AccountTokens,
+            ) -> SealedTokens {
+                let plain = Plain {
+                    refresh: t.refresh.expose_secret(),
+                    access: t.access.expose_secret(),
+                    until: t.access_until,
+                };
+                let mut buf = Zeroizing::new(serde_json::to_vec(&plain).expect("tokens serialise"));
+                let nonce = random::<NONCE_LEN>();
+                let mut out = Vec::with_capacity(HEAD + buf.len() + AES_256_GCM.tag_len());
+                out.extend_from_slice(&[SEAL_VERSION, self.kid]);
+                out.extend_from_slice(&nonce);
+                let tag = self
+                    .key
+                    .seal_in_place_separate_tag(
+                        Nonce::assume_unique_for_key(nonce),
+                        Aad::from(aad(self.kid, tenant, account)),
+                        &mut buf[..],
+                    )
+                    .expect("AES-GCM input below its size limit");
+                out.extend_from_slice(&buf);
+                out.extend_from_slice(tag.as_ref());
+                SealedTokens(out)
+            }
+
+            pub fn open(
+                &self,
+                tenant: TenantId,
+                account: AccountId,
+                sealed: &SealedTokens,
+            ) -> Result<AccountTokens, StoreError> {
+                let bad =
+                    || StoreError::Corrupt("sealed tokens do not open for this account".into());
+                let b = &sealed.0;
+                if b.len() < HEAD || b[0] != SEAL_VERSION {
+                    return Err(bad());
+                }
+                if b[1] != self.kid {
+                    return Err(StoreError::Corrupt(
+                        "sealed tokens use another token key".into(),
+                    ));
+                }
+                let nonce = Nonce::try_assume_unique_for_key(&b[2..HEAD]).map_err(|_| bad())?;
+                let mut buf = Zeroizing::new(b[HEAD..].to_vec());
+                let plain = self
+                    .key
+                    .open_in_place(
+                        nonce,
+                        Aad::from(aad(self.kid, tenant, account)),
+                        &mut buf[..],
+                    )
+                    .map_err(|_| bad())?;
+                let p: Plain<String> = serde_json::from_slice(plain).map_err(|_| bad())?;
+                Ok(AccountTokens {
+                    refresh: SecretString::from(p.refresh),
+                    access: SecretString::from(p.access),
+                    access_until: p.until,
+                })
+            }
+        }
+    }
+
+    /// docs/plan/phase2.md 4.3: a phase-1 `control.db` with a Google account
+    /// migrates to version 2; afterwards phase-1 queries still read the account
+    /// and phase-1 code still opens its blob, the old one and a newly stored one.
+    #[test]
+    fn phase1_reader_still_reads_a_migrated_control_db() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("control.db");
+        let (t, a) = (TenantId::from_u128(1), AccountId::from_u128(2));
+        let old = phase1::Sealer::new(&[7; 32]);
+        let sealed = old.seal(t, a, &tokens());
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.pragma_update(None, "journal_mode", "WAL").unwrap();
+            c.execute_batch(phase1::CONTROL).unwrap();
+            c.execute("INSERT INTO tenants(id) VALUES (?1)", [t.to_bytes()])
+                .unwrap();
+            c.execute(
+                "INSERT INTO accounts(id, tenant, provider, subject, state) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![a.to_bytes(), t.to_bytes(), "google", "me", "active"],
+            )
+            .unwrap();
+            c.execute(
+                "UPDATE accounts SET tokens = ?2 WHERE id = ?1",
+                rusqlite::params![a.to_bytes(), sealed.0],
+            )
+            .unwrap();
+        }
+        let v = Vault {
+            control: Arc::new(SqliteControl::open(&path).unwrap()),
+            sealer: Arc::new(Sealer::new(&[7; 32])),
+        };
+        assert_eq!(
+            v.control.read_tokens(a).unwrap(),
+            Some(sealed),
+            "blob untouched"
+        );
+        let Some(Credentials::OAuth(back)) = v.load(a).unwrap() else {
+            panic!("phase-1 blob opens as OAuth");
+        };
+        assert_eq!(back.refresh.expose_secret(), "r");
+        // Phase 2 writes the new columns and fresh tokens.
+        v.control
+            .set_endpoint(
+                a,
+                &musubi_model::provider::Endpoint::new("x", serde_json::Value::Null),
+            )
+            .unwrap();
+        v.control
+            .set_missing(a, &[musubi_model::EntityKind::Task])
+            .unwrap();
+        let mut fresh = tokens();
+        fresh.access = "a2".to_owned().into();
+        v.store(a, &Credentials::OAuth(fresh)).unwrap();
+        drop(v);
+
+        // The phase-1 reader.
+        let c = rusqlite::Connection::open(&path).unwrap();
+        let schema: u32 = c
+            .query_row("SELECT v FROM meta WHERE k = 'schema'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(schema, 2);
+        let row: ([u8; 16], [u8; 16], String, String, String) = c
+            .query_row(
+                "SELECT id, tenant, provider, subject, state FROM accounts WHERE id = ?1",
+                [a.to_bytes()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                a.to_bytes(),
+                t.to_bytes(),
+                "google".into(),
+                "me".into(),
+                "active".into()
+            )
+        );
+        let blob: Vec<u8> = c
+            .query_row(
+                "SELECT tokens FROM accounts WHERE id = ?1",
+                [a.to_bytes()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let read = old.open(t, a, &SealedTokens(blob)).unwrap();
+        assert_eq!(read.access.expose_secret(), "a2");
     }
 
     #[test]

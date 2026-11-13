@@ -233,6 +233,12 @@ pub trait TenantStore: Send {
         s: &CollectionStatus,
     ) -> Result<(), StoreError>;
 
+    /// Replaces [`CollectionState::push_resource`] of `col` (the Google
+    /// calendar `resourceId`, written after the first successful watch).
+    /// Never cleared except by [`TenantStore::purge_collection`].
+    /// `NotFound` if the collection does not exist.
+    fn set_push_resource(&mut self, col: CollectionId, resource: &str) -> Result<(), StoreError>;
+
     /// Appends occurrences to series whose index horizon moved. An extension
     /// whose `from` no longer matches the stored horizon (the series was
     /// re-indexed meanwhile) is skipped.
@@ -285,6 +291,12 @@ pub struct CollectionState {
     /// Missing from the last complete discovery. Its items stay until the
     /// engine drops it with [`TenantStore::purge_collection`].
     pub gone: bool,
+    /// Google calendar `resourceId` of the push channel, written by the engine
+    /// with [`TenantStore::set_push_resource`] after the first successful
+    /// watch. Lets the engine stop a lone pending channel when the collection
+    /// is removed. `None` until written; kept across channel swaps and cleared
+    /// only by [`TenantStore::purge_collection`].
+    pub push_resource: Option<String>,
 }
 
 /// Engine-maintained status of a collection.

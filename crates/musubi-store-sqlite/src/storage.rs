@@ -30,7 +30,7 @@ use musubi_model::store::{BackupInfo, CheckpointInfo, CheckpointMode, Storage};
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 
-use crate::schema::{MAIN_MIGRATIONS, MAIN_VERSION, main_version, migrate};
+use crate::schema::{MAIN_MIGRATIONS, MAIN_VERSION, migrate, probe_version};
 use crate::{BUSY_TIMEOUT, Error, Result, connect};
 
 const WAL_SOFT: u64 = 8 << 20;
@@ -455,11 +455,10 @@ impl Shared {
     /// `SchemaTooNew` before any pragma or write touches it.
     fn open(dir: &Path) -> Result<Self> {
         let main = dir.join("main.db");
-        let probe = open_existing(&main).map_err(|e| match e.0 {
-            StoreError::Backend(_) if !main.exists() => Error(StoreError::NotFound),
-            _ => e,
-        })?;
-        let found = main_version(&probe)?;
+        if !main.exists() {
+            return Err(StoreError::NotFound.into());
+        }
+        let found = probe_version(&main)?;
         if found > MAIN_VERSION {
             return Err(StoreError::SchemaTooNew {
                 found,
@@ -467,7 +466,6 @@ impl Shared {
             }
             .into());
         }
-        drop(probe);
         let mut conn = connect(&main, "NORMAL", TENANT_AUTOCHECKPOINT)?;
         migrate(&mut conn, MAIN_MIGRATIONS)?;
         let wal = dir.join("main.db-wal");

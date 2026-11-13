@@ -10,8 +10,10 @@ use musubi_model::control::{
     AccountRecord, AccountState, ApiKeyHash, ApiKeyRecord, ChannelRecord, ChannelState, JobKind,
     JobSpec, Lane, OAuthPending, OAuthStateHash, Scope, SealedTokens,
 };
-use musubi_model::provider::{ChannelId, Subscription};
-use musubi_model::{AccountId, CollectionId, CollectionRef, ControlStore, StoreError, TenantId};
+use musubi_model::provider::{ChannelId, Endpoint, Subscription};
+use musubi_model::{
+    AccountId, CollectionId, CollectionRef, ControlStore, EntityKind, StoreError, TenantId,
+};
 use musubi_store_sqlite::SqliteControl;
 use secrecy::{ExposeSecret, SecretString};
 
@@ -526,4 +528,178 @@ fn renew_channel_job_needs_its_channel() {
         c.enqueue(&job(renew, 0, 0, None)),
         Err(StoreError::NotFound)
     ));
+}
+
+fn schema_version(path: &std::path::Path) -> u32 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row("SELECT v FROM meta WHERE k = 'schema'", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// docs/plan/phase2.md 4.3: a phase-1 file (no `schema` key, `channels` from
+/// before pending channels) is adopted as version 1 and migrated to 2 with its
+/// rows; an empty file goes straight to 2.
+#[test]
+fn phase1_control_db_migrates_to_version_2() {
+    let d = TempDir::new();
+    let path = d.path().join("control.db");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.pragma_update(None, "journal_mode", "WAL").unwrap();
+        c.execute_batch(
+            "CREATE TABLE meta(k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+             INSERT INTO meta VALUES ('lease', 7);
+             CREATE TABLE tenants(id BLOB PRIMARY KEY);
+             CREATE TABLE accounts(
+               id BLOB PRIMARY KEY, tenant BLOB NOT NULL, provider TEXT NOT NULL,
+               subject TEXT NOT NULL, state TEXT NOT NULL, tokens BLOB,
+               UNIQUE(tenant, provider, subject));
+             CREATE TABLE channels(
+               id TEXT PRIMARY KEY, tenant BLOB NOT NULL, account BLOB NOT NULL,
+               collection BLOB NOT NULL, remote TEXT NOT NULL, resource TEXT NOT NULL,
+               token TEXT NOT NULL, expiration INTEGER NOT NULL);
+             CREATE INDEX channels_tenant ON channels(tenant, account);
+             CREATE INDEX channels_expiration ON channels(expiration);",
+        )
+        .unwrap();
+        c.execute("INSERT INTO tenants VALUES (?1)", [T1.to_bytes()])
+            .unwrap();
+        c.execute(
+            "INSERT INTO accounts VALUES (?1, ?2, 'google', 'me', 'active', x'0102')",
+            (A1.to_bytes(), T1.to_bytes()),
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO channels VALUES ('old', ?1, ?2, ?3, 'primary', 'res', 'tok', 20)",
+            (
+                T1.to_bytes(),
+                A1.to_bytes(),
+                CollectionId::from_u128(5).to_bytes(),
+            ),
+        )
+        .unwrap();
+    }
+    for _ in 0..2 {
+        let c = SqliteControl::open(&path).unwrap();
+        let a = c.account(A1).unwrap().unwrap();
+        assert_eq!((a.subject.as_str(), a.state), ("me", AccountState::Active));
+        assert_eq!(c.read_tokens(A1).unwrap().unwrap().0, vec![1, 2]);
+        let old = c.find_channel(&ChannelId("old".into())).unwrap().unwrap();
+        assert_eq!(old.open().unwrap().resource, "res");
+        c.put_channel(&pending("p1", A1)).unwrap();
+        assert_eq!(c.endpoint(A1).unwrap(), None);
+        assert!(c.missing(A1).unwrap().is_empty());
+        drop(c);
+        assert_eq!(schema_version(&path), 2);
+    }
+    let lease: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT v FROM meta WHERE k = 'lease'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(lease, 7, "lease counter kept");
+
+    let fresh = d.path().join("fresh.db");
+    drop(SqliteControl::open(&fresh).unwrap());
+    assert_eq!(schema_version(&fresh), 2);
+}
+
+#[test]
+fn newer_control_db_is_refused_untouched() {
+    let d = TempDir::new();
+    let path = d.path().join("control.db");
+    drop(SqliteControl::open(&path).unwrap());
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute("UPDATE meta SET v = 3 WHERE k = 'schema'", [])
+            .unwrap();
+        c.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(
+        SqliteControl::open(&path),
+        Err(StoreError::SchemaTooNew {
+            found: 3,
+            supported: 2
+        })
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before, "file untouched");
+    assert!(!path.with_extension("db-wal").exists());
+}
+
+#[test]
+fn newer_wal_control_db_is_refused_untouched() {
+    let d = TempDir::new();
+    // URI metacharacters: the probe reads this path as a `file:` URI.
+    let path = d.path().join("con?tr#ol%20.db");
+    let wal = path.with_extension("db-wal");
+    let shm = path.with_extension("db-shm");
+    drop(SqliteControl::open(&path).unwrap());
+    // A newer binary that closed cleanly: WAL mode, no -wal or -shm left.
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute("UPDATE meta SET v = 3 WHERE k = 'schema'", [])
+            .unwrap();
+    }
+    assert!(!wal.exists() && !shm.exists());
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(
+        SqliteControl::open(&path),
+        Err(StoreError::SchemaTooNew { found: 3, .. })
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before, "file untouched");
+    assert!(!wal.exists() && !shm.exists(), "no -wal or -shm left");
+
+    // A newer binary killed mid-run: version 4 lives only in the -wal frames.
+    let crashed = d.path().join("crashed.db");
+    let crashed_wal = crashed.with_extension("db-wal");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        c.execute("UPDATE meta SET v = 4 WHERE k = 'schema'", [])
+            .unwrap();
+        std::fs::copy(&path, &crashed).unwrap();
+        std::fs::copy(&wal, &crashed_wal).unwrap();
+    }
+    let before = std::fs::read(&crashed).unwrap();
+    let before_wal = std::fs::read(&crashed_wal).unwrap();
+    assert!(matches!(
+        SqliteControl::open(&crashed),
+        Err(StoreError::SchemaTooNew { found: 4, .. })
+    ));
+    assert_eq!(std::fs::read(&crashed).unwrap(), before, "no checkpoint");
+    assert_eq!(std::fs::read(&crashed_wal).unwrap(), before_wal);
+}
+
+#[test]
+fn endpoint_and_missing_round_trip() {
+    let (_d, c) = open();
+    c.upsert_account(&account(A1, "s1")).unwrap();
+    assert_eq!(c.endpoint(A1).unwrap(), None);
+    let e = Endpoint::new(
+        "https://dav.example/",
+        serde_json::json!({"principal": "/p/1/", "homes": ["/c/1/"]}),
+    );
+    c.set_endpoint(A1, &e).unwrap();
+    assert_eq!(c.endpoint(A1).unwrap(), Some(e));
+    c.set_missing(A1, &[EntityKind::Task, EntityKind::Contact])
+        .unwrap();
+    assert_eq!(
+        c.missing(A1).unwrap(),
+        vec![EntityKind::Task, EntityKind::Contact]
+    );
+    // Upserting the account (a reconnect) keeps both.
+    c.upsert_account(&account(A1, "s1")).unwrap();
+    assert!(c.endpoint(A1).unwrap().is_some());
+    assert_eq!(c.missing(A1).unwrap().len(), 2);
+    c.set_missing(A1, &[]).unwrap();
+    assert!(c.missing(A1).unwrap().is_empty());
+    for r in [
+        c.set_endpoint(A2, &Endpoint::new("x", serde_json::Value::Null)),
+        c.set_missing(A2, &[]),
+        c.endpoint(A2).map(drop),
+        c.missing(A2).map(drop),
+    ] {
+        assert!(matches!(r, Err(StoreError::NotFound)));
+    }
 }

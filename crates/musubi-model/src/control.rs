@@ -98,6 +98,10 @@ pub trait ControlStore: Send + Sync {
     /// `NotFound` if the account is absent.
     fn set_missing(&self, id: AccountId, kinds: &[EntityKind]) -> Result<(), StoreError>;
 
+    /// The kinds last stored by [`ControlStore::set_missing`]; empty if none.
+    /// `NotFound` if the account is absent.
+    fn missing(&self, id: AccountId) -> Result<Vec<EntityKind>, StoreError>;
+
     /// Stores a pending OAuth sign-in under the hash of its `state` parameter
     /// and deletes expired ones. `AlreadyExists` on a hash collision.
     fn put_oauth_state(&self, s: &OAuthPending) -> Result<(), StoreError>;
