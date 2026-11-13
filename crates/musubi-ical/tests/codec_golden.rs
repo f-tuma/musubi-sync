@@ -59,6 +59,8 @@ mod events {
         dst_crossing,
         floating,
         series,
+        rdate_moved,
+        rdate_period,
         exceptions_only,
         zone_x_lic,
         zone_path_prefix,
@@ -266,4 +268,71 @@ fn any_group_kind_makes_a_group() {
         Decoded::Canonical(_)
     ));
     assert!(unsupported(decode_str::<Contact, VCardCodec>(body)));
+}
+
+/// An exception may replace the master's own RDATE (moved) or EXDATE
+/// (cancelled) at the same time (RFC 5545 allows both).
+#[test]
+fn exceptions_replace_the_masters_rdate_and_exdate() {
+    let e = event("rdate_moved");
+    let at = |key: &str| &e.recurrence_overrides[&key.parse().unwrap()];
+    assert_eq!(at("2026-11-25T09:00:00")["start"], "2026-11-25T10:00:00");
+    assert_eq!(at("2026-11-16T09:00:00")["excluded"], true);
+    assert_eq!(e.recurrence_overrides.len(), 2);
+
+    let body = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/events/exceptions_only.ics",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let (head, rest) = body.split_once("BEGIN:VEVENT").unwrap();
+    let twice =
+        format!("{head}BEGIN:VEVENT{rest}").replace("END:VCALENDAR\n", "") + "BEGIN:VEVENT" + rest;
+    match decode_str::<Event, IcalCodec>(twice) {
+        Decoded::Unsupported { reason } => {
+            assert_eq!(reason, "two components with the same RECURRENCE-ID")
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// An RDATE period carries its own length when it differs from the series'.
+#[test]
+fn rdate_period_patches_its_duration() {
+    let e = event("rdate_period");
+    let at = |key: &str| &e.recurrence_overrides[&key.parse().unwrap()];
+    assert_eq!(at("2026-11-20T09:00:00")["duration"], "PT3H");
+    assert_eq!(at("2026-11-21T09:00:00")["duration"], "PT2H30M");
+    assert!(at("2026-11-22T09:00:00").is_empty(), "same as the series");
+}
+
+/// A floating master keeps an exception's own zone in its patch, so the
+/// custom zone's POSIX entry must be on the item too.
+#[test]
+fn floating_master_lists_an_exceptions_custom_zone() {
+    let body = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/events/zone_fixed_offset.ics",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+    .replace(
+        "DTSTART;TZID=Musubi Fixed:20261116T100000",
+        "DTSTART:20261116T100000",
+    )
+    .replace(
+        "END:VEVENT\n",
+        "END:VEVENT\nBEGIN:VEVENT\nUID:fixed-zone-1@example.com\nDTSTAMP:20261111T120000Z\n\
+         RECURRENCE-ID:20261117T100000\nDTSTART;TZID=Musubi Fixed:20261117T110000\n\
+         DURATION:PT1H\nSUMMARY:Fixed offset zone\nEND:VEVENT\n",
+    );
+    let Decoded::Canonical(e) = decode_str::<Event, IcalCodec>(body) else {
+        panic!("decodes");
+    };
+    assert!(e.time_zone.is_none(), "floating master");
+    let patch = &e.recurrence_overrides[&"2026-11-17T10:00:00".parse().unwrap()];
+    assert_eq!(patch["timeZone"], "/Musubi Fixed");
+    assert_eq!(
+        e.time_zones.get("/Musubi Fixed").map(String::as_str),
+        Some("MFT-5:30")
+    );
 }

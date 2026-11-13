@@ -18,7 +18,7 @@
 //! values are `Etc/UTC`, values without `TZID` are floating, `VALUE=DATE`
 //! values are floating midnight with `show_without_time`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Display;
 
 use calcard::common::PartialDateTime;
@@ -130,6 +130,8 @@ fn decode<T: Item>(raw: &Raw) -> Res<T> {
     let base_json = json(&item)?;
     let resolved = |z: Option<&Zone>| z.is_some_and(|z| z.tz.is_some());
     let unresolved = |z: Option<&Zone>| z.is_some_and(|z| z.tz.is_none());
+    // Exception keys only: an exception may replace the master's own RDATE or EXDATE.
+    let mut seen = HashSet::new();
     for p in parts {
         let rid = p.rid.as_ref().ok_or("exception without RECURRENCE-ID")?;
         // Its key and times could not be placed in the base's zone.
@@ -139,6 +141,13 @@ fn decode<T: Item>(raw: &Raw) -> Res<T> {
             return Err("exception in an unresolved time zone".into());
         }
         let key = local_in(rid, base.zone.as_ref())?;
+        if !seen.insert(key) {
+            return Err("two components with the same RECURRENCE-ID".into());
+        }
+        // Without a resolved base the patch keeps the exception's own `timeZone`.
+        if !resolved(base.zone.as_ref()) {
+            item.time_zones().extend(time_zones([p.zone.as_ref()]));
+        }
         let patch = if p.item.cancelled() {
             // A cancelled occurrence is removed, not shown with a status.
             let mut patch = PatchObject::new();
@@ -154,9 +163,7 @@ fn decode<T: Item>(raw: &Raw) -> Res<T> {
             }
             diff(&at_key, &json(&exception)?)
         };
-        if item.overrides().insert(key, patch).is_some() {
-            return Err("two components with the same RECURRENCE-ID".into());
-        }
+        item.overrides().insert(key, patch);
     }
     Ok(item)
 }
@@ -213,6 +220,7 @@ trait Item: Serialize + Sized {
     const TYPE: ICalendarComponentType;
     fn read(cx: &mut Cx<'_>, c: &ICalendarComponent) -> Res<Part<Self>>;
     fn overrides(&mut self) -> &mut BTreeMap<DateTime, PatchObject>;
+    fn time_zones(&mut self) -> &mut BTreeMap<String, String>;
     /// Moves the times of an exception from its own zone into the base's,
     /// so the patch holds only real changes.
     fn rebase(&mut self, from: Option<&Zone>, to: Option<&Zone>, base: &Self) -> Res<()>;
@@ -444,27 +452,38 @@ fn rules(c: &ICalendarComponent, prop: &ICalendarProperty) -> Vec<RecurrenceRule
 
 /// `RDATE` (empty patch) and `EXDATE` (`excluded`) as overrides keyed by local
 /// time in `zone`. A date value keeps the series' time of day; an `RDATE`
-/// period is keyed by its start. An `EXDATE` wins over an `RDATE` on the same
-/// key.
+/// period is keyed by its start and patches `duration` when it differs from
+/// the series' `duration` (`None` for tasks, which have no occurrence
+/// length). An `EXDATE` wins over an `RDATE` on the same key.
 fn dates(
     cx: &mut Cx<'_>,
     c: &ICalendarComponent,
     start: DateTime,
     zone: Option<&Zone>,
+    duration: Option<Span>,
 ) -> Res<BTreeMap<DateTime, PatchObject>> {
     let mut out = BTreeMap::new();
     for prop in [ICalendarProperty::Rdate, ICalendarProperty::Exdate] {
         for e in c.properties(&prop) {
             for v in &e.values {
-                let d = match v {
-                    ICalendarValue::PartialDateTime(d) => d.as_ref(),
+                let (d, period) = match v {
+                    ICalendarValue::PartialDateTime(d) => (d.as_ref(), None),
                     ICalendarValue::Period(
-                        ICalendarPeriod::Range { start, .. }
-                        | ICalendarPeriod::Duration { start, .. },
-                    ) => start,
+                        p @ (ICalendarPeriod::Range { start, .. }
+                        | ICalendarPeriod::Duration { start, .. }),
+                    ) => (start, Some(p)),
                     _ => return Err(format!("bad {} value", prop.as_str())),
                 };
                 let m = cx.read_moment(e, d)?;
+                let length = match period {
+                    Some(ICalendarPeriod::Range { end, .. }) => {
+                        Some(between(&m, &cx.read_moment(e, end)?)?)
+                    }
+                    Some(ICalendarPeriod::Duration { duration, .. }) => {
+                        Some(span(duration)?).filter(|s| !s.is_negative())
+                    }
+                    None => None,
+                };
                 // shortcut: a DATE value on a timed series stands for DTSTART's time of
                 // day only, so a rule with several times a day (BYHOUR=9,15) keeps the
                 // others; the canonical keys are date-times. Upgrade if a provider sends it.
@@ -478,7 +497,13 @@ fn dates(
                     patch.insert("excluded".into(), true.into());
                     out.insert(at, patch);
                 } else {
-                    out.entry(at).or_default();
+                    let patch = out.entry(at).or_default();
+                    if let (Some(length), Some(series)) = (length, duration) {
+                        let length = serde_json::to_value(Duration(length)).map_err(err)?;
+                        if length != serde_json::to_value(Duration(series)).map_err(err)? {
+                            patch.insert("duration".into(), length);
+                        }
+                    }
                 }
             }
         }
@@ -700,7 +725,7 @@ impl Item for CalendarEvent {
         };
         ev.recurrence_rules = rules(c, &ICalendarProperty::Rrule);
         ev.excluded_recurrence_rules = rules(c, &ICalendarProperty::Exrule);
-        ev.recurrence_overrides = dates(cx, c, start.local, zone.as_ref())?;
+        ev.recurrence_overrides = dates(cx, c, start.local, zone.as_ref(), Some(duration))?;
         ev.participants = participants(c);
         ev.alerts = alerts(cx, c)?;
         ev.created = timestamp(cx, c, ICalendarProperty::Created);
@@ -716,6 +741,10 @@ impl Item for CalendarEvent {
 
     fn overrides(&mut self) -> &mut BTreeMap<DateTime, PatchObject> {
         &mut self.recurrence_overrides
+    }
+
+    fn time_zones(&mut self) -> &mut BTreeMap<String, String> {
+        &mut self.time_zones
     }
 
     fn rebase(&mut self, from: Option<&Zone>, to: Option<&Zone>, base: &Self) -> Res<()> {
@@ -807,7 +836,7 @@ impl Item for CalendarTask {
             .map(str::to_owned);
         t.recurrence_rules = rules(c, &ICalendarProperty::Rrule);
         let series_start = t.start.or(t.due).unwrap_or_default();
-        t.recurrence_overrides = dates(cx, c, series_start, zone.as_ref())?;
+        t.recurrence_overrides = dates(cx, c, series_start, zone.as_ref(), None)?;
         t.alerts = alerts(cx, c)?;
         t.locations = locations(c);
         t.keywords = c
@@ -831,6 +860,10 @@ impl Item for CalendarTask {
 
     fn overrides(&mut self) -> &mut BTreeMap<DateTime, PatchObject> {
         &mut self.recurrence_overrides
+    }
+
+    fn time_zones(&mut self) -> &mut BTreeMap<String, String> {
+        &mut self.time_zones
     }
 
     fn rebase(&mut self, from: Option<&Zone>, to: Option<&Zone>, base: &Self) -> Res<()> {
