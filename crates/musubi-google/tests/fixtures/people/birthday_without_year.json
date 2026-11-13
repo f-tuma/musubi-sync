@@ -1,0 +1,19 @@
+{
+  "resourceName": "people/c1000000000000000004",
+  "etag": "%EgMBAgMaBAECBQk=",
+  "metadata": {
+    "sources": [
+      { "type": "PROFILE", "id": "1234567890", "updateTime": "2026-11-12T00:00:00Z" },
+      { "type": "CONTACT", "id": "de0b6b3a7640004", "updateTime": "2026-10-30T12:00:00Z" }
+    ],
+    "objectType": "PERSON"
+  },
+  "names": [
+    { "metadata": { "source": { "type": "PROFILE" } }, "displayName": "Profile Name" },
+    { "metadata": { "primary": true, "source": { "type": "CONTACT" } }, "displayName": "Babička", "givenName": "Babička" }
+  ],
+  "birthdays": [
+    { "metadata": { "primary": true }, "date": { "month": 12, "day": 24 } },
+    { "metadata": {}, "date": { "year": 0, "month": 12, "day": 24 }, "text": "24. 12." }
+  ]
+}

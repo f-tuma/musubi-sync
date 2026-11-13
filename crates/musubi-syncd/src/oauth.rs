@@ -27,7 +27,11 @@ use serde_json::{Value, json};
 use crate::crypto::{b64, random, random_token, sha256, unb64};
 use crate::{ApiError, App, Caller};
 
-const SCOPES: &str = "openid https://www.googleapis.com/auth/calendar.readonly";
+/// Read-only Calendar, Tasks and Contacts (plan 6.1). The user may untick
+/// Tasks or Contacts on the consent screen; discovery then reports the kind
+/// as unauthorized instead of failing.
+const SCOPES: &str = "openid https://www.googleapis.com/auth/calendar.readonly \
+https://www.googleapis.com/auth/tasks.readonly https://www.googleapis.com/auth/contacts.readonly";
 const STATE_TTL: SignedDuration = SignedDuration::from_mins(10);
 
 /// The OAuth client of this node.
@@ -91,6 +95,7 @@ pub(crate) async fn start(
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("access_type", "offline")
+        .append_pair("include_granted_scopes", "true")
         .append_pair("prompt", "consent");
     Ok((
         StatusCode::CREATED,

@@ -62,7 +62,7 @@ impl GoogleProvider {
             s if s.is_success() => Ok(()),
             // Already stopped, expired or never known.
             StatusCode::NOT_FOUND | StatusCode::GONE => Ok(()),
-            _ => Err(error_for(resp, cx.clock.now()).await),
+            _ => Err(error_for(resp, cx.clock.now(), None).await),
         }
     }
 }
@@ -85,7 +85,7 @@ impl PushSource for GoogleProvider {
             "token": token,
         });
         let url = self.url(&["calendars", &col.0, "events", "watch"]);
-        let bytes = self.call(cx, self.http.post(url).json(&body)).await?;
+        let bytes = self.call(cx, self.http.post(url).json(&body), None).await?;
         let ch: Channel = serde_json::from_slice(&bytes).unwrap_or_default();
         match (ch.resource_id, ch.expiration.as_ref().and_then(millis)) {
             (Some(resource), Some(expiration)) => Ok(Subscription::new(

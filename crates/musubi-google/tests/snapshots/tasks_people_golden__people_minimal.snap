@@ -1,0 +1,18 @@
+---
+source: crates/musubi-google/tests/tasks_people_golden.rs
+expression: "decode :: < Contact, PeopleCodec >\n(\"people\", & stringify! (people_minimal)[\"people\".len() + 1 ..])"
+---
+{
+  "uid": "people/c1000000000000000002",
+  "kind": "individual",
+  "name": {
+    "components": [
+      {
+        "kind": "given",
+        "value": "Petr"
+      }
+    ],
+    "full": "Petr"
+  },
+  "updated": "2026-11-01T00:00:00Z"
+}

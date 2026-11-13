@@ -292,13 +292,7 @@ async fn a_permanent_provider_error_is_logged_once() {
     let w = World::start(Default::default(), &[]).await;
     w.converge(Duration::from_secs(30), |w| !w.fake.channels().is_empty())
         .await;
-    let forbidden = Fault {
-        status: 403,
-        domain: "global",
-        reason: "forbidden",
-        message: "Forbidden",
-        retry_after: None,
-    };
+    let forbidden = Fault::forbidden();
     w.fake.fail(Endpoint::EventsList, forbidden, 1);
     // Notified: the delta answers 403.
     let start = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24);

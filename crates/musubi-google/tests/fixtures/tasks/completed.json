@@ -1,0 +1,13 @@
+{
+  "kind": "tasks#task",
+  "id": "Y29tcGxldGVkLXRhc2s",
+  "etag": "\"LTk4NzY1NDMyMQ\"",
+  "title": "Zaplatit nájem",
+  "updated": "2026-11-10T08:00:01.000Z",
+  "selfLink": "https://www.googleapis.com/tasks/v1/lists/l/tasks/Y29tcGxldGVkLXRhc2s",
+  "position": "00000000000000000001",
+  "status": "completed",
+  "due": "2026-11-05T00:00:00.000Z",
+  "completed": "2026-11-10T08:00:00.000Z",
+  "links": []
+}

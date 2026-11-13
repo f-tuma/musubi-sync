@@ -1,0 +1,10 @@
+{
+  "kind": "tasks#task",
+  "id": "dW5rbm93bg",
+  "etag": "\"LTMzMzMzMw\"",
+  "title": "",
+  "updated": "2026-11-12T11:00:00.000Z",
+  "status": "needsAction",
+  "assignmentInfo": { "surfaceType": "DOCUMENT", "linkToTask": "https://docs.google.com/x" },
+  "futureField": { "nested": [1, 2, 3] }
+}

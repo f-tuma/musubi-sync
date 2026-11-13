@@ -1,0 +1,54 @@
+{
+  "resourceName": "people/c1000000000000000001",
+  "etag": "%EgUBAgMuNz0aBAECBQciDHJ2ZWQ5T1A0dE1BPQ==",
+  "metadata": {
+    "sources": [
+      { "type": "CONTACT", "id": "de0b6b3a7640001", "etag": "#rved9OP4tMA=", "updateTime": "2026-11-12T09:15:30.123456Z" }
+    ],
+    "objectType": "PERSON"
+  },
+  "names": [
+    {
+      "metadata": { "primary": true, "source": { "type": "CONTACT", "id": "de0b6b3a7640001" } },
+      "displayName": "Ing. Jana Marie Nováková, Ph.D.",
+      "familyName": "Nováková",
+      "givenName": "Jana",
+      "middleName": "Marie",
+      "honorificPrefix": "Ing.",
+      "honorificSuffix": "Ph.D.",
+      "displayNameLastFirst": "Nováková, Jana Marie",
+      "unstructuredName": "Ing. Jana Marie Nováková, Ph.D."
+    }
+  ],
+  "nicknames": [ { "metadata": { "primary": true }, "value": "Janča" } ],
+  "organizations": [
+    { "metadata": { "primary": true }, "name": "Spilberk s.r.o.", "department": "Vývoj", "title": "Vedoucí týmu" }
+  ],
+  "emailAddresses": [
+    { "metadata": { "primary": true }, "value": "jana@example.cz", "type": "home", "formattedType": "Home" },
+    { "metadata": {}, "value": "jana.novakova@example.com", "type": "work", "formattedType": "Work" }
+  ],
+  "phoneNumbers": [
+    { "metadata": { "primary": true }, "value": "+420 601 234 567", "canonicalForm": "+420601234567", "type": "mobile", "formattedType": "Mobile" },
+    { "metadata": {}, "value": "+420 541 000 000", "type": "workFax", "formattedType": "Work Fax" },
+    { "metadata": {}, "value": "+420 777 000 000", "type": "chata", "formattedType": "chata" }
+  ],
+  "addresses": [
+    {
+      "metadata": { "primary": true },
+      "formattedValue": "Údolní 53\nBrno 602 00\nCZ",
+      "type": "home",
+      "formattedType": "Home",
+      "streetAddress": "Údolní 53",
+      "city": "Brno",
+      "postalCode": "602 00",
+      "country": "Czechia",
+      "countryCode": "CZ"
+    }
+  ],
+  "urls": [ { "metadata": {}, "value": "https://example.cz/jana", "type": "blog", "formattedType": "Blog" } ],
+  "biographies": [ { "metadata": { "primary": true }, "value": "Potkali jsme se na konferenci.", "contentType": "TEXT_PLAIN" } ],
+  "birthdays": [ { "metadata": { "primary": true }, "date": { "year": 1990, "month": 4, "day": 17 } } ],
+  "photos": [ { "metadata": { "primary": true }, "url": "https://lh3.googleusercontent.com/contacts/abc=s100" } ],
+  "memberships": [ { "metadata": {}, "contactGroupMembership": { "contactGroupId": "myContacts", "contactGroupResourceName": "contactGroups/myContacts" } } ]
+}

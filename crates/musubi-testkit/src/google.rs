@@ -1,5 +1,5 @@
-//! Hermetic in-process fake of Google Calendar API v3 and Google's OAuth token
-//! endpoint (plan, K3 and 6.2). Deviations from Google's documentation are in
+//! Hermetic in-process fake of Google Calendar API v3, Tasks API v1, People
+//! API v1 and Google's OAuth token endpoint (plan, K3, 6.2 and 6.4). Deviations from Google's documentation are in
 //! `crates/musubi-testkit/FIDELITY.md`.
 //!
 //! ```no_run
@@ -22,6 +22,11 @@
 //! | `GET /calendar/v3/calendars/{cal}/events/{id}` | `events.get` |
 //! | `POST /calendar/v3/calendars/{cal}/events/watch` | `events.watch` |
 //! | `POST /calendar/v3/channels/stop` | `channels.stop` |
+//! | `GET /tasks/v1/users/@me/lists` | `tasklists.list` |
+//! | `GET /tasks/v1/lists/{list}/tasks` | `tasks.list` |
+//! | `GET /tasks/v1/lists/{list}/tasks/{task}` | `tasks.get` |
+//! | `GET /people/v1/people/me/connections` | `people.connections.list` |
+//! | `GET /people/v1/people/{id}` | `people.get` |
 //! | `GET /o/oauth2/v2/auth` | `https://accounts.google.com/o/oauth2/v2/auth` (consent granted at once) |
 //! | `POST /token` | `https://oauth2.googleapis.com/token` (`refresh_token` and `authorization_code` grants) |
 //!
@@ -55,6 +60,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+mod people;
+mod tasks;
+
+pub use people::MAX_CONNECTIONS_PAGE;
+pub use tasks::MAX_TASKS_PAGE;
 
 /// Google's hard cap on `maxResults` for `events.list`.
 pub const MAX_EVENTS_PAGE: u32 = 2500;
@@ -139,19 +150,34 @@ pub enum Endpoint {
     Watch,
     /// `channels.stop`.
     Stop,
+    /// `tasklists.list`.
+    TaskLists,
+    /// `tasks.list`.
+    TasksList,
+    /// `tasks.get`.
+    TasksGet,
+    /// `people.connections.list`.
+    PeopleConnections,
+    /// `people.get`.
+    PeopleGet,
     /// OAuth token endpoint.
     Token,
 }
 
-/// A scripted error response in Google's error shape.
+/// A scripted error response in one of Google's error shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fault {
     /// HTTP status.
     pub status: u16,
-    /// `error.errors[0].domain`.
+    /// `error.errors[0].domain`, or the `ErrorInfo.domain` with `rpc_status`.
     pub domain: &'static str,
-    /// `error.errors[0].reason`.
+    /// `error.errors[0].reason`, or the `ErrorInfo.reason` with `rpc_status`.
     pub reason: &'static str,
+    /// `None`: the older shape with `error.errors[]` (Calendar, Tasks).
+    /// `Some(status)`: the newer `google.rpc.Status` shape (People) with
+    /// `error.status` and the reason in a `google.rpc.ErrorInfo` of
+    /// `error.details[]`.
+    pub rpc_status: Option<&'static str>,
     /// `error.message`.
     pub message: &'static str,
     /// `Retry-After` header in seconds.
@@ -167,6 +193,7 @@ impl Fault {
             reason: "rateLimitExceeded",
             message: "Rate Limit Exceeded",
             retry_after,
+            rpc_status: None,
         }
     }
 
@@ -186,6 +213,59 @@ impl Fault {
             reason: "backendError",
             message: "Backend Error",
             retry_after: None,
+            rpc_status: None,
+        }
+    }
+
+    /// `403 insufficientPermissions` in the older shape: a scope the user did
+    /// not grant (plan 6.1; which API sends which shape is unverified, T10).
+    pub fn insufficient_permissions() -> Self {
+        Self {
+            status: 403,
+            domain: "global",
+            reason: "insufficientPermissions",
+            message: "Insufficient Permission",
+            retry_after: None,
+            rpc_status: None,
+        }
+    }
+
+    /// `403 PERMISSION_DENIED` with `ACCESS_TOKEN_SCOPE_INSUFFICIENT`: a scope
+    /// the user did not grant, in the newer shape.
+    pub fn scope_insufficient() -> Self {
+        Self {
+            status: 403,
+            domain: "googleapis.com",
+            reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+            message: "Request had insufficient authentication scopes.",
+            retry_after: None,
+            rpc_status: Some("PERMISSION_DENIED"),
+        }
+    }
+
+    /// `403 forbidden`: a permission error that is not a missing scope.
+    pub fn forbidden() -> Self {
+        Self {
+            status: 403,
+            domain: "global",
+            reason: "forbidden",
+            message: "Forbidden",
+            retry_after: None,
+            rpc_status: None,
+        }
+    }
+
+    /// `400 FAILED_PRECONDITION` with `EXPIRED_SYNC_TOKEN` (People).
+    /// [`FakeGoogle::expire_people_sync_tokens`] makes the server answer this
+    /// by itself.
+    pub fn expired_sync_token() -> Self {
+        Self {
+            status: 400,
+            domain: "people.googleapis.com",
+            reason: "EXPIRED_SYNC_TOKEN",
+            message: "Sync token is expired. Clear local cache and retry call without the sync token.",
+            retry_after: None,
+            rpc_status: Some("FAILED_PRECONDITION"),
         }
     }
 }
@@ -302,6 +382,8 @@ struct State {
     latency: Duration,
     requests: Vec<String>,
     deliveries: Vec<Delivery>,
+    task_lists: BTreeMap<String, tasks::TaskList>,
+    people: people::People,
 }
 
 struct AuthCode {
@@ -368,6 +450,11 @@ impl FakeGoogle {
             .route("/calendar/v3/calendars/{cal}/events/{id}", get(events_get))
             .route("/calendar/v3/calendars/{cal}/events/watch", post(watch))
             .route("/calendar/v3/channels/stop", post(stop))
+            .route("/tasks/v1/users/@me/lists", get(tasks::task_lists))
+            .route("/tasks/v1/lists/{list}/tasks", get(tasks::tasks_list))
+            .route("/tasks/v1/lists/{list}/tasks/{task}", get(tasks::tasks_get))
+            .route("/people/v1/people/me/connections", get(people::connections))
+            .route("/people/v1/people/{id}", get(people::person))
             .route("/o/oauth2/v2/auth", get(authorize))
             .route("/token", post(token))
             .fallback(fallback)
@@ -645,10 +732,12 @@ impl Inner {
             s.faults.retain(|(_, _, n)| *n > 0);
             let status =
                 StatusCode::from_u16(fault.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            let mut resp = if endpoint == Endpoint::Token {
-                oauth_error(status, fault.reason, fault.message)
-            } else {
-                error(status, fault.domain, fault.reason, fault.message)
+            let mut resp = match fault.rpc_status {
+                _ if endpoint == Endpoint::Token => {
+                    oauth_error(status, fault.reason, fault.message)
+                }
+                Some(rpc) => rpc_error(status, rpc, fault.domain, fault.reason, fault.message),
+                None => error(status, fault.domain, fault.reason, fault.message),
             };
             if let Some(secs) = fault.retry_after {
                 resp.headers_mut().insert(
@@ -1103,6 +1192,21 @@ fn error(status: StatusCode, domain: &str, reason: &str, message: &str) -> Respo
         "errors": [{ "domain": domain, "reason": reason, "message": message }],
         "code": status.as_u16(),
         "message": message,
+    }});
+    (status, axum::Json(body)).into_response()
+}
+
+/// The newer `google.rpc.Status` error shape (People and newer APIs).
+fn rpc_error(status: StatusCode, rpc: &str, domain: &str, reason: &str, message: &str) -> Response {
+    let body = json!({ "error": {
+        "code": status.as_u16(),
+        "message": message,
+        "status": rpc,
+        "details": [{
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": reason,
+            "domain": domain,
+        }],
     }});
     (status, axum::Json(body)).into_response()
 }
@@ -1702,7 +1806,7 @@ async fn token(
     let mut body = json!({
         "access_token": access,
         "expires_in": 3599,
-        "scope": "https://www.googleapis.com/auth/calendar.readonly",
+        "scope": SCOPES,
         "token_type": "Bearer",
     });
     if g.config.rotate_refresh_tokens {
@@ -1759,11 +1863,15 @@ fn redeem(g: &Inner, f: &BTreeMap<String, String>) -> Response {
         "access_token": access,
         "expires_in": 3599,
         "refresh_token": refresh,
-        "scope": "https://www.googleapis.com/auth/calendar.readonly",
+        "scope": SCOPES,
         "token_type": "Bearer",
         "id_token": id_token,
     }))
 }
+
+/// Scopes the token endpoint reports as granted: everything Musubi asks for.
+const SCOPES: &str = "openid https://www.googleapis.com/auth/calendar.readonly \
+https://www.googleapis.com/auth/tasks.readonly https://www.googleapis.com/auth/contacts.readonly";
 
 fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)

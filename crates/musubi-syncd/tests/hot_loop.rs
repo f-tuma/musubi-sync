@@ -98,6 +98,8 @@ impl H {
                 client_secret: SecretString::from("test-secret"),
                 api_base: g.calendar_api().parse().expect("url"),
                 token_url: g.token_url().parse().expect("url"),
+                tasks_base: g.tasks_api().parse().expect("url"),
+                people_base: g.people_api().parse().expect("url"),
             },
             Arc::new(clock.clone()),
         )

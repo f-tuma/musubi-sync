@@ -1,0 +1,14 @@
+---
+source: crates/musubi-google/tests/tasks_people_golden.rs
+expression: "decode :: < Task, TasksCodec >\n(\"tasks\", & stringify! (tasks_unknown_field)[\"tasks\".len() + 1 ..])"
+---
+{
+  "uid": "dW5rbm93bg",
+  "title": "",
+  "showWithoutTime": true,
+  "progress": "needs-action",
+  "hidden": false,
+  "priority": 0,
+  "updated": "2026-11-12T11:00:00Z",
+  "sequence": 0
+}

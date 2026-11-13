@@ -1,0 +1,14 @@
+{
+  "kind": "tasks#task",
+  "id": "c3VidGFzaw",
+  "etag": "\"LTIyMjIyMg\"",
+  "title": "Zavolat instalatérovi",
+  "updated": "2026-11-12T10:00:00.000Z",
+  "selfLink": "https://www.googleapis.com/tasks/v1/lists/l/tasks/c3VidGFzaw",
+  "parent": "MDY2NjQ1NTc2MDQ1NTg0ODcyNTc6MDow",
+  "position": "00000000000000000000",
+  "status": "needsAction",
+  "links": [
+    { "type": "email", "description": "Re: oprava", "link": "https://mail.google.com/mail/#all/abc" }
+  ]
+}

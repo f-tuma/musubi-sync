@@ -1,0 +1,9 @@
+{
+  "resourceName": "people/c1000000000000000002",
+  "etag": "%EgMBAgMaBAECBQc=",
+  "metadata": {
+    "sources": [ { "type": "CONTACT", "id": "de0b6b3a7640002", "updateTime": "2026-11-01T00:00:00Z" } ],
+    "objectType": "PERSON"
+  },
+  "names": [ { "metadata": { "primary": true }, "displayName": "Petr", "givenName": "Petr" } ]
+}

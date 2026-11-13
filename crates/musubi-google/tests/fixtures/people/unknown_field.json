@@ -1,0 +1,12 @@
+{
+  "resourceName": "people/c1000000000000000005",
+  "etag": "%EgMBAgMaBAECBRA=",
+  "metadata": {
+    "sources": [ { "type": "CONTACT", "id": "de0b6b3a7640005", "updateTime": "2026-11-03T00:00:00Z" } ],
+    "objectType": "PERSON"
+  },
+  "names": [ { "metadata": { "primary": true }, "displayName": "Neznámé pole" } ],
+  "clientData": [ { "metadata": {}, "key": "app", "value": "x" } ],
+  "sipAddresses": [ { "value": "sip:a@example.org", "type": "work" } ],
+  "futureField": { "nested": true }
+}
