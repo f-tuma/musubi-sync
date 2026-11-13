@@ -101,8 +101,8 @@ pub(crate) fn scrub(mut url: Url) -> Url {
 }
 
 /// Loopback, private, link-local, CGNAT, multicast, broadcast or unspecified,
-/// also when embedded in IPv6 (IPv4-mapped, -compatible, NAT64; 6to4 and
-/// site-local count as private outright).
+/// also when embedded in IPv6 (IPv4-mapped, -compatible, SIIT, NAT64; 6to4,
+/// local-use NAT64 and site-local count as private outright).
 pub(crate) fn is_private(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(a) => {
@@ -118,10 +118,17 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
         }
         IpAddr::V6(a) => {
             let s = a.segments();
-            if matches!(s, [0, 0, 0, 0, 0, 0, ..] | [0x64, 0xff9b, 0, 0, 0, 0, ..]) {
+            if matches!(
+                s,
+                [0, 0, 0, 0, 0, 0, ..]
+                    | [0, 0, 0, 0, 0xffff, 0, ..]
+                    | [0x64, 0xff9b, 0, 0, 0, 0, ..]
+            ) {
                 return is_private(IpAddr::V4(Ipv4Addr::from_bits(a.to_bits() as u32)));
             }
-            s[0] == 0x2002
+            // 64:ff9b:1::/48 is local-use NAT64 (RFC 8215): private whatever it embeds.
+            matches!(s, [0x64, 0xff9b, 1, ..])
+                || s[0] == 0x2002
                 || (s[0] & 0xffc0) == 0xfec0
                 || a.is_loopback()
                 || a.is_unspecified()
@@ -396,6 +403,10 @@ mod tests {
             "::10.0.0.1",
             "64:ff9b::127.0.0.1",
             "64:ff9b::a00:1",
+            "::ffff:0:7f00:1",
+            "::ffff:0:a00:1",
+            "64:ff9b:1::808:808",
+            "64:ff9b:1:ffff::1",
             "2002:808:808::1",
             "fec0::1",
             "feff::1",
@@ -410,6 +421,8 @@ mod tests {
             "::ffff:8.8.8.8",
             "::8.8.8.8",
             "64:ff9b::8.8.8.8",
+            "::ffff:0:808:808",
+            "64:ff9b:2::1",
             "2003::1",
         ] {
             assert!(!is_private(ip.parse().unwrap()), "{ip}");
