@@ -202,6 +202,12 @@ async fn rediscover_runs_a_discovery_and_defers_the_collection() {
     let discover = h.fake.calls().discover;
 
     h.put_at("n", 1);
+    // The adapter recorded a descent (DAV: 405 on sync-collection); the
+    // rediscovery hands it back as the new endpoint state.
+    let descended =
+        musubi_model::provider::Endpoint::new("https://fake.test", serde_json::json!({ "delta": false }));
+    h.fake.set_endpoint(Some(descended.clone()));
+    let reads = h.fake.read_endpoints().len();
     h.fake.fail(Op::Page, SyncError::Rediscover);
     h.advance(h.config.poll_every_push + Duration::from_secs(1));
     h.engine.run_until_idle().await.unwrap();
@@ -210,6 +216,12 @@ async fn rediscover_runs_a_discovery_and_defers_the_collection() {
     h.advance(Duration::from_secs(2));
     h.engine.run_until_idle().await.unwrap();
     assert_eq!(h.live("cal1", &["n"]), ["n"]);
+    // The read that failed had the old endpoint; every read after the
+    // discovery, the deferred one too, has the endpoint it stored.
+    let seen = h.fake.read_endpoints();
+    assert_ne!(seen[reads], Some(descended.clone()));
+    assert!(seen.len() > reads + 1);
+    assert!(seen[reads + 1..].iter().all(|e| *e == Some(descended.clone())));
 }
 
 #[tokio::test]

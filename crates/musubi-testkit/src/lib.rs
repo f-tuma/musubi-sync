@@ -154,6 +154,8 @@ struct State {
     full_on_delta: bool,
     /// Every `unsubscribe` call: channel and resource id.
     unsubscribed: Vec<(ChannelId, String)>,
+    /// The account context's endpoint of every `changes` call.
+    read_endpoints: Vec<Option<Endpoint>>,
 }
 
 /// In-memory provider. Cheap to clone; clones share state.
@@ -355,6 +357,11 @@ impl FakeProvider {
     /// Channel and resource id of every `unsubscribe` call so far.
     pub fn unsubscribed(&self) -> Vec<(ChannelId, String)> {
         self.lock().unsubscribed.clone()
+    }
+
+    /// The [`AccountCx::endpoint`] of every `changes` call so far.
+    pub fn read_endpoints(&self) -> Vec<Option<Endpoint>> {
+        self.lock().read_endpoints.clone()
     }
 
     /// Open watch channels.
@@ -743,12 +750,13 @@ impl Provider for FakeProvider {
 
     fn changes<'a>(
         &'a self,
-        _cx: &'a AccountCx,
+        cx: &'a AccountCx,
         col: &'a CollectionRef,
         cursor: Option<Cursor>,
         hint: FetchHint,
     ) -> BoxStream<'a, Result<ChangePage, SyncError>> {
         let mut s = self.lock();
+        s.read_endpoints.push(cx.endpoint.clone());
         let snapshot = s.version;
         let restarted = cursor.is_some() && s.full_on_delta;
         let pos = match (&cursor, hint.start) {

@@ -719,6 +719,57 @@ mod tests {
         assert_eq!(rids[3], "2026-03-09T10:00:00Z");
     }
 
+    /// Index rows of the canonical form `musubi-ical` decodes a fixture to,
+    /// as its golden snapshot records it (the engine may not depend on the
+    /// codec crate, even in tests).
+    fn ical_rows(name: &str) -> Vec<(String, String)> {
+        let snap = std::fs::read_to_string(format!(
+            "{}/../musubi-ical/tests/snapshots/codec_golden__events__{name}.snap",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        // Past the insta header: `---`, metadata, `---`.
+        let body = snap.splitn(3, "---\n").nth(2).unwrap();
+        let w = item_write(
+            obj(name, &ev(serde_json::from_str(body).unwrap()), None),
+            &codecs(),
+            INDEX,
+            None,
+        );
+        w.occurrences
+            .rows
+            .iter()
+            .map(|r| (r.start.to_string(), r.end.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn ical_fixtures_index_rdates_moves_and_periods() {
+        // Weekly x4 from 2 Nov, 16 Nov cancelled, an RDATE on 25 Nov moved an hour later.
+        assert_eq!(
+            ical_rows("rdate_moved"),
+            [
+                ("2026-11-02T09:00:00Z", "2026-11-02T10:00:00Z"),
+                ("2026-11-09T09:00:00Z", "2026-11-09T10:00:00Z"),
+                ("2026-11-23T09:00:00Z", "2026-11-23T10:00:00Z"),
+                ("2026-11-25T10:00:00Z", "2026-11-25T11:00:00Z"),
+            ]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+        );
+        // Weekly x2 in Prague, plus RDATE periods of their own lengths.
+        assert_eq!(
+            ical_rows("rdate_period"),
+            [
+                ("2026-11-02T08:00:00Z", "2026-11-02T09:00:00Z"),
+                ("2026-11-09T08:00:00Z", "2026-11-09T09:00:00Z"),
+                ("2026-11-20T08:00:00Z", "2026-11-20T11:00:00Z"),
+                ("2026-11-21T08:00:00Z", "2026-11-21T10:30:00Z"),
+                ("2026-11-22T08:00:00Z", "2026-11-22T09:00:00Z"),
+            ]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+        );
+    }
+
     #[test]
     fn redecode_takes_master_from_correlation_and_recomputes_the_rid() {
         // A Google-shaped master and its moved exception, as stored.
