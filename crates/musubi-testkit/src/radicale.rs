@@ -17,7 +17,7 @@
 
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::harness::{Daemon, free_addr};
 
@@ -56,33 +56,35 @@ impl Radicale {
         let dir = tempfile::tempdir().expect("tempdir");
         let htpasswd = dir.path().join("htpasswd");
         std::fs::write(&htpasswd, format!("{USER}:{PASSWORD}\n")).expect("htpasswd");
-        let addr = free_addr();
-        let mut cmd = Command::new(&python);
-        cmd.args(["-m", "radicale", "--config", ""])
-            .arg("--server-hosts")
-            .arg(addr.to_string())
-            .args(["--auth-type", "htpasswd", "--auth-htpasswd-filename"])
-            .arg(&htpasswd)
-            .args([
-                "--auth-htpasswd-encryption",
-                "plain",
-                "--storage-filesystem-folder",
-            ])
-            .arg(dir.path().join("collections"))
-            // Hermetic: no user config, no bytecode written into the venv.
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .env_remove("RADICALE_CONFIG");
-        let daemon =
-            Daemon::spawn(cmd).unwrap_or_else(|e| panic!("cannot run {}: {e}", python.display()));
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while std::net::TcpStream::connect(addr).is_err() {
-            assert!(
-                Instant::now() < deadline,
-                "Radicale did not start:\n{}",
-                daemon.tail(40)
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        // A free port can be taken before Radicale binds it; it then exits
+        // ("No servers started") and we try another.
+        let mut tries = 0;
+        let (daemon, addr) = loop {
+            tries += 1;
+            let addr = free_addr();
+            let mut cmd = Command::new(&python);
+            cmd.args(["-m", "radicale", "--config", ""])
+                .arg("--server-hosts")
+                .arg(addr.to_string())
+                .args(["--auth-type", "htpasswd", "--auth-htpasswd-filename"])
+                .arg(&htpasswd)
+                .args([
+                    "--auth-htpasswd-encryption",
+                    "plain",
+                    "--storage-filesystem-folder",
+                ])
+                .arg(dir.path().join("collections"))
+                // Hermetic: no user config, no bytecode written into the venv.
+                .env("PYTHONDONTWRITEBYTECODE", "1")
+                .env_remove("RADICALE_CONFIG");
+            let daemon = Daemon::spawn(cmd)
+                .unwrap_or_else(|e| panic!("cannot run {}: {e}", python.display()));
+            let ready = format!("Listening on '{addr}'");
+            if daemon.wait_line(&ready, Duration::from_secs(30)).is_some() {
+                break (daemon, addr);
+            }
+            assert!(tries < 3, "Radicale did not start:\n{}", daemon.tail(40));
+        };
         // reqwest's `rustls-no-provider` needs a process default; another
         // caller may have installed it already.
         let _ = rustls::crypto::ring::default_provider().install_default();

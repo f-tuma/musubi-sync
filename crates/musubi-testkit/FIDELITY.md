@@ -274,10 +274,17 @@ listed here.
   `getcontenttype` (where the resource has them). `propname` is answered like
   `allprop`. Unknown properties in `D:prop` go to a `404` propstat, as RFC
   4918 says.
+- **Hrefs are percent-encoded** like Radicale 3.9.0 encodes them: every byte
+  except unreserved characters and `/` (`a@b c.ics` → `a%40b%20c.ics`).
+  Request paths and request hrefs are decoded, so encoded and unencoded
+  hrefs both work in a multiget. Other servers may leave `@` or other
+  sub-delimiters unencoded.
 - **Sync tokens** are `http://musubi.test/sync{collection path}{n}`, where `n`
-  is the collection's change counter. A token is valid while `n` is not older
+  is a server-wide change counter, not a per-collection one: a change in
+  another collection moves every collection's current token. A token is valid while `n` is not older
   than the last `expire_sync_tokens`. Expired, foreign and malformed tokens
-  answer `403` with `D:valid-sync-token` (RFC 6578 3.2). Some servers answer
+  answer `403` with `D:valid-sync-token` (RFC 6578 3.2). A request with a
+  Depth other than `0`, or without `D:sync-level`, answers `400`. Some servers answer
   `409` instead; `Fault::InvalidSyncToken { status: 409 }` covers that.
 - **Truncation (RFC 6578 3.6)** ends the multistatus with a `507` response
   for the collection's href and a token that continues the delta. A client
@@ -300,6 +307,8 @@ listed here.
   CardDAV entry's only `addressbook-home-set`. `current-user-privilege-set`
   is left out, and `supported-address-data` is vCard 3.0 only. `put` of a
   vCard that is not 3.0 panics: the fixture is wrong, not the adapter. The
-  calendar home has a `CS:notification` collection.
+  calendar home has a `CS:notification` collection. Address books advertise
+  and answer `sync-collection` like calendars, though nothing shows iCloud
+  CardDAV does (providers.md I1); `Quirk::NoSync` models the opposite.
   *Unverified until T11 measures iCloud.*
 - **Plain HTTP/1.1 on 127.0.0.1**, Basic auth only, no TLS, no gzip.

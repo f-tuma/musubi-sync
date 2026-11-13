@@ -106,11 +106,17 @@ async fn pf(dav: &FakeDav, host: Host, path: &str, depth: &str, props: &str) -> 
     r.xml()
 }
 
+/// A `REPORT` with the Depth clients send: 0 for sync-collection (RFC 6578), else 1.
 async fn report(dav: &FakeDav, path: &str, body: &str) -> Resp {
+    let depth = if body.contains("sync-collection") {
+        "0"
+    } else {
+        "1"
+    };
     send(
         "REPORT",
         &format!("{}{path}", dav.url(Host::Caldav)),
-        Some("1"),
+        Some(depth),
         body,
         ALICE,
     )
@@ -847,11 +853,16 @@ async fn invalid_sync_token_fault_answers_valid_sync_token_whatever_the_token() 
     let (dav, cal) = generic().await;
     let t = dav.sync_token(&cal);
     for status in [403, 409] {
-        dav.fail(
-            Req::Report("sync-collection"),
-            Fault::InvalidSyncToken { status },
-            1,
-        );
+        dav.fail(Req::Any, Fault::InvalidSyncToken { status }, 1);
+        // Only sync-collection answers it; other requests neither fail nor consume it.
+        pf(&dav, Host::Caldav, &cal, "0", "<D:getetag/>").await;
+        let r = report(
+            &dav,
+            &cal,
+            &multiget("C:calendar-multiget", &[], "C:calendar-data"),
+        )
+        .await;
+        assert_eq!(r.status, 207);
         let r = report(&dav, &cal, &sync_collection(&t, None)).await;
         assert_eq!(r.status, status);
         assert_eq!(error_condition(&r), "valid-sync-token");
@@ -1226,4 +1237,105 @@ async fn requests_are_logged_and_counted_per_method_and_report() {
     );
     dav.clear_requests();
     assert!(dav.requests().is_empty());
+}
+
+#[tokio::test]
+async fn hrefs_are_percent_encoded_out_and_decoded_in() {
+    let (dav, cal) = generic().await;
+    let raw = dav.put(&cal, "a@b c.ics", &ics("odd", "VEVENT", "20261201T100000Z"));
+    // Radicale 3.9.0 answers this href for an object named `a@b c.ics`.
+    let enc = format!("{cal}a%40b%20c.ics");
+    assert_eq!(raw, format!("{cal}a@b c.ics"));
+
+    let ms = pf(&dav, Host::Caldav, &cal, "1", "<D:getetag/>").await;
+    assert_eq!(hrefs(&ms), [cal.clone(), enc.clone()]);
+    let ms = report(&dav, &cal, &sync_collection("", None)).await.xml();
+    assert_eq!(hrefs(&ms), std::slice::from_ref(&enc));
+    for asked in [enc.as_str(), raw.as_str()] {
+        let ms = report(
+            &dav,
+            &cal,
+            &multiget("C:calendar-multiget", &[asked], "C:calendar-data"),
+        )
+        .await
+        .xml();
+        let r = resp(&ms, &enc);
+        assert!(
+            found(r, NS_CALDAV, "calendar-data")
+                .expect("data")
+                .text
+                .contains("UID:odd"),
+            "{asked}"
+        );
+    }
+    let r = send(
+        "GET",
+        &format!("{}{enc}", dav.url(Host::Caldav)),
+        None,
+        "",
+        ALICE,
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert!(r.body.contains("UID:odd"));
+    let r = send(
+        "PROPFIND",
+        &format!("{}{enc}", dav.url(Host::Caldav)),
+        Some("0"),
+        &propfind("<D:getetag/>"),
+        ALICE,
+    )
+    .await;
+    assert_eq!(hrefs(&r.xml()), std::slice::from_ref(&enc));
+
+    dav.delete(&raw);
+    let ms = report(&dav, &cal, &sync_collection(&token(&ms), None))
+        .await
+        .xml();
+    assert_eq!(
+        status_of(resp(&ms, &enc)),
+        Some("HTTP/1.1 404 Not Found"),
+        "the tombstone too"
+    );
+}
+
+#[tokio::test]
+async fn sync_collection_needs_depth_0_and_sync_level() {
+    let (dav, cal) = generic().await;
+    let url = format!("{}{cal}", dav.url(Host::Caldav));
+    let body = sync_collection("", None);
+    for depth in ["1", "infinity"] {
+        assert_eq!(
+            send("REPORT", &url, Some(depth), &body, ALICE).await.status,
+            400,
+            "{depth}"
+        );
+    }
+    assert_eq!(
+        send("REPORT", &url, None, &body, ALICE).await.status,
+        207,
+        "REPORT defaults to Depth 0"
+    );
+    let no_level = body.replace("<D:sync-level>1</D:sync-level>", "");
+    assert_eq!(
+        send("REPORT", &url, Some("0"), &no_level, ALICE)
+            .await
+            .status,
+        400
+    );
+}
+
+#[tokio::test]
+async fn multiget_without_prop_still_answers_a_propstat() {
+    let (dav, cal) = generic().await;
+    let a = dav.put(&cal, "a.ics", &ics("a", "VEVENT", "20261201T100000Z"));
+    let body = format!(
+        r#"<?xml version="1.0"?><C:calendar-multiget {NS}><D:href>{a}</D:href></C:calendar-multiget>"#
+    );
+    let ms = report(&dav, &cal, &body).await.xml();
+    let ps = resp(&ms, &a).kid(NS_DAV, "propstat").expect("propstat");
+    assert_eq!(
+        ps.kid(NS_DAV, "status").expect("status").text,
+        "HTTP/1.1 200 OK"
+    );
 }

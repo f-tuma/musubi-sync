@@ -101,10 +101,23 @@ async fn scenarios_pass_on_every_target() {
                 skipped.push(format!("{id}: {name} has no {k:?}"));
                 continue;
             }
-            match run(&bin, &s, t.as_mut()).await {
-                Ok(()) => passed.push(id),
-                Err(Stop::Skip(r)) => skipped.push(format!("{id}: {r}")),
-                Err(Stop::Fail(r)) => failed.push(format!("{id}: {r}")),
+            // A panic (say, a fixture the target refuses) fails this scenario, not the summary.
+            let rt = tokio::runtime::Handle::current();
+            let outcome = tokio::task::block_in_place(|| {
+                std::thread::scope(|sc| sc.spawn(|| rt.block_on(run(&bin, &s, t.as_mut()))).join())
+            });
+            match outcome {
+                Ok(Ok(())) => passed.push(id),
+                Ok(Err(Stop::Skip(r))) => skipped.push(format!("{id}: {r}")),
+                Ok(Err(Stop::Fail(r))) => failed.push(format!("{id}: {r}")),
+                Err(p) => {
+                    let msg = p
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| p.downcast_ref::<&str>().copied())
+                        .unwrap_or("?");
+                    failed.push(format!("{id}: panicked: {msg}"));
+                }
             }
         }
     }
@@ -155,6 +168,19 @@ struct Run<'a> {
 }
 
 async fn run(bin: &Path, s: &Scenario, target: &mut dyn Target) -> Result<(), Stop> {
+    let counted: BTreeSet<String> = s
+        .steps
+        .iter()
+        .filter_map(|st| match st {
+            Step::Expect(e) => Some(e.no_requests.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    // A target that cannot count a label skips now, not after an expect's timeout.
+    for l in &counted {
+        target.requests(l)?;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let listen = free_addr();
     let data = dir.path().join("data");
@@ -181,15 +207,6 @@ async fn run(bin: &Path, s: &Scenario, target: &mut dyn Target) -> Result<(), St
         mark: 0,
         marked: BTreeMap::new(),
     };
-    let counted: BTreeSet<String> = s
-        .steps
-        .iter()
-        .filter_map(|st| match st {
-            Step::Expect(e) => Some(e.no_requests.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
     for (i, step) in s.steps.iter().enumerate() {
         r.step(step, &counted).await.map_err(|e| match e {
             Stop::Fail(m) => Stop::Fail(format!("step {i} ({step:?}): {m}\n{}", r.daemon.tail(30))),
@@ -207,15 +224,7 @@ impl Run<'_> {
                 collection,
                 object,
             } => {
-                let col = match collection {
-                    Some(c) => Some(
-                        self.collections
-                            .get(c)
-                            .ok_or_else(|| Stop::Fail(format!("no collection {c}")))?
-                            .clone(),
-                    ),
-                    None => None,
-                };
+                let col = self.collection(collection.as_deref())?;
                 let handle = self
                     .target
                     .put(
@@ -244,10 +253,7 @@ impl Run<'_> {
             }
             Step::Reconnect => self.target.reconnect(&self.api, &self.admin).await?,
             Step::ExpireCursor { collection } => {
-                let col = collection
-                    .as_ref()
-                    .and_then(|c| self.collections.get(c))
-                    .cloned();
+                let col = self.collection(collection.as_deref())?;
                 self.target.expire_cursor(col.as_deref()).await?;
             }
             Step::Inject { fault, times } => self.target.inject(fault, *times).await?,
@@ -270,11 +276,29 @@ impl Run<'_> {
             }
             Step::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms)).await,
             Step::Expect(e) => {
+                let refs = e
+                    .window_first
+                    .iter()
+                    .chain(e.raw_contains.as_ref().map(|r| &r.reference));
+                if let Some(r) = refs.into_iter().find(|r| !self.labels.contains_key(*r)) {
+                    return Err(Stop::Fail(format!("no ref {r}")));
+                }
                 self.expect(e).await.map_err(Stop::Fail)?;
                 self.remark(counted).await;
             }
         }
         Ok(())
+    }
+
+    /// The handle of a named collection; `None` stays `None`, an unknown name fails.
+    fn collection(&self, name: Option<&str>) -> Result<Option<String>, Stop> {
+        name.map(|c| {
+            self.collections
+                .get(c)
+                .cloned()
+                .ok_or_else(|| Stop::Fail(format!("no collection {c}")))
+        })
+        .transpose()
     }
 
     async fn remark(&mut self, counted: &BTreeSet<String>) {

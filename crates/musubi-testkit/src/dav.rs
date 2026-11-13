@@ -594,7 +594,9 @@ impl State {
                 Req::Path(p) => same_path(p, path),
             };
             let applies = match fault {
-                Fault::Truncate(_) => report == Some("sync-collection"),
+                Fault::Truncate(_) | Fault::InvalidSyncToken { .. } => {
+                    report == Some("sync-collection")
+                }
                 Fault::ChangeBeforeMultiget | Fault::DeleteBeforeMultiget => {
                     report.is_some_and(|r| r.ends_with("-multiget"))
                 }
@@ -710,7 +712,7 @@ fn resolve(inner: &Inner, s: &State, path: &str) -> Option<Res> {
 async fn handle(AxState((inner, host)): AxState<(Arc<Inner>, Host)>, req: AxRequest) -> Response {
     let (parts, body) = req.into_parts();
     let method = parts.method.as_str().to_owned();
-    let path = parts.uri.path().to_owned();
+    let path = pct_decode(parts.uri.path());
     let path_q = parts
         .uri
         .path_and_query()
@@ -834,7 +836,10 @@ async fn handle(AxState((inner, host)): AxState<(Arc<Inner>, Host)>, req: AxRequ
             propfind(&cx, &s, &path, depth != "0", doc.as_ref())
         }
         _ if method == "REPORT" => match doc {
-            Some(d) => report_(&cx, &mut s, &path, &d, truncate, before_multiget),
+            Some(d) => {
+                let depth = headers.get("depth").and_then(|v| v.to_str().ok());
+                report_(&cx, &mut s, &path, depth, &d, truncate, before_multiget)
+            }
             None => (StatusCode::BAD_REQUEST, "REPORT needs a body").into_response(),
         },
         _ => status(StatusCode::METHOD_NOT_ALLOWED),
@@ -1168,8 +1173,13 @@ fn multistatus_open() -> String {
 }
 
 fn response(out: &mut String, href: &str, found: &str, missing: &str) {
-    let _ = write!(out, "<D:response><D:href>{}</D:href>", esc(href));
-    if !found.is_empty() {
+    let _ = write!(
+        out,
+        "<D:response><D:href>{}</D:href>",
+        esc(&pct_encode(href))
+    );
+    // A response needs a propstat or a status (RFC 4918 14.24), also when no prop was asked.
+    if !found.is_empty() || missing.is_empty() {
         let _ = write!(
             out,
             "<D:propstat><D:prop>{found}</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>"
@@ -1188,7 +1198,7 @@ fn status_response(out: &mut String, href: &str, line: &str) {
     let _ = writeln!(
         out,
         "<D:response><D:href>{}</D:href><D:status>HTTP/1.1 {line}</D:status></D:response>",
-        esc(href)
+        esc(&pct_encode(href))
     );
 }
 
@@ -1213,6 +1223,7 @@ fn report_(
     cx: &Cx<'_>,
     s: &mut State,
     path: &str,
+    depth: Option<&str>,
     doc: &El,
     truncate: Option<usize>,
     before: Option<Fault>,
@@ -1234,6 +1245,14 @@ fn report_(
         .unwrap_or_default();
     match (doc.ns.as_str(), doc.name.as_str(), kind) {
         (NS_DAV, "sync-collection", _) if s.collections[&col].syncs() => {
+            // RFC 6578 3.2: Depth 0 only (REPORT defaults to 0), sync-level required.
+            if depth.is_some_and(|d| d != "0") || doc.kid(NS_DAV, "sync-level").is_none() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "sync-collection needs Depth: 0 and DAV:sync-level",
+                )
+                    .into_response();
+            }
             sync_collection(cx, s, &col, doc, &props, truncate)
         }
         (NS_CALDAV, "calendar-query", Kind::Calendar(_)) => {
@@ -1424,12 +1443,49 @@ fn multiget(
     xml(StatusCode::MULTI_STATUS, out)
 }
 
-/// The path of an href that may be an absolute URL.
+/// The decoded path of an href that may be an absolute URL.
 fn href_path(href: &str) -> String {
-    match href.split_once("://") {
-        Some((_, rest)) => rest.find('/').map_or("/".into(), |i| rest[i..].to_owned()),
-        None => href.to_owned(),
+    pct_decode(match href.split_once("://") {
+        Some((_, rest)) => rest.find('/').map_or("/", |i| &rest[i..]),
+        None => href,
+    })
+}
+
+/// Percent-decodes a path; a `%` not followed by two hex digits stays as is.
+fn pct_decode(path: &str) -> String {
+    let b = path.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = path
+            .get(i + 1..i + 3)
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
     }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Percent-encodes everything but unreserved characters and `/`, as Radicale
+/// does (`a@b c.ics` → `a%40b%20c.ics`).
+fn pct_encode(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for &c in path.as_bytes() {
+        if c.is_ascii_alphanumeric() || b"-._~/".contains(&c) {
+            out.push(c as char);
+        } else {
+            let _ = write!(out, "%{c:02X}");
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1628,6 +1684,17 @@ mod tests {
         assert!(parse("<a><b></a>").is_err());
         assert!(
             parse("<!DOCTYPE a [<!ENTITY e SYSTEM \"file:///etc/passwd\">]><a>&e;</a>").is_err()
+        );
+    }
+
+    #[test]
+    fn percent_coding_round_trips() {
+        assert_eq!(pct_encode("/c/a@b c.ics"), "/c/a%40b%20c.ics");
+        assert_eq!(pct_decode("/c/a%40b%20c.ics"), "/c/a@b c.ics");
+        assert_eq!(pct_decode("/c/%C3%A9%zz%4"), "/c/é%zz%4");
+        assert_eq!(
+            pct_decode(&pct_encode("/c/žluť 100%.vcf")),
+            "/c/žluť 100%.vcf"
         );
     }
 
