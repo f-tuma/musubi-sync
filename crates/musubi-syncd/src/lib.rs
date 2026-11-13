@@ -56,7 +56,7 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use jiff::Timestamp;
-use musubi_engine::Engine;
+use musubi_engine::{Codecs, DecodeFn, Engine, Providers};
 use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider};
 use musubi_model::control::{ApiKeyHash, Scope};
 use musubi_model::provider::Clock;
@@ -86,7 +86,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const BODY_LIMIT: usize = 64 * 1024;
 
 /// The sync engine as the node runs it.
-pub type SyncEngine = Engine<SqliteStorage, GoogleCodec>;
+pub type SyncEngine = Engine<SqliteStorage>;
 
 /// The running node: stores, adapter, engine, keys and the commit bus.
 pub struct App {
@@ -155,7 +155,13 @@ impl App {
         let callback = public.join("v1/webhooks/google").map_err(err)?;
         let engine = Engine::new(
             storage.clone(),
-            google.clone(),
+            Providers::new().with(
+                google.clone(),
+                Codecs {
+                    event: Some(DecodeFn::of::<GoogleCodec>()),
+                    ..Codecs::default()
+                },
+            ),
             control.clone(),
             Arc::new(Vault {
                 control: control.clone(),
@@ -247,6 +253,12 @@ impl App {
     /// The Google adapter (shared with the engine).
     pub fn google(&self) -> &GoogleProvider {
         &self.google
+    }
+
+    /// The tenants with a store on disk.
+    pub fn tenants(&self) -> Result<Vec<TenantId>, String> {
+        let dir = self.data_dir.join("tenants");
+        admin::tenant_dirs(&dir).map_err(|e| format!("{}: {e}", dir.display()))
     }
 
     /// The sync engine over this node's stores.

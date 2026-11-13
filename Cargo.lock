@@ -976,6 +976,7 @@ dependencies = [
  "musubi-store-sqlite",
  "musubi-testkit",
  "secrecy",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",

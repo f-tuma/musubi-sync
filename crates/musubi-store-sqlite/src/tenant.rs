@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use musubi_model::capability::ProviderId;
 use musubi_model::error::StoreError;
 use musubi_model::id::{AccountId, CollectionId, EntityId, ItemId, PlacementId, ReadId, Seq};
 use musubi_model::journal::{Change, ChangeOp, ChangeTarget, ChangesPage};
@@ -14,9 +15,9 @@ use musubi_model::placement::{Delivery, Direction, Origin, Projection, Role};
 use musubi_model::remote::{Cursor, MediaType, Raw, RawHash, RemoteKey, Validator};
 use musubi_model::store::{
     CanonicalJson, CheckpointInfo, CheckpointMode, CollectionError, CollectionState,
-    CollectionStatus, Coverage, DiscoveryWrite, EntityView, Include, ItemState, ItemView,
-    ItemWrite, OccurrenceRow, OccurrenceView, OccurrenceWrite, PageWrite, PlacementView, PruneInfo,
-    RangeCursor, RangePage, RangeQuery, SeriesRef, StoreStats, TenantStore,
+    CollectionStatus, Correlation, Coverage, DiscoveryWrite, EntityView, Include, ItemState,
+    ItemView, ItemWrite, OccurrenceRow, OccurrenceView, OccurrenceWrite, PageWrite, PlacementView,
+    PruneInfo, RangeCursor, RangePage, RangeQuery, SeriesRef, StoreStats, TenantStore,
 };
 use musubi_model::time::TimeWindow;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
@@ -46,6 +47,13 @@ pub(crate) fn head(c: &Connection) -> Result<Seq> {
 
 fn meta(c: &Connection, k: &str) -> Result<i64> {
     Ok(c.query_row("SELECT v FROM meta WHERE k = ?1", [k], |r| r.get(0))?)
+}
+
+/// `meta` keys of the re-decode versions of `kind` items of `provider`
+/// (docs/plan/phase2.md 4.1).
+fn redecode_keys(provider: &ProviderId, kind: EntityKind) -> (String, String) {
+    let base = format!("mapping:{}:{}", provider.0, kind.as_str());
+    (format!("{base}:schema"), format!("{base}:mapping"))
 }
 
 fn canonical(s: Option<String>) -> Result<Option<CanonicalJson>> {
@@ -559,7 +567,8 @@ fn entity(c: &Connection, id: EntityId, inc: Include) -> Result<Option<EntityVie
 fn item(c: &Connection, id: ItemId, inc: Include) -> Result<Option<ItemView>> {
     let mut st = c.prepare_cached(&format!(
         "SELECT i.entity, i.collection, i.kind, i.key, i.validator, i.raw_hash,
-           i.schema_version, i.mapping_version, i.observed, i.tombstone, {}
+           i.schema_version, i.mapping_version, i.observed, i.tombstone, i.uid,
+           i.recurrence_id, {}
          FROM items i LEFT JOIN raw r ON r.hash = i.raw_hash WHERE i.id = ?1",
         if inc.raw {
             "r.media_type, r.body"
@@ -571,11 +580,11 @@ fn item(c: &Connection, id: ItemId, inc: Include) -> Result<Option<ItemView>> {
     let Some(r) = rows.next()? else {
         return Ok(None);
     };
-    let media: Option<String> = r.get(10)?;
+    let media: Option<String> = r.get(12)?;
     let raw = match media {
         Some(m) => Some(Raw {
             media_type: parse_enum::<MediaType>(m)?,
-            body: r.get(11)?,
+            body: r.get(13)?,
         }),
         None => None,
     };
@@ -592,6 +601,13 @@ fn item(c: &Connection, id: ItemId, inc: Include) -> Result<Option<ItemView>> {
         observed: canonical(r.get(8)?)?,
         tombstone: r.get(9)?,
         raw,
+        correlation: match r.get::<_, Option<String>>(10)? {
+            Some(uid) => Some(Correlation {
+                uid,
+                recurrence_id: opt_ts(r.get(11)?)?,
+            }),
+            None => None,
+        },
     }))
 }
 
@@ -1095,6 +1111,42 @@ impl TenantStore for SqliteTenant {
                         .ok_or_else(|| corrupt("listed item vanished"))
                 })
                 .collect()
+        })?)
+    }
+
+    fn redecoded(
+        &self,
+        provider: &ProviderId,
+        kind: EntityKind,
+    ) -> Result<Option<(u32, u32)>, StoreError> {
+        let (schema, mapping) = redecode_keys(provider, kind);
+        Ok(self.shared.read(|c| {
+            let get = |k: &str| -> Result<Option<u32>> {
+                let v: Option<i64> = c
+                    .query_row("SELECT v FROM meta WHERE k = ?1", [k], |r| r.get(0))
+                    .optional()?;
+                v.map(|v| u32::try_from(v).map_err(corrupt)).transpose()
+            };
+            Ok(get(&schema)?.zip(get(&mapping)?))
+        })?)
+    }
+
+    fn set_redecoded(
+        &mut self,
+        provider: &ProviderId,
+        kind: EntityKind,
+        schema: u32,
+        mapping: u32,
+    ) -> Result<(), StoreError> {
+        let keys = redecode_keys(provider, kind);
+        Ok(self.shared.write(|c| {
+            for (k, v) in [(keys.0, schema), (keys.1, mapping)] {
+                c.prepare_cached(
+                    "INSERT INTO meta VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2",
+                )?
+                .execute(params![k, i64::from(v)])?;
+            }
+            Ok(())
         })?)
     }
 

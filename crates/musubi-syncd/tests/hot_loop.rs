@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use musubi_engine::{Config, Engine};
+use musubi_engine::{Codecs, Config, DecodeFn, Engine, PollBounds, Providers};
 use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider};
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{AccountRecord, AccountState, AccountTokens, Credentials};
@@ -32,7 +32,7 @@ struct H {
     g: FakeGoogle,
     clock: ManualClock,
     storage: Arc<SqliteStorage>,
-    engine: Engine<SqliteStorage, GoogleCodec>,
+    engine: Engine<SqliteStorage>,
     control: Arc<SqliteControl>,
     _dir: tempfile::TempDir,
 }
@@ -46,7 +46,19 @@ struct Counts {
 }
 
 impl H {
+    /// With the adaptive poll pinned at five minutes, so the counts of the
+    /// tests do not depend on how quiet a calendar was.
     async fn new(quirks: &[Quirk]) -> Self {
+        Self::with(quirks, |c| {
+            c.poll_normal = PollBounds {
+                min: Duration::from_secs(300),
+                max: Duration::from_secs(300),
+            };
+        })
+        .await
+    }
+
+    async fn with(quirks: &[Quirk], tune: impl FnOnce(&mut Config)) -> Self {
         let g = FakeGoogle::start(Default::default()).await.expect("fake");
         g.apply(&Change::AddCalendar {
             entry: json!({ "id": HOLIDAY, "summary": "Státní svátky", "accessRole": "reader" }),
@@ -105,22 +117,30 @@ impl H {
             Arc::new(clock.clone()),
         )
         .expect("provider");
+        let mut config = Config {
+            // Nothing listens there; the fake's deliveries just fail.
+            callback: Some(
+                "http://127.0.0.1:9/v1/webhooks/google"
+                    .parse()
+                    .expect("uri"),
+            ),
+            ..Config::default()
+        };
+        tune(&mut config);
         let engine = Engine::new(
             storage.clone(),
-            Arc::new(provider),
+            Providers::new().with(
+                Arc::new(provider),
+                Codecs {
+                    event: Some(DecodeFn::of::<GoogleCodec>()),
+                    ..Codecs::default()
+                },
+            ),
             control.clone(),
             vault,
             Arc::new(clock.clone()),
             Arc::new(|_, _| {}),
-            Config {
-                // Nothing listens there; the fake's deliveries just fail.
-                callback: Some(
-                    "http://127.0.0.1:9/v1/webhooks/google"
-                        .parse()
-                        .expect("uri"),
-                ),
-                ..Config::default()
-            },
+            config,
         );
         Self {
             g,
@@ -331,4 +351,15 @@ async fn failed_delta_probe_rearms_full_read_only() {
         );
         last = now;
     }
+}
+
+/// The real defaults (only the callback set): a refused watch and expiring
+/// sync tokens together stay within a few reads in ten minutes.
+#[tokio::test(flavor = "multi_thread")]
+async fn default_config_stays_bounded() {
+    let h = H::with(&[Quirk::RefuseWatch, Quirk::ExpireEverySyncToken], |_| {}).await;
+    h.run(SPAN).await;
+    let c = h.counts();
+    assert!(c.watch <= 1, "{c:?}");
+    assert!(c.full + c.delta <= 12, "{c:?}");
 }

@@ -426,6 +426,18 @@ fn exception_item_suppresses_master_occurrence() {
     let occ = t.range(&window(0, 100)).unwrap().occurrences;
     let starts: Vec<_> = occ.iter().map(|o| o.start).collect();
     assert_eq!(starts, [common::t(1), common::t(28), common::t(49)]);
+    // The item view carries the stored correlation (a re-decode reads the master's key there).
+    let views = t
+        .stale_items(musubi_model::EntityKind::Event, &[col], 0, 0, None, 10)
+        .unwrap();
+    let ex = views.iter().find(|v| v.key.0 == "s_ex").unwrap();
+    assert_eq!(
+        ex.correlation,
+        Some(musubi_model::store::Correlation {
+            uid: "s".into(),
+            recurrence_id: Some(common::t(25)),
+        })
+    );
 }
 
 /// Series horizon: `unindexed`, `series_to_extend` and `extend_occurrences`.
@@ -865,6 +877,29 @@ fn stale_items_and_redecode() {
     assert_eq!(t.head().unwrap(), after);
     t.purge_collection(col).unwrap();
     assert!(matches!(t.redecode(col, &[]), Err(StoreError::NotFound)));
+}
+
+#[test]
+fn redecoded_versions_round_trip() {
+    use musubi_model::EntityKind::{Event, Task};
+    use musubi_model::capability::ProviderId;
+    let (_d, s, mut t) = setup();
+    let google = ProviderId("google".into());
+    let dav = ProviderId("dav".into());
+    assert_eq!(t.redecoded(&google, Event).unwrap(), None, "absent");
+    t.set_redecoded(&google, Event, 2, 3).unwrap();
+    assert_eq!(t.redecoded(&google, Event).unwrap(), Some((2, 3)));
+    assert_eq!(t.redecoded(&google, Task).unwrap(), None, "per kind");
+    assert_eq!(t.redecoded(&dav, Event).unwrap(), None, "per provider");
+    t.set_redecoded(&google, Event, 2, 4).unwrap();
+    assert_eq!(t.redecoded(&google, Event).unwrap(), Some((2, 4)));
+    drop(t);
+    let t = s.open(TENANT).unwrap();
+    assert_eq!(
+        t.redecoded(&google, Event).unwrap(),
+        Some((2, 4)),
+        "durable"
+    );
 }
 
 #[test]

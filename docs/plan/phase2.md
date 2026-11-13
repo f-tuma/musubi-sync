@@ -141,7 +141,7 @@ CalDAV kalendář může míchat VEVENT a VTODO (Radicale to dovolí; iCloud ne 
 
 - `MediaType` dostane `Calendar` (`text/calendar`) a `VCard` (`text/vcard`). V databázi `calendar` a `vcard`.
 - `Validator` u DAV je hodnota `getetag` beze změny, včetně uvozovek a případného `W/`. Porovnává se jen na rovnost. Silné ETag pro zápis s `If-Match` řeší fáze 3; slabý ETag tam znamená `conditional_update: false` pro tu kolekci. Vzor: `packages/provider-caldav/src/native-etag.ts` v Musubi.
-- Server bez `getetag` (nebo s prázdným): validátor je `musubi:sha256:<hex>` z těla. Takový validátor nikdy nejde do `If-Match`; adaptér to pozná podle předpony. Cena: výpis bez ETagů neřekne, co se změnilo, takže každé čtení takové kolekce stáhne přes `multiget` všechna těla. Adaptivní dotazování pro ni používá meze běžné úrovně i při aktivním zájmu (kapitola 7.2) a D2 ji měří zvlášť.
+- Server bez `getetag` (nebo s prázdným): validátor je `musubi:sha256:<hex>` z těla. Takový validátor nikdy nejde do `If-Match`; adaptér to pozná podle předpony. Cena: výpis bez ETagů neřekne, co se změnilo, takže každé čtení takové kolekce stáhne přes `multiget` všechna těla. Adaptivní dotazování pro ni při aktivním zájmu používá meze běžné úrovně (kapitola 7.2) a D2 ji měří zvlášť.
 - Google Tasks a People: validátor je `etag` z JSON.
 - `RemoteObject.raw` je u DAV přesné tělo z `calendar-data` nebo `address-data` po dekódování XML entit. Žádná normalizace konců řádků ani skládání.
 
@@ -192,10 +192,10 @@ Google dál vrací jen `upserts`. Jeden kanál pro obě cesty (seznam ETagů u c
 
 - `AccountCx` dostane `endpoint: Option<Endpoint>`, `Endpoint { base: String, state: serde_json::Value }`. Google ho nemá.
 - `Discovery` dostane `endpoint: Option<Endpoint>`: adaptér vrátí aktualizovaný stav (nalezený principal a home sety) a engine ho uloží (`ControlStore::set_endpoint`).
-- `SyncError` dostane `Rediscover`: kolekce nebo principal vrátí `404`, nebo přesměruje na jinou adresu uvnitř povolených originů účtu (kapitola 5.5). Engine zařadí `Discover` účtu a úlohu kolekce odloží za něj. Přesměrování mimo povolené originy je `ReauthRequired` s důvodem `endpoint_moved`, ne nové zjišťování. `SyncError::ReauthRequired` proto dostane pole `reason: ReauthReason`, `enum ReauthReason { Rejected, EndpointMoved }` (`Rejected`: poskytovatel odmítl pověření, jako ve fázi 1).
+- `SyncError` dostane `Rediscover`: kolekce nebo principal vrátí `404`, nebo přesměruje na jinou adresu uvnitř povolených originů účtu (kapitola 5.5). Engine zařadí `Discover` účtu a úlohu kolekce odloží za něj: úloha skončí a úspěšné zjišťování zařadí `Sync` každé kolekce, kterou vypíše, i této. Kolekce si o zjišťování řekne nejvýš jednou za 15 minut; když ji zjišťování od té doby znovu vypsalo a čtení dál hlásí `Rediscover` (zastaralý seznam, posun oprávnění), je to přechodná chyba s počítaným odkladem, ne další zjišťování. Přesměrování mimo povolené originy je `ReauthRequired` s důvodem `endpoint_moved`, ne nové zjišťování. `SyncError::ReauthRequired` proto dostane pole `reason: ReauthReason`, `enum ReauthReason { Rejected, EndpointMoved }` (`Rejected`: poskytovatel odmítl pověření, jako ve fázi 1).
 - `Discovery` dostane `unauthorized: Vec<EntityKind>`: druhy, ke kterým účet nemá oprávnění (Google bez scope pro Tasks nebo People, kapitola 6.1). Kolekce těchto druhů se nemažou. Engine seznam uloží do `accounts.missing` (kapitola 4.3), odkud ho čte pohled na účet.
 - `SyncError` dostane `MissingScope { kind }`: `changes()` nebo `fetch()` narazily na chybějící oprávnění k druhu (Google `403` s `insufficientPermissions` nebo `ACCESS_TOKEN_SCOPE_INSUFFICIENT`, kapitola 6.1), třeba proto, že ho uživatel mezitím odebral. Engine kolekci označí chybou `missing_scope`, nezkouší ji znovu a zařadí `Discover`, který `accounts.missing` doplní. Není to `Unauthorized`: obnova tokenu nepomůže.
-- **Zrušení `missing_scope`:** každé úplné zjišťování (ne `PartialDiscovery`), jehož `unauthorized` druh neobsahuje (typicky po opětovném souhlasu), zruší `missing_scope` u kolekcí toho druhu, odebere druh z `accounts.missing` a zařadí jejich `Sync` s `due = now`. Jinak by kolekce po opětovném souhlasu zůstala mrtvá.
+- **Zrušení `missing_scope`:** úplné zjišťování (ne `PartialDiscovery`), jehož `unauthorized` druh neobsahuje (typicky po opětovném souhlasu), zruší `missing_scope` u kolekcí toho druhu, odebere druh z `accounts.missing` a zařadí jejich `Sync` s `due = now`. Jinak by kolekce po opětovném souhlasu zůstala mrtvá. Zruší ho jen tehdy, když se stav oprávnění opravdu změnil (druh byl v `accounts.missing`), nebo když je chyba starší než 15 minut. Jinak kolekce zůstane odstavená: poskytovatel, jehož zjišťování druh povolí a `changes()` ho dál odmítá, by jinak točil smyčku odstavení, zjišťování a čtení bez odkladu.
 
 ### 3.6 Engine pro víc poskytovatelů a druhů
 
@@ -276,10 +276,11 @@ Nové operace `TenantStore`:
 | --- | --- |
 | `list_entities(kind, collections, after: Option<EntityId>, limit, inc: Include)` | živé entity druhu s umístěním v daných kolekcích, po `id`, stránkovaně (keyset). S `inc.placements` i umístění; `inc.raw` se u entit ignoruje. Pro úkoly a kontakty |
 | `stale_items(kind, collections, schema_version, mapping_version, after, limit)` | živé položky druhu v daných kolekcích s jinou verzí schématu nebo mapování; pro přepočet (kapitola 10, bod 1). Verze mapování jsou po poskytovatelích, proto se volá s kolekcemi jednoho poskytovatele |
+| `redecoded(provider, kind)` / `set_redecoded(provider, kind, schema, mapping)` | verze schématu a mapování, po kterých přepočet druhu u poskytovatele doběhl (`None`, pokud nikdy); zápis až po poslední úspěšné stránce |
 | `redecode(col, items: &[ItemWrite])` | zapíše nový kanonický tvar a verze položek jedné kolekce bez nového surového těla; žurnál jen u položek, kde se kanonický tvar změnil |
 | `set_push_resource(col, resource: &str)` | zapíše `collections.push_resource` (nahradí hodnotu; `NotFound` bez kolekce); čte se z `CollectionState.push_resource`, smaže ho jen `purge_collection` |
 
-Meta klíč `mapping:<provider>:<kind>` (hodnota = verze mapování a schématu, po kterých přepočet doběhl) zajistí, že se přepočet spustí jednou.
+Dva celočíselné řádky tabulky `meta`, `mapping:<provider>:<kind>:schema` a `mapping:<provider>:<kind>:mapping` (verze schématu a mapování, po kterých přepočet doběhl; zapisují se v jedné transakci přes `set_redecoded`, čtou přes `redecoded`), zajistí, že se přepočet spustí jednou. Bez nové tabulky a bez migrace.
 
 ### 4.2 Výskyty
 
@@ -456,13 +457,13 @@ Engine drží v paměti u kolekce počítadlo `quiet` (čtení za sebou bez změ
 - K intervalu se přičte náhodný rozptyl ±10 %, aby se kolekce jednoho účtu nestahovaly naráz.
 - Meze jsou v `Config` enginu. Čísla v tabulce jsou výchozí a K9 je doladí podle benchmarku D2.
 - Kvóty hlídá stávající omezovač podle `limits.requests_per_minute`. Interval ho neobchází.
-- Kolekce s validátorem `musubi:sha256:` (server bez ETagů, kapitola 3.3) stahuje při každém čtení všechna těla, proto má vždy meze běžné úrovně, i při aktivním zájmu.
+- Kolekce s validátorem `musubi:sha256:` (server bez ETagů, kapitola 3.3) stahuje při každém čtení všechna těla, proto při aktivním zájmu nemá meze aktivní úrovně, ale běžné. Spící tenant ji dotazuje se spící úrovní.
 
 ### 7.3 Zrychlení při zájmu
 
 - `Engine::touch(tenant)` volá `musubi-syncd` **jen** při `POST /v1/interest` (bez těla, rozsah čtení). Klient ho volá, když uživatel data opravdu vidí (otevřený kalendář, popředí aplikace), nejvýš jednou za 60 s.
 - Připojené SSE, `/v1/changes`, `/v1/entities` ani `/v1/items` zájem **nejsou**. Musubi drží SSE otevřené trvale a na pozadí po každé změně dočítá `/changes` a entity; kdyby se čtení počítalo, změna by vyvolala čtení, čtení zájem a zájem další dotazování. Každý tenant by byl pořád aktivní a každá kolekce by se četla každých 15 s (240 požadavků za hodinu, riziko kvóty Tasks a iCloudu).
-- Přechod tenanta z běžné nebo spící úrovně do aktivní zařadí úlohy `Sync` všech jeho adaptivních kolekcí s `due ≈ now`. Fronta je už zdvojit neumí: `enqueue` při shodě dělá `due = min(due, ?)`, takže stačí zařadit.
+- Přechod tenanta z běžné nebo spící úrovně do aktivní zařadí úlohy `Sync` všech jeho adaptivních kolekcí s `due ≈ now`, kromě kolekcí s validátorem `musubi:sha256:`. Fronta je už zdvojit neumí: `enqueue` při shodě dělá `due = min(due, ?)`, takže stačí zařadit.
 - Přechod se počítá nejvýš jednou za 120 s na tenanta. Díky levné kontrole (ctag, kapitola 5.2) stojí zrychlení u nezměněné kolekce jeden požadavek.
 - Úroveň zájmu je jen v paměti. Ztráta po restartu znamená nejvýš jeden interval běžné úrovně.
 
@@ -731,7 +732,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 
 ## 10. Nedodělky z fáze 1 jako položky plánu
 
-1. **Jednorázový přepočet po změně `MAPPING_VERSION`.** Dnes se uložené položky přepočtou jen tehdy, když je Google pošle znovu (live-google.md). Úložiště: `stale_items` a `redecode` (K1). Engine: úloha `Redecode` na pozadí při startu, řízená meta klíčem `mapping:<provider>:<kind>` (K5). Bez síťového volání, ze surové vrstvy. Pokryje i zvýšení `Event::SCHEMA_VERSION` na 2.
+1. **Jednorázový přepočet po změně `MAPPING_VERSION`.** Dnes se uložené položky přepočtou jen tehdy, když je Google pošle znovu (live-google.md). Úložiště: `stale_items` a `redecode` (K1). Engine: úloha `Redecode` na pozadí při startu, řízená meta řádky `mapping:<provider>:<kind>:schema` a `…:mapping` (`TenantStore::redecoded` a `set_redecoded`, K5); zapíšou se až po poslední úspěšné stránce. Bez síťového volání, ze surové vrstvy. Pokryje i zvýšení `Event::SCHEMA_VERSION` na 2.
 2. **Dokumentace `PushSource::subscribe`.** Které chyby znamenají „kanál nevznikl" (kapitola 3.10). K0.
 3. **`resourceId` kalendáře u kolekce.** `collections.push_resource` (K1); odebrání účtu ho použije k zastavení čekajícího kanálu i bez otevřeného sourozence (K5). Test: pád mezi `put_channel` (čekající) a `subscribe`, pak odebrání účtu bez otevřeného kanálu; falešný Google zaznamená `stop` s uloženým `resourceId`.
 4. **Strážce `SchemaTooNew` pro `control.db`.** Verze v `meta` a číslované migrace (kapitola 4.3). K1.

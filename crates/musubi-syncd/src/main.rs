@@ -71,6 +71,8 @@ async fn serve(c: Config) -> Result<(), String> {
     app.engine().catch_up().await.map_err(|e| e.to_string())?;
     // The scheduler runs until this handle drops at shutdown.
     let _engine = app.engine().start();
+    // Stored items decoded by an older codec or schema; runs once, in the background.
+    let _redecode = app.engine().start_redecode(app.tenants()?);
     let listener = tokio::net::TcpListener::bind(c.listen)
         .await
         .map_err(|e| format!("{}: {e}", c.listen))?;

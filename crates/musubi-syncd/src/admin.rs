@@ -239,7 +239,7 @@ fn backup_into(app: &App, to: &Path) -> Result<usize, ApiError> {
 }
 
 /// Tenant directories (named by their id; temporary ones are skipped).
-fn tenant_dirs(dir: &Path) -> std::io::Result<Vec<TenantId>> {
+pub(crate) fn tenant_dirs(dir: &Path) -> std::io::Result<Vec<TenantId>> {
     let mut out = Vec::new();
     for e in fs::read_dir(dir)? {
         let e = e?;
