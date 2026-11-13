@@ -949,6 +949,7 @@ impl TenantStore for SqliteTenant {
     fn stale_items(
         &self,
         _kind: EntityKind,
+        _collections: &[CollectionId],
         _schema_version: u32,
         _mapping_version: u32,
         _after: Option<ItemId>,

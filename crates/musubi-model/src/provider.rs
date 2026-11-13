@@ -152,6 +152,9 @@ pub trait PushSource: Send + Sync {
     /// - [`SyncError::Transient`] means unknown (timeout, lost reply, 5xx): a
     ///   channel may exist. The engine keeps the pending row and stops the
     ///   channel by `channel` later.
+    /// - Any other variant ([`SyncError::Rediscover`], [`SyncError::MissingScope`],
+    ///   [`SyncError::CursorExpired`], [`SyncError::PartialDiscovery`], …) is
+    ///   treated as `Transient`: a channel may exist.
     async fn subscribe(
         &self,
         cx: &AccountCx,
@@ -316,13 +319,25 @@ impl fmt::Debug for Credential {
 /// server address and whatever discovery found. Stored by the engine
 /// ([`crate::control::ControlStore::set_endpoint`]) outside the sealed secrets
 /// and handed back in [`AccountCx::endpoint`].
+/// Non-exhaustive: build it with [`Endpoint::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Endpoint {
     /// Base URL the account was connected with.
     pub base: String,
     /// Adapter-defined state (DAV: profile, principal, home sets, partition
     /// host). Opaque to the engine and the store.
     pub state: serde_json::Value,
+}
+
+impl Endpoint {
+    /// An endpoint with this base URL and adapter state.
+    pub fn new(base: impl Into<String>, state: serde_json::Value) -> Self {
+        Endpoint {
+            base: base.into(),
+            state,
+        }
+    }
 }
 
 /// Request budget shared by the calls of one account lane (proposal 5.3).
@@ -352,8 +367,10 @@ pub struct Discovery {
     /// Kinds the account has no permission for (Google without the Tasks or
     /// People scope). Collections of these kinds are not deleted even though
     /// they are absent from `collections`; the engine stores the list
-    /// ([`crate::control::ControlStore::set_missing`]). A kind not listed here
-    /// is authorised, which clears an earlier [`SyncError::MissingScope`].
+    /// ([`crate::control::ControlStore::set_missing`]). In a complete
+    /// `Discovery` a kind not listed here is authorised, which clears an
+    /// earlier [`SyncError::MissingScope`]; a discovery that ended in
+    /// [`SyncError::PartialDiscovery`] never clears it.
     pub unauthorized: Vec<EntityKind>,
 }
 
@@ -531,13 +548,22 @@ impl ChangePage {
 }
 
 /// An object listed without its body: see [`ChangePage::stubs`].
+/// Non-exhaustive: build it with [`Stub::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Stub {
     /// The object in the page's collection.
     pub key: RemoteKey,
     /// Its current validator (DAV `getetag` unchanged). `None` when the server
     /// sent none; the body is then always fetched.
     pub validator: Option<Validator>,
+}
+
+impl Stub {
+    /// A stub for `key` with this validator.
+    pub fn new(key: RemoteKey, validator: Option<Validator>) -> Self {
+        Stub { key, validator }
+    }
 }
 
 /// Provider id of a push channel (Google `X-Goog-Channel-ID`). Chosen by the adapter.

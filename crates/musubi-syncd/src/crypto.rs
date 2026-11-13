@@ -245,8 +245,8 @@ impl TokenVault for Vault {
     fn store(&self, account: AccountId, c: &Credentials) -> Result<(), StoreError> {
         // shortcut: OAuth only (phase 1 format); K1 adds Basic under `musubi-basic-v1`.
         let Credentials::OAuth(t) = c else {
-            return Err(StoreError::Corrupt(
-                "this vault stores OAuth tokens only".into(),
+            return Err(StoreError::Backend(
+                "this vault stores OAuth tokens only (Basic comes in K1)".into(),
             ));
         };
         let a = self.control.account(account)?.ok_or(StoreError::NotFound)?;

@@ -375,10 +375,7 @@ impl FakeProvider {
                 let stubs = if self.delta_of(c) == Some(DeltaSupport::CtagEtag) {
                     std::mem::take(&mut upserts)
                         .into_iter()
-                        .map(|o| Stub {
-                            key: o.key,
-                            validator: Some(o.validator),
-                        })
+                        .map(|o| Stub::new(o.key, Some(o.validator)))
                         .collect()
                 } else {
                     Vec::new()

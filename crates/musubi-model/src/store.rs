@@ -146,7 +146,8 @@ pub trait TenantStore: Send {
     /// [`EntityId`] order, starting after `after`, at most `limit` (keyset
     /// paging: a full page continues after its last id). Never tombstones,
     /// never entities of another kind. With `inc.placements` the views carry
-    /// their placements. For kinds without occurrences (tasks, contacts,
+    /// their placements; `inc.raw` is ignored (entities have no raw layer).
+    /// For kinds without occurrences (tasks, contacts,
     /// groups; docs/plan/phase2.md 4.1).
     fn list_entities(
         &self,
@@ -157,14 +158,16 @@ pub trait TenantStore: Send {
         inc: Include,
     ) -> Result<Vec<EntityView>, StoreError>;
 
-    /// Live items of `kind` whose stored schema or mapping version differs
-    /// from `schema_version` or `mapping_version`, in [`ItemId`] order,
-    /// starting after `after`, at most `limit`, each with its raw content.
-    /// Input of the re-decode after a version change (docs/plan/phase2.md 10,
-    /// point 1).
+    /// Live items of `kind` in `collections` whose stored schema or mapping
+    /// version differs from `schema_version` or `mapping_version`, in
+    /// [`ItemId`] order, starting after `after`, at most `limit`, each with its
+    /// raw content. Input of the re-decode after a version change
+    /// (docs/plan/phase2.md 10, point 1). Mapping versions are per provider,
+    /// so the caller passes the collections of one provider.
     fn stale_items(
         &self,
         kind: EntityKind,
+        collections: &[CollectionId],
         schema_version: u32,
         mapping_version: u32,
         after: Option<ItemId>,

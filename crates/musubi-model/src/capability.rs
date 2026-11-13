@@ -353,10 +353,11 @@ pub struct Limits {
     /// Most refs the engine passes to one [`crate::provider::Provider::fetch`]
     /// call. How the adapter splits that call further (HTTP batch, one DAV
     /// `multiget`) is its own business. `None`: the engine uses 100. Google
-    /// 1000, generic DAV 50, iCloud 20.
+    /// 1000, generic DAV 50, iCloud 20 (neověřeno).
     pub max_batch: Option<u32>,
     /// Most requests the engine runs at once for one account (all its
-    /// collections together). `None`: no limit (Google). DAV and iCloud: 2.
+    /// collections together). `None`: no limit (Google). DAV and iCloud: 2
+    /// (neověřeno).
     #[serde(default)]
     pub max_concurrency_per_account: Option<u32>,
 }

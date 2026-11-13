@@ -77,8 +77,10 @@ pub enum Event {}
 
 impl Kind for Event {
     const KIND: EntityKind = EntityKind::Event;
-    /// 2 since phase 2: custom time zones in [`CalendarEvent::time_zones`].
-    const SCHEMA_VERSION: u32 = 2;
+    /// Still 1: phase 2 K5 raises it to 2 together with the decoder filling
+    /// [`CalendarEvent::time_zones`] and the re-decode of stored items. Raising
+    /// it earlier makes every stored event look changed on its next ingest.
+    const SCHEMA_VERSION: u32 = 1;
     type Canonical = CalendarEvent;
 }
 

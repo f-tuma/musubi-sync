@@ -111,9 +111,11 @@ pub struct ContactGroupCard {
     /// `FN`.
     #[serde(default)]
     pub name: String,
-    /// UIDs of the members, compared with [`ContactCard::uid`]: vCard 4
-    /// `MEMBER` / Apple `X-ADDRESSBOOKSERVER-MEMBER` with the `urn:uuid:`
-    /// prefix removed when the member cards' `UID` lacks it.
+    /// UIDs of the members (vCard 4 `MEMBER` / Apple
+    /// `X-ADDRESSBOOKSERVER-MEMBER`). The decoder always strips a `urn:uuid:`
+    /// prefix; a member is compared with [`ContactCard::uid`] (also without the
+    /// prefix) case-insensitively. The encoder adds the prefix back only if
+    /// the source had it.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub members: BTreeSet<String>,
 }

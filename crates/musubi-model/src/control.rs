@@ -196,9 +196,9 @@ pub trait ControlStore: Send + Sync {
 ///   so phase-1 blobs open unchanged;
 /// - `Basic` as `{ username, password }` under `musubi-basic-v1`.
 pub trait TokenVault: Send + Sync {
-    /// The account's credentials; `None` if none were stored. `NotFound` if
-    /// the account is absent. `Corrupt` if the blob cannot be opened (wrong
-    /// key, moved to another account, sealed as the other variant).
+    /// The account's credentials; `Ok(None)` if the account is absent or has
+    /// none stored. `Corrupt` if the blob cannot be opened (wrong key, moved
+    /// to another account, sealed as the other variant).
     fn load(&self, account: AccountId) -> Result<Option<Credentials>, StoreError>;
 
     /// Replaces the account's credentials. A variant that does not match the
