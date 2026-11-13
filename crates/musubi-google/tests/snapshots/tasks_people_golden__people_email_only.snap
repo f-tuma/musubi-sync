@@ -1,0 +1,15 @@
+---
+source: crates/musubi-google/tests/tasks_people_golden.rs
+expression: "decode :: < Contact, PeopleCodec >\n(\"people\", & stringify! (people_email_only)[\"people\".len() + 1 ..])"
+---
+{
+  "uid": "people/c1000000000000000003",
+  "kind": "individual",
+  "emails": [
+    {
+      "address": "noreply@example.org",
+      "pref": 1
+    }
+  ],
+  "updated": "2026-11-02T08:00:00Z"
+}

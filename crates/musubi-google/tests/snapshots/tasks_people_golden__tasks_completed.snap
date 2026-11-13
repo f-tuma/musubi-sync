@@ -1,0 +1,16 @@
+---
+source: crates/musubi-google/tests/tasks_people_golden.rs
+expression: "decode :: < Task, TasksCodec >\n(\"tasks\", & stringify! (tasks_completed)[\"tasks\".len() + 1 ..])"
+---
+{
+  "uid": "Y29tcGxldGVkLXRhc2s",
+  "title": "Zaplatit nájem",
+  "due": "2026-11-05T00:00:00",
+  "showWithoutTime": true,
+  "progress": "completed",
+  "progressUpdated": "2026-11-10T08:00:00Z",
+  "hidden": false,
+  "priority": 0,
+  "updated": "2026-11-10T08:00:01Z",
+  "sequence": 0
+}

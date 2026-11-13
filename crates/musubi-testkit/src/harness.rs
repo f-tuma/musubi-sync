@@ -40,6 +40,8 @@ pub fn config(listen: SocketAddr, data: &Path, g: &FakeGoogle) -> Value {
             "auth_url": g.auth_url(),
             "token_url": g.token_url(),
             "api_base": g.calendar_api(),
+            "tasks_api_base": g.tasks_api(),
+            "people_api_base": g.people_api(),
         },
     })
 }

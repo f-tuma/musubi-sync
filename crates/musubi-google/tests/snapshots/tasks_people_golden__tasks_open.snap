@@ -1,0 +1,16 @@
+---
+source: crates/musubi-google/tests/tasks_people_golden.rs
+expression: "decode :: < Task, TasksCodec >\n(\"tasks\", & stringify! (tasks_open)[\"tasks\".len() + 1 ..])"
+---
+{
+  "uid": "MDY2NjQ1NTc2MDQ1NTg0ODcyNTc6MDow",
+  "title": "Koupit mléko",
+  "description": "Polotučné, 2 l",
+  "due": "2026-11-20T00:00:00",
+  "showWithoutTime": true,
+  "progress": "needs-action",
+  "hidden": false,
+  "priority": 0,
+  "updated": "2026-11-12T09:15:30.123Z",
+  "sequence": 0
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "tasks#task",
+  "id": "aGlkZGVuLXRhc2s",
+  "etag": "\"LTExMTExMQ\"",
+  "title": "Vyčištěný úkol",
+  "updated": "2026-11-11T07:30:00.000Z",
+  "selfLink": "https://www.googleapis.com/tasks/v1/lists/l/tasks/aGlkZGVuLXRhc2s",
+  "position": "00000000000000000002",
+  "status": "completed",
+  "completed": "2026-11-09T12:00:00.000Z",
+  "hidden": true,
+  "links": []
+}

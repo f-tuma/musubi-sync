@@ -1,0 +1,10 @@
+{
+  "resourceName": "people/c1000000000000000003",
+  "etag": "%EgMBAgMaBAECBQg=",
+  "metadata": {
+    "sources": [ { "type": "CONTACT", "id": "de0b6b3a7640003", "updateTime": "2026-11-02T08:00:00Z" } ],
+    "objectType": "PERSON"
+  },
+  "emailAddresses": [ { "metadata": { "primary": true }, "value": "noreply@example.org", "type": "other" } ],
+  "photos": [ { "metadata": { "primary": true }, "url": "https://lh3.googleusercontent.com/cm/default", "default": true } ]
+}

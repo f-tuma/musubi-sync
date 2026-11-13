@@ -135,6 +135,9 @@ impl App {
                     client_secret: SecretString::from(g.client_secret.clone()),
                     api_base: url("google.api_base", &g.api_base)?,
                     token_url: url("google.token_url", &g.token_url)?,
+                    tasks_base: url("google.tasks_api_base", &g.tasks_api_base)?,
+                    people_base: url("google.people_api_base", &g.people_api_base)?,
+                    discover_tasks_people: false,
                 },
                 clock.clone(),
             )

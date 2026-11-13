@@ -1,0 +1,14 @@
+{
+  "kind": "tasks#task",
+  "id": "MDY2NjQ1NTc2MDQ1NTg0ODcyNTc6MDow",
+  "etag": "\"LTEyMzQ1Njc4OTA\"",
+  "title": "Koupit mléko",
+  "updated": "2026-11-12T09:15:30.123Z",
+  "selfLink": "https://www.googleapis.com/tasks/v1/lists/MDY2NjQ1NTc2MDQ1NTg0ODcyNTc6MDow/tasks/MDY2NjQ1NTc2MDQ1NTg0ODcyNTc6MDow",
+  "position": "00000000000000000000",
+  "notes": "Polotučné, 2 l",
+  "status": "needsAction",
+  "due": "2026-11-20T00:00:00.000Z",
+  "links": [],
+  "webViewLink": "https://tasks.google.com/task/abc"
+}

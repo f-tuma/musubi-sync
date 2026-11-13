@@ -1130,3 +1130,150 @@ async fn authorization_code_grant_checks_pkce_and_is_single_use() {
         "single use"
     );
 }
+
+#[tokio::test]
+async fn tasks_list_filters_hidden_and_deleted_by_default_and_pages_by_token() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let list = g.put_task_list("Inbox");
+    let lists = get(&format!("{}/users/@me/lists", g.tasks_api()), &t).await;
+    assert_eq!(lists.status, 200);
+    assert_eq!(keys(&lists.json), set(&["etag", "items", "kind"]));
+    assert_eq!(lists.json["items"][0]["id"], json!(list));
+
+    let open = g.put_task(&list, json!({ "title": "open" }));
+    let hidden = g.put_task(
+        &list,
+        json!({ "title": "h", "status": "completed", "hidden": true }),
+    );
+    let gone = g.put_task(&list, json!({ "title": "gone" }));
+    g.delete_task(&list, &gone);
+    let url = |q: &str| format!("{}/lists/{list}/tasks?{q}", g.tasks_api());
+    let titles = |r: &Value| -> Vec<String> {
+        r["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let r = get(&url(""), &t).await;
+    assert_eq!(titles(&r.json), std::slice::from_ref(&open));
+    let task = &r.json["items"][0];
+    for k in [
+        "kind", "id", "etag", "title", "updated", "selfLink", "position", "status", "links",
+    ] {
+        assert!(task.get(k).is_some(), "{k}: {task}");
+    }
+    let all = get(&url("showHidden=true&showDeleted=true&maxResults=1"), &t).await;
+    assert_eq!(all.json["items"].as_array().unwrap().len(), 1);
+    let next = all.json["nextPageToken"].as_str().unwrap();
+    // A page token only works with the parameters that issued it.
+    let wrong = get(&url(&format!("pageToken={next}")), &t).await;
+    assert_eq!(wrong.status, 400);
+    let mut seen = titles(&all.json);
+    let mut page = Some(next.to_owned());
+    while let Some(p) = page {
+        let r = get(
+            &url(&format!(
+                "showHidden=true&showDeleted=true&maxResults=1&pageToken={p}"
+            )),
+            &t,
+        )
+        .await;
+        seen.extend(titles(&r.json));
+        page = r.json["nextPageToken"].as_str().map(str::to_owned);
+    }
+    assert_eq!(
+        seen.into_iter().collect::<BTreeSet<_>>(),
+        set(&[&open, &hidden, &gone])
+    );
+}
+
+#[tokio::test]
+async fn people_connections_sync_token_reports_deletions_and_expires() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let base = format!("{}/people/me/connections", g.people_api());
+    assert_eq!(get(&base, &t).await.status, 400, "personFields is required");
+
+    let people = g.seed_contacts(3);
+    let full = get(
+        &format!("{base}?personFields=names&requestSyncToken=true"),
+        &t,
+    )
+    .await;
+    assert_eq!(full.status, 200);
+    assert_eq!(full.json["totalPeople"], 3);
+    let person = &full.json["connections"][0];
+    assert_eq!(
+        keys(person),
+        set(&["etag", "names", "resourceName"]),
+        "only the requested fields"
+    );
+    let token = full.json["nextSyncToken"].as_str().unwrap().to_owned();
+
+    g.delete_contact(&people[2]);
+    let delta = get(
+        &format!("{base}?personFields=names&requestSyncToken=true&syncToken={token}"),
+        &t,
+    )
+    .await;
+    let items = delta.json["connections"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["resourceName"], json!(people[2]));
+    assert_eq!(items[0]["metadata"]["deleted"], json!(true));
+    assert_eq!(
+        get(
+            &format!("{}/{}?personFields=names", g.people_api(), people[2]),
+            &t
+        )
+        .await
+        .status,
+        404
+    );
+
+    g.expire_people_sync_tokens();
+    let expired = get(&format!("{base}?personFields=names&syncToken={token}"), &t).await;
+    assert_eq!(expired.status, 400);
+    assert_eq!(expired.json["error"]["status"], "FAILED_PRECONDITION");
+    assert_eq!(
+        expired.json["error"]["details"][0]["reason"],
+        "EXPIRED_SYNC_TOKEN"
+    );
+    let fresh = get(
+        &format!("{base}?personFields=names&requestSyncToken=true"),
+        &t,
+    )
+    .await;
+    let token = fresh.json["nextSyncToken"].as_str().unwrap();
+    assert_eq!(
+        get(&format!("{base}?personFields=names&syncToken={token}"), &t)
+            .await
+            .status,
+        200
+    );
+}
+
+#[tokio::test]
+async fn scope_faults_have_both_documented_shapes() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let url = format!("{}/users/@me/lists", g.tasks_api());
+    g.fail(Endpoint::TaskLists, Fault::insufficient_permissions(), 1);
+    let r = get(&url, &t).await;
+    assert_eq!(r.status, 403);
+    assert_eq!(
+        r.json["error"]["errors"][0]["reason"],
+        "insufficientPermissions"
+    );
+    g.fail(Endpoint::TaskLists, Fault::scope_insufficient(), 1);
+    let r = get(&url, &t).await;
+    assert_eq!(r.status, 403);
+    assert_eq!(r.json["error"]["status"], "PERMISSION_DENIED");
+    assert_eq!(
+        r.json["error"]["details"][0]["reason"],
+        "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+    );
+    assert_eq!(get(&url, &t).await.status, 200, "faults are counted");
+}

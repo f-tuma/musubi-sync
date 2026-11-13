@@ -1,0 +1,15 @@
+---
+source: crates/musubi-google/tests/tasks_people_golden.rs
+expression: "decode :: < Task, TasksCodec >\n(\"tasks\", & stringify! (tasks_subtask)[\"tasks\".len() + 1 ..])"
+---
+{
+  "uid": "c3VidGFzaw",
+  "title": "Zavolat instalatérovi",
+  "showWithoutTime": true,
+  "progress": "needs-action",
+  "hidden": false,
+  "priority": 0,
+  "relatedTo": "MDY2NjQ1NTc2MDQ1NTg0ODcyNTc6MDow",
+  "updated": "2026-11-12T10:00:00Z",
+  "sequence": 0
+}

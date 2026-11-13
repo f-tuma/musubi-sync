@@ -255,6 +255,69 @@ makes one calendar behave in each of the suspected ways. K8 recorded what
   not seen rejecting a valid token; the quirk tests the adapter's bounded
   restart.
 
+## Tasks API and People API (K6)
+
+`src/google/tasks.rs` and `src/google/people.rs` add Google Tasks API v1
+(`tasklists.list`, `tasks.list`, `tasks.get`) and People API v1
+(`people.connections.list`, `people.get`). **No shape here is verified yet**:
+everything follows the API reference and the People "sync" guide. T10's
+recordings check them. Every assumption is listed below.
+
+- **Read endpoints only.** Data changes go through the Rust API:
+  `put_task_list`, `put_task`, `delete_task`, `put_contact`,
+  `seed_contacts`, `delete_contact`, `expire_people_sync_tokens`, and
+  `advance`, which moves the logical clock so that `updatedMin` filters.
+- `tasklists.list`: `maxResults` defaults to 1000, which is also the cap. The
+  page token is an index into the lists.
+- `tasks.list`:
+  - Defaults: `showCompleted=true`, `showDeleted=false`, `showHidden=false`.
+  - `maxResults` is capped at 100.
+  - `updatedMin` keeps tasks with `updated >= updatedMin`. Deleted tasks come
+    back only with `showDeleted=true`.
+  - Order is by id, not `position`.
+  - A page token is bound to the list and the filters that issued it. Any
+    other token answers the same `400 invalid` as a bogus Calendar page token.
+    *Undocumented*: Google's answer to a stale or foreign Tasks page token.
+  - `completedMin/Max`, `dueMin/Max` and `showAssigned` are rejected with
+    `400`.
+- *Open (T10)*: Google leaves tasks assigned from Docs or Chat out of
+  `tasks.list` unless `showAssigned=true`. The adapter does not send it, so it
+  does not see them; the fake has no assigned tasks.
+- `tasks.get` returns a deleted task too, with `deleted: true` (*undocumented*).
+- Task fields set by the fake: `kind`, `etag`, `updated` (the logical clock),
+  `selfLink`, `position`, `status`, `links`. A deletion sets `deleted: true`
+  and a new `etag`/`updated`. Tasks never expire out of `showDeleted`.
+- `people.connections.list`:
+  - `personFields` is required: `400` without it.
+  - `pageSize` 1–1000, default 100.
+  - Every page must repeat every parameter; a page token from other parameters
+    answers `400 invalid`.
+  - The response carries only the requested fields plus `resourceName` and
+    `etag`. Tombstones in a delta keep `metadata.deleted: true` regardless of
+    the mask. `totalPeople` and `totalItems` count live contacts.
+  - With `requestSyncToken=true`, the last page carries `nextSyncToken`.
+  - A delta returns every contact changed since the token, deletions included.
+  - A token issued for other `personFields` answers `400`.
+- **Expired sync token:** `400` with `error.status: FAILED_PRECONDITION` and
+  `ErrorInfo.reason: EXPIRED_SYNC_TOKEN`, in the AIP-193 error shape (`code`,
+  `message`, `status`, `details[]`, no `errors[]`). *Undocumented*: whether
+  Google answers `400` or `410`. `Fault { status: 410, ..Fault::expired_sync_token() }`
+  covers the other case. Google expires tokens after seven days; the fake
+  expires them only through `expire_people_sync_tokens`.
+- `people.get` answers `404` for a deleted or unknown contact.
+- Resource names are `people/c<number>`. The `etag` starts with `%Eg`, and
+  `metadata.sources[]` holds one `CONTACT` source with `updateTime`.
+- **Scope errors:** `Fault::insufficient_permissions()` is the classic
+  `403 insufficientPermissions`; `Fault::scope_insufficient()` is the
+  AIP-193 `403 PERMISSION_DENIED` with `ErrorInfo.reason:
+  ACCESS_TOKEN_SCOPE_INSUFFICIENT`. Google sends the second (People, Tasks)
+  or both; which one each API sends is *undocumented* (T10).
+  `Fault::api_disabled()` is the AIP-193 `403 SERVICE_DISABLED` that Google
+  sends when the Cloud project has not enabled the API (the classic shape is
+  `accessNotConfigured`). The adapter treats it like a missing scope. Without a
+  scripted fault every scope is granted: the token endpoint reports
+  `calendar.readonly`, `tasks.readonly` and `contacts.readonly`.
+
 # Fake DAV server: fidelity
 
 `src/dav.rs` (plan 8.2) mimics a CalDAV and CardDAV server (RFC 4918, 4791,

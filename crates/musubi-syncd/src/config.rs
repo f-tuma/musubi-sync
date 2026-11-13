@@ -46,6 +46,10 @@ pub struct Config {
 }
 
 /// Google OAuth client. Endpoints default to Google's production ones.
+///
+/// Deployment: enable Google Calendar API, Tasks API and People API in the
+/// client's Cloud project. A disabled Tasks or People API leaves that kind
+/// unauthorised, not an error.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleSettings {
@@ -62,6 +66,12 @@ pub struct GoogleSettings {
     /// Calendar API root.
     #[serde(default = "default_api_base")]
     pub api_base: String,
+    /// Tasks API root.
+    #[serde(default = "default_tasks_api_base")]
+    pub tasks_api_base: String,
+    /// People API root.
+    #[serde(default = "default_people_api_base")]
+    pub people_api_base: String,
 }
 
 fn default_auth_url() -> String {
@@ -72,6 +82,12 @@ fn default_token_url() -> String {
 }
 fn default_api_base() -> String {
     "https://www.googleapis.com/calendar/v3".into()
+}
+fn default_tasks_api_base() -> String {
+    "https://tasks.googleapis.com/tasks/v1".into()
+}
+fn default_people_api_base() -> String {
+    "https://people.googleapis.com/v1".into()
 }
 
 const REDACTED: &str = "[redacted]";
@@ -98,6 +114,8 @@ impl fmt::Debug for GoogleSettings {
             .field("auth_url", &self.auth_url)
             .field("token_url", &self.token_url)
             .field("api_base", &self.api_base)
+            .field("tasks_api_base", &self.tasks_api_base)
+            .field("people_api_base", &self.people_api_base)
             .finish()
     }
 }
@@ -161,6 +179,8 @@ mod tests {
                 auth_url: default_auth_url(),
                 token_url: default_token_url(),
                 api_base: default_api_base(),
+                tasks_api_base: default_tasks_api_base(),
+                people_api_base: default_people_api_base(),
             },
         };
         let long = "a".repeat(32);

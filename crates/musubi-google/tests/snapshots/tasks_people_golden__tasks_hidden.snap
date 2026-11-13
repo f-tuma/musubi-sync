@@ -1,0 +1,15 @@
+---
+source: crates/musubi-google/tests/tasks_people_golden.rs
+expression: "decode :: < Task, TasksCodec >\n(\"tasks\", & stringify! (tasks_hidden)[\"tasks\".len() + 1 ..])"
+---
+{
+  "uid": "aGlkZGVuLXRhc2s",
+  "title": "Vyčištěný úkol",
+  "showWithoutTime": true,
+  "progress": "completed",
+  "progressUpdated": "2026-11-09T12:00:00Z",
+  "hidden": true,
+  "priority": 0,
+  "updated": "2026-11-11T07:30:00Z",
+  "sequence": 0
+}

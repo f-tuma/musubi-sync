@@ -1,5 +1,6 @@
 //! HTTP transport: `Provider` for Google Calendar (`calendarList`, `events`,
-//! OAuth token endpoint).
+//! OAuth token endpoint), with Google Tasks ([`crate::tasks`]) and People
+//! ([`crate::people`]) routed by the collection reference.
 //!
 //! One instance serves all accounts; everything per account comes in
 //! [`AccountCx`]. The adapter never retries, refreshes or sleeps on its own:
@@ -16,7 +17,7 @@ use jiff::Timestamp;
 use musubi_model::capability::{
     ClientIdCharset, ClientIdRule, ConditionalWrite, DeltaSupport, Fidelity, InviteSuppression,
     KindCapabilities, Limits, ProviderId, PushSupport, RecurrenceSupport, ReminderCapabilities,
-    SchedulingCapabilities, SchedulingMode, ZoneSupport,
+    SchedulingCapabilities, SchedulingMode, TaskCapabilities, ZoneSupport,
 };
 use musubi_model::error::BoxError;
 use musubi_model::event::AlertAction;
@@ -50,8 +51,15 @@ pub struct GoogleConfig {
     pub client_secret: SecretString,
     /// Calendar API root, e.g. `https://www.googleapis.com/calendar/v3`.
     pub api_base: Url,
+    /// Tasks API root, e.g. `https://tasks.googleapis.com/tasks/v1`.
+    pub tasks_base: Url,
+    /// People API root, e.g. `https://people.googleapis.com/v1`.
+    pub people_base: Url,
     /// OAuth token endpoint.
     pub token_url: Url,
+    /// Discovery also lists task lists and the contacts collection (plan 6.1).
+    /// Off until the engine syncs those kinds (K8); off, discovery is phase 1's.
+    pub discover_tasks_people: bool,
 }
 
 impl GoogleConfig {
@@ -61,7 +69,10 @@ impl GoogleConfig {
             client_id: client_id.into(),
             client_secret,
             api_base: Url::parse("https://www.googleapis.com/calendar/v3").expect("constant URL"),
+            tasks_base: Url::parse("https://tasks.googleapis.com/tasks/v1").expect("constant URL"),
+            people_base: Url::parse("https://people.googleapis.com/v1").expect("constant URL"),
             token_url: Url::parse("https://oauth2.googleapis.com/token").expect("constant URL"),
+            discover_tasks_people: false,
         }
     }
 }
@@ -89,8 +100,10 @@ impl GoogleProvider {
     /// installed yet: reqwest is built with `rustls-no-provider` (no aws-lc-rs)
     /// and takes the process default.
     pub fn new(config: GoogleConfig, clock: Arc<dyn Clock>) -> Result<Self, BoxError> {
-        if config.api_base.cannot_be_a_base() {
-            return Err(format!("API base {} cannot be a base URL", config.api_base).into());
+        for base in [&config.api_base, &config.tasks_base, &config.people_base] {
+            if base.cannot_be_a_base() {
+                return Err(format!("API base {base} cannot be a base URL").into());
+            }
         }
         // Err only means a provider is installed already, which is what we need.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -107,11 +120,7 @@ impl GoogleProvider {
 
     /// `api_base` + percent-encoded path segments.
     pub(crate) fn url(&self, segments: &[&str]) -> Url {
-        let mut url = self.config.api_base.clone();
-        if let Ok(mut path) = url.path_segments_mut() {
-            path.pop_if_empty().extend(segments);
-        }
-        url
+        join(&self.config.api_base, segments)
     }
 
     /// Waits for the account's limiter, authorises and sends. Only transport
@@ -131,15 +140,17 @@ impl GoogleProvider {
             .map_err(|e| SyncError::Transient(e.into()))
     }
 
-    /// [`Self::send`], then the body of a 2xx response or the mapped error.
+    /// [`Self::send`], then the body of a 2xx response or the mapped error
+    /// (`scope`: see [`error_for`]).
     pub(crate) async fn call(
         &self,
         cx: &AccountCx,
         req: RequestBuilder,
+        scope: Option<EntityKind>,
     ) -> Result<Vec<u8>, SyncError> {
         let resp = self.send(cx, req).await?;
         if !resp.status().is_success() {
-            return Err(error_for(resp, cx.clock.now()).await);
+            return Err(error_for(resp, cx.clock.now(), scope).await);
         }
         body(resp).await
     }
@@ -194,13 +205,22 @@ impl GoogleProvider {
             ));
         }
         if !status.is_success() {
-            return Err(error_for(resp, cx.clock.now()).await);
+            return Err(error_for(resp, cx.clock.now(), None).await);
         }
         build_page(q, &body(resp).await?).map(Some)
     }
 }
 
-async fn body(resp: Response) -> Result<Vec<u8>, SyncError> {
+/// `base` + percent-encoded path segments.
+pub(crate) fn join(base: &Url, segments: &[&str]) -> Url {
+    let mut url = base.clone();
+    if let Ok(mut path) = url.path_segments_mut() {
+        path.pop_if_empty().extend(segments);
+    }
+    url
+}
+
+pub(crate) async fn body(resp: Response) -> Result<Vec<u8>, SyncError> {
     resp.bytes()
         .await
         .map(Vec::from)
@@ -219,9 +239,17 @@ pub(crate) fn permanent(msg: impl Into<String>) -> SyncError {
     SyncError::Permanent(msg.into().into())
 }
 
-/// Maps a non-2xx Calendar API response. Call sites handle the statuses that
-/// mean something specific to them (404/410 "gone", 410 "sync token expired").
-pub(crate) async fn error_for(resp: Response, now: Timestamp) -> SyncError {
+/// Maps a non-2xx API response. Call sites handle the statuses that mean
+/// something specific to them (404/410 "gone", 410 "sync token expired").
+///
+/// `scope`: the kind a `403` for a missing OAuth scope (plan 6.1) is
+/// [`SyncError::MissingScope`] for. `None` (Calendar, whose scope every
+/// account has, and push) keeps such a `403` `Permanent`.
+pub(crate) async fn error_for(
+    resp: Response,
+    now: Timestamp,
+    scope: Option<EntityKind>,
+) -> SyncError {
     let status = resp.status();
     let retry_after = resp
         .headers()
@@ -229,10 +257,14 @@ pub(crate) async fn error_for(resp: Response, now: Timestamp) -> SyncError {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| retry_after(v, now));
     let body = resp.bytes().await.unwrap_or_default();
-    match status.as_u16() {
-        401 => SyncError::Unauthorized,
-        429 => SyncError::RateLimited { retry_after },
-        403 if is_rate_limit(&body) => SyncError::RateLimited { retry_after },
+    match (status.as_u16(), scope) {
+        (401, _) => SyncError::Unauthorized,
+        (429, _) => SyncError::RateLimited { retry_after },
+        (403, _) if is_rate_limit(&body) => SyncError::RateLimited { retry_after },
+        // A disabled API needs the same outside fix as a missing grant.
+        (403, Some(kind)) if is_missing_scope(&body) || is_api_disabled(&body) => {
+            SyncError::MissingScope { kind }
+        }
         _ => {
             let err = HttpStatus {
                 status,
@@ -251,7 +283,7 @@ pub(crate) async fn error_for(resp: Response, now: Timestamp) -> SyncError {
 /// The first 300 bytes of an error body, for logs and error messages. Google's
 /// error bodies hold the error object only, no tokens or event data.
 /// Control characters are escaped: a newline in a body must not forge a log line.
-fn excerpt(body: &[u8]) -> String {
+pub(crate) fn excerpt(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(&body[..body.len().min(300)]);
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -262,6 +294,12 @@ fn excerpt(body: &[u8]) -> String {
         }
     }
     out
+}
+
+/// `403` for an API the OAuth client's Cloud project has not enabled, in the
+/// classic and the AIP-193 shape.
+fn is_api_disabled(body: &[u8]) -> bool {
+    has_reason(body, &["accessNotConfigured", "SERVICE_DISABLED"])
 }
 
 /// `403` with a quota reason is throttling, not a permission error.
@@ -277,8 +315,19 @@ fn is_rate_limit(body: &[u8]) -> bool {
     )
 }
 
-/// Whether a Google error body carries one of `reasons` in `error.errors`.
-fn has_reason(body: &[u8], reasons: &[&str]) -> bool {
+/// `403` for an OAuth scope the user did not grant, in either shape Google
+/// uses (plan 6.1; which API sends which is unverified, T10): the older
+/// `errors[].reason` and the newer `google.rpc.ErrorInfo` in `details[]`.
+pub(crate) fn is_missing_scope(body: &[u8]) -> bool {
+    has_reason(
+        body,
+        &["insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"],
+    )
+}
+
+/// Whether a Google error body carries one of `reasons`, in `error.errors[]`
+/// (older APIs) or in a `google.rpc.ErrorInfo` of `error.details[]` (newer).
+pub(crate) fn has_reason(body: &[u8], reasons: &[&str]) -> bool {
     #[derive(Deserialize)]
     struct Body {
         error: Inner,
@@ -287,6 +336,8 @@ fn has_reason(body: &[u8], reasons: &[&str]) -> bool {
     struct Inner {
         #[serde(default)]
         errors: Vec<Reason>,
+        #[serde(default)]
+        details: Vec<Reason>,
     }
     #[derive(Deserialize)]
     struct Reason {
@@ -297,6 +348,7 @@ fn has_reason(body: &[u8], reasons: &[&str]) -> bool {
         b.error
             .errors
             .iter()
+            .chain(&b.error.details)
             .any(|r| reasons.contains(&r.reason.as_str()))
     })
 }
@@ -404,27 +456,80 @@ impl EventMeta {
     }
 }
 
-/// One item exactly as received: the raw layer keeps these bytes.
+/// One event exactly as received: the raw layer keeps these bytes.
 fn remote_object(raw: &RawValue, meta: &EventMeta) -> RemoteObject {
+    let mut object = raw_object(raw, &meta.id, EntityKind::Event, meta.etag.as_deref());
+    object.master = meta.recurring_event_id.clone().map(RemoteKey);
+    object
+}
+
+/// One item exactly as received, validated by its `etag` (a hash of the
+/// bytes when Google sends none).
+pub(crate) fn raw_object(
+    raw: &RawValue,
+    key: &str,
+    kind: EntityKind,
+    etag: Option<&str>,
+) -> RemoteObject {
     let raw = Raw {
         media_type: MediaType::Json,
         body: raw.get().as_bytes().to_vec(),
     };
-    let validator = match &meta.etag {
-        Some(etag) => etag.clone(),
+    let validator = match etag {
+        Some(etag) => etag.to_owned(),
         None => {
             let hex: String = raw.hash().0.iter().map(|b| format!("{b:02x}")).collect();
             format!("sha256:{hex}")
         }
     };
-    let mut object = RemoteObject::new(
-        RemoteKey(meta.id.clone()),
-        EntityKind::Event,
-        Validator(validator),
-        raw,
-    );
-    object.master = meta.recurring_event_id.clone().map(RemoteKey);
-    object
+    RemoteObject::new(RemoteKey(key.to_owned()), kind, Validator(validator), raw)
+}
+
+/// The pages of a pass that has no restarts (Tasks, People): `page` reads one
+/// request and returns the next one, `None` after the last page.
+pub(crate) fn pages<'a, Q, F, Fut>(
+    first: Result<Q, SyncError>,
+    page: F,
+) -> BoxStream<'a, Result<ChangePage, SyncError>>
+where
+    Q: Send + 'a,
+    F: FnMut(Q) -> Fut + Send + 'a,
+    Fut: std::future::Future<Output = Result<(ChangePage, Option<Q>), SyncError>> + Send + 'a,
+{
+    Box::pin(futures_util::stream::unfold(
+        (Some(first), page),
+        |(state, mut page)| async move {
+            let result = match state? {
+                Ok(q) => page(q).await,
+                Err(e) => Err(e),
+            };
+            Some(match result {
+                Ok((p, next)) => (Ok(p), (next.map(Ok), page)),
+                Err(e) => (Err(e), (None, page)),
+            })
+        },
+    ))
+}
+
+/// Which API a collection belongs to. Task lists are `tasks/<tasklist id>`,
+/// the contacts are [`crate::people::COLLECTION`]; everything else is a
+/// calendar id, as in phase 1 (calendar ids are e-mail-like or `primary`).
+enum Target<'a> {
+    Calendar,
+    Tasks(&'a str),
+    People,
+}
+
+impl<'a> Target<'a> {
+    fn of(col: &'a CollectionRef) -> Self {
+        if col.0 == crate::people::COLLECTION {
+            Target::People
+        } else if let Some(list) = col.0.strip_prefix(crate::tasks::PREFIX) {
+            Target::Tasks(list)
+        } else {
+            Target::Calendar
+        }
+    }
 }
 
 /// Turns one `events.list` response into a page and the next request.
@@ -565,10 +670,27 @@ impl Provider for GoogleProvider {
         events.conditional_update = ConditionalWrite::StrongValidator;
         events.conditional_delete = ConditionalWrite::Unproven;
         events.client_id = Some(ClientIdRule::new(ClientIdCharset::Base32HexLower, 5, 1024));
+        // Read-only scopes (plan 6.1); no push for either (plan 6.2, 6.3).
+        let tasks = KindCapabilities::new(
+            EntityKind::Task,
+            DeltaSupport::WindowedDelta,
+            PushSupport::None,
+        );
+        let contacts = KindCapabilities::new(
+            EntityKind::Contact,
+            DeltaSupport::SyncToken,
+            PushSupport::None,
+        );
         let mut limits = Limits::new(MAX_PAGE);
         limits.requests_per_minute = Some(600);
         limits.max_batch = Some(1000);
-        let mut d = ProviderDescriptor::new(ProviderId("google".into()), vec![events], limits);
+        let mut d = ProviderDescriptor::new(
+            ProviderId("google".into()),
+            vec![events, tasks, contacts],
+            limits,
+        );
+        // Due dates without time, subtasks via `parent`, no recurring tasks in the API.
+        d.tasks = Some(TaskCapabilities::new(true, true, false));
         d.recurrence = RecurrenceSupport::Full;
         d.zones = vec![ZoneSupport::Iana];
         d.scheduling = SchedulingCapabilities::new(
@@ -604,10 +726,13 @@ impl Provider for GoogleProvider {
             if let Some(p) = &page {
                 url.query_pairs_mut().append_pair("pageToken", p);
             }
-            let result = self.call(cx, self.http.get(url)).await.and_then(|body| {
-                serde_json::from_slice::<CalendarList>(&body)
-                    .map_err(|e| permanent(format!("calendarList: {e}")))
-            });
+            let result = self
+                .call(cx, self.http.get(url), None)
+                .await
+                .and_then(|body| {
+                    serde_json::from_slice::<CalendarList>(&body)
+                        .map_err(|e| permanent(format!("calendarList: {e}")))
+                });
             let list = match result {
                 Ok(list) => list,
                 Err(e) if found.is_empty() && page.is_none() => return Err(e),
@@ -621,9 +746,41 @@ impl Provider for GoogleProvider {
             found.extend(list.items.into_iter().map(RemoteCollection::from));
             match list.next_page_token {
                 Some(next) => page = Some(next),
-                None => return Ok(Discovery::new(found)),
+                None => break,
             }
         }
+        if !self.config.discover_tasks_people {
+            return Ok(Discovery::new(found));
+        }
+        // Tasks and People: a scope the user did not grant, or an API the
+        // Cloud project has not enabled, is an unauthorised kind, not an error
+        // (plan 6.1). Any other probe failure (throttling, server error,
+        // refused token, other 403) skips that kind for this round: a partial
+        // listing with the calendars and whatever kinds did succeed, which the
+        // engine only adds from. It never fails or blocks the account, and the
+        // kind is not unauthorised, so its collections keep their state.
+        let tasks = self.task_lists(cx, &mut found).await;
+        let people = self.people_probe(cx, &mut found).await;
+        let mut unauthorized = Vec::new();
+        let mut failed = None;
+        for r in [tasks, people] {
+            match r {
+                Ok(()) => {}
+                Err(SyncError::MissingScope { kind }) => unauthorized.push(kind),
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
+            }
+        }
+        if let Some(e) = failed {
+            return Err(SyncError::PartialDiscovery {
+                found,
+                source: e.into(),
+            });
+        }
+        let mut d = Discovery::new(found);
+        d.unauthorized = unauthorized;
+        Ok(d)
     }
 
     fn changes<'a>(
@@ -633,6 +790,11 @@ impl Provider for GoogleProvider {
         cursor: Option<Cursor>,
         hint: FetchHint,
     ) -> BoxStream<'a, Result<ChangePage, SyncError>> {
+        match Target::of(col) {
+            Target::Tasks(list) => return self.task_changes(cx, list, cursor, hint),
+            Target::People => return self.people_changes(cx, cursor, hint),
+            Target::Calendar => {}
+        }
         let page_size = hint.page_size.map_or(MAX_PAGE, |n| n.get().min(MAX_PAGE));
         let first = Query::start(cursor, hint).map(|q| (q, 0));
         Box::pin(futures_util::stream::unfold(
@@ -674,11 +836,22 @@ impl Provider for GoogleProvider {
     ) -> Result<Vec<RemoteObject>, SyncError> {
         let mut out = Vec::with_capacity(refs.len());
         for r in refs {
+            match Target::of(&r.collection) {
+                Target::Tasks(list) => {
+                    out.extend(self.fetch_task(cx, list, &r.key).await?);
+                    continue;
+                }
+                Target::People => {
+                    out.extend(self.fetch_person(cx, &r.key).await?);
+                    continue;
+                }
+                Target::Calendar => {}
+            }
             let url = self.url(&["calendars", &r.collection.0, "events", &r.key.0]);
             let resp = self.send(cx, self.http.get(url)).await?;
             match resp.status() {
                 StatusCode::NOT_FOUND | StatusCode::GONE => continue,
-                s if !s.is_success() => return Err(error_for(resp, cx.clock.now()).await),
+                s if !s.is_success() => return Err(error_for(resp, cx.clock.now(), None).await),
                 _ => {}
             }
             let body = body(resp).await?;
@@ -744,7 +917,7 @@ impl TokenRefresh for GoogleProvider {
                 )),
             };
         }
-        Err(error_for(resp, self.clock.now()).await)
+        Err(error_for(resp, self.clock.now(), None).await)
     }
 }
 
