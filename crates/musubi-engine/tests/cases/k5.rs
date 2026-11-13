@@ -673,3 +673,97 @@ async fn removal_stops_a_lone_pending_channel_by_the_stored_resource() {
     );
     assert_eq!(channel_rows(&h), (vec![], vec![]));
 }
+
+/// Runs ten minutes of simulated time in ten-second steps.
+async fn ten_minutes(h: &H) {
+    for _ in 0..60 {
+        h.advance(Duration::from_secs(10));
+        h.engine.run_until_idle().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn rediscover_of_a_still_listed_collection_backs_off() {
+    // Reads answer as if the collection moved (404), while discovery keeps
+    // listing it (a stale calendar list, ACL drift).
+    let h = H::new();
+    h.fake.add_collection(polled("poll"));
+    h.connect_and_sync().await;
+    settle(&h).await;
+    let before = h.fake.calls();
+    for _ in 0..10_000 {
+        h.fake.fail(Op::Page, SyncError::Rediscover);
+    }
+    ten_minutes(&h).await;
+    let after = h.fake.calls();
+    let (discover, pages) = (after.discover - before.discover, after.pages - before.pages);
+    assert!((1..=2).contains(&discover), "discoveries: {discover}");
+    assert!(pages <= 25, "reads: {pages}");
+    let error = h.collection("poll").unwrap().status.error.unwrap();
+    assert!(!error.permanent, "a transient error, backed off");
+}
+
+#[tokio::test]
+async fn missing_scope_from_an_inconsistent_provider_stays_parked() {
+    // `changes` says the scope is missing; discovery reports every kind
+    // permitted.
+    let h = H::new();
+    h.fake.add_collection(task_list("tasks"));
+    put_task(&h, "tasks", "t1", "v1");
+    h.connect_and_sync().await;
+    settle(&h).await;
+    let before = h.fake.calls();
+    for _ in 0..10_000 {
+        h.fake.fail(
+            Op::Page,
+            SyncError::MissingScope {
+                kind: EntityKind::Task,
+            },
+        );
+    }
+    h.engine.touch(TENANT).await.unwrap();
+    ten_minutes(&h).await;
+    let after = h.fake.calls();
+    let (discover, pages) = (after.discover - before.discover, after.pages - before.pages);
+    assert!(discover <= 3, "discoveries: {discover}");
+    assert!(pages <= 6, "reads: {pages}");
+    let col = h.collection("tasks").unwrap();
+    assert_eq!(col.status.error.unwrap().message, musubi_engine::MISSING_SCOPE);
+    assert_eq!(h.sync_due("tasks"), None, "parked");
+}
+
+/// A polled collection whose validators are synthetic body hashes.
+async fn hashed(h: &H) {
+    h.fake.add_collection(polled("hashed"));
+    let start = h.clock_now() + SignedDuration::from_hours(24);
+    h.put("hashed", "x", "musubi:sha256:00", &single("x", start), None);
+    h.connect_and_sync().await;
+    settle(h).await;
+}
+
+#[tokio::test]
+async fn hashed_collection_is_not_read_faster_while_active() {
+    let h = H::with(|c| c.active_for = Duration::from_secs(86_400));
+    hashed(&h).await;
+    let due = h.sync_due("hashed");
+    h.engine.touch(TENANT).await.unwrap();
+    assert_eq!(h.sync_due("hashed"), due, "a touch does not read it now");
+    let min = h.config.poll_normal.min.mul_f64(0.9);
+    for _ in 0..3 {
+        let gap = poll_once(&h, "hashed").await;
+        assert!(gap >= min, "{gap:?} faster than the normal poll");
+    }
+}
+
+#[tokio::test]
+async fn hashed_collection_sleeps_with_its_tenant() {
+    let h = H::new();
+    hashed(&h).await;
+    h.advance(h.config.sleep_after + Duration::from_secs(3600));
+    h.engine.run_until_idle().await.unwrap();
+    let min = h.config.poll_sleeping.min.mul_f64(0.9);
+    for _ in 0..3 {
+        let gap = poll_once(&h, "hashed").await;
+        assert!(gap >= min, "{gap:?} faster than the sleeping poll");
+    }
+}
