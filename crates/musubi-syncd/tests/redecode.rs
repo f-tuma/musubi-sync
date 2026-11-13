@@ -88,6 +88,9 @@ async fn google_items_redecode_canonically_identical_with_nothing_journaled() {
                 client_secret: SecretString::from("test-secret"),
                 api_base: g.calendar_api().parse().expect("url"),
                 token_url: g.token_url().parse().expect("url"),
+                tasks_base: g.tasks_api().parse().expect("url"),
+                people_base: g.people_api().parse().expect("url"),
+                discover_tasks_people: false,
             },
             Arc::new(clock.clone()),
         )
