@@ -732,7 +732,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 
 ## 10. Nedodělky z fáze 1 jako položky plánu
 
-1. **Jednorázový přepočet po změně `MAPPING_VERSION`.** Dnes se uložené položky přepočtou jen tehdy, když je Google pošle znovu (live-google.md). Úložiště: `stale_items` a `redecode` (K1). Engine: úloha `Redecode` na pozadí při startu, řízená meta klíčem `mapping:<provider>:<kind>` (K5). Bez síťového volání, ze surové vrstvy. Pokryje i zvýšení `Event::SCHEMA_VERSION` na 2.
+1. **Jednorázový přepočet po změně `MAPPING_VERSION`.** Dnes se uložené položky přepočtou jen tehdy, když je Google pošle znovu (live-google.md). Úložiště: `stale_items` a `redecode` (K1). Engine: úloha `Redecode` na pozadí při startu, řízená meta řádky `mapping:<provider>:<kind>:schema` a `…:mapping` (`TenantStore::redecoded` a `set_redecoded`, K5); zapíšou se až po poslední úspěšné stránce. Bez síťového volání, ze surové vrstvy. Pokryje i zvýšení `Event::SCHEMA_VERSION` na 2.
 2. **Dokumentace `PushSource::subscribe`.** Které chyby znamenají „kanál nevznikl" (kapitola 3.10). K0.
 3. **`resourceId` kalendáře u kolekce.** `collections.push_resource` (K1); odebrání účtu ho použije k zastavení čekajícího kanálu i bez otevřeného sourozence (K5). Test: pád mezi `put_channel` (čekající) a `subscribe`, pak odebrání účtu bez otevřeného kanálu; falešný Google zaznamená `stop` s uloženým `resourceId`.
 4. **Strážce `SchemaTooNew` pro `control.db`.** Verze v `meta` a číslované migrace (kapitola 4.3). K1.

@@ -627,6 +627,10 @@ pub struct ItemView {
     pub tombstone: bool,
     /// Raw content if requested.
     pub raw: Option<Raw>,
+    /// Stored correlation key ([`ItemWrite::correlation`]); `None` for an item
+    /// that was not decodable. A re-decode takes the series master's key from
+    /// it, which only the provider knows ([`crate::remote::RemoteObject::master`]).
+    pub correlation: Option<Correlation>,
 }
 
 /// Stored state of an item, for the writer's change detection.

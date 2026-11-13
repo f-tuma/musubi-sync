@@ -14,7 +14,7 @@ use musubi_model::kind::EntityKind;
 use musubi_model::placement::{Delivery, Direction, Origin, Projection, Role};
 use musubi_model::remote::{Cursor, MediaType, Raw, RawHash, RemoteKey, Validator};
 use musubi_model::store::{
-    CanonicalJson, CheckpointInfo, CheckpointMode, CollectionError, CollectionState,
+    CanonicalJson, CheckpointInfo, Correlation, CheckpointMode, CollectionError, CollectionState,
     CollectionStatus, Coverage, DiscoveryWrite, EntityView, Include, ItemState, ItemView,
     ItemWrite, OccurrenceRow, OccurrenceView, OccurrenceWrite, PageWrite, PlacementView, PruneInfo,
     RangeCursor, RangePage, RangeQuery, SeriesRef, StoreStats, TenantStore,
@@ -567,7 +567,8 @@ fn entity(c: &Connection, id: EntityId, inc: Include) -> Result<Option<EntityVie
 fn item(c: &Connection, id: ItemId, inc: Include) -> Result<Option<ItemView>> {
     let mut st = c.prepare_cached(&format!(
         "SELECT i.entity, i.collection, i.kind, i.key, i.validator, i.raw_hash,
-           i.schema_version, i.mapping_version, i.observed, i.tombstone, {}
+           i.schema_version, i.mapping_version, i.observed, i.tombstone, i.uid,
+           i.recurrence_id, {}
          FROM items i LEFT JOIN raw r ON r.hash = i.raw_hash WHERE i.id = ?1",
         if inc.raw {
             "r.media_type, r.body"
@@ -579,11 +580,11 @@ fn item(c: &Connection, id: ItemId, inc: Include) -> Result<Option<ItemView>> {
     let Some(r) = rows.next()? else {
         return Ok(None);
     };
-    let media: Option<String> = r.get(10)?;
+    let media: Option<String> = r.get(12)?;
     let raw = match media {
         Some(m) => Some(Raw {
             media_type: parse_enum::<MediaType>(m)?,
-            body: r.get(11)?,
+            body: r.get(13)?,
         }),
         None => None,
     };
@@ -600,6 +601,13 @@ fn item(c: &Connection, id: ItemId, inc: Include) -> Result<Option<ItemView>> {
         observed: canonical(r.get(8)?)?,
         tombstone: r.get(9)?,
         raw,
+        correlation: match r.get::<_, Option<String>>(10)? {
+            Some(uid) => Some(Correlation {
+                uid,
+                recurrence_id: opt_ts(r.get(11)?)?,
+            }),
+            None => None,
+        },
     }))
 }
 

@@ -426,6 +426,18 @@ fn exception_item_suppresses_master_occurrence() {
     let occ = t.range(&window(0, 100)).unwrap().occurrences;
     let starts: Vec<_> = occ.iter().map(|o| o.start).collect();
     assert_eq!(starts, [common::t(1), common::t(28), common::t(49)]);
+    // The item view carries the stored correlation (a re-decode reads the master's key there).
+    let views = t
+        .stale_items(musubi_model::EntityKind::Event, &[col], 0, 0, None, 10)
+        .unwrap();
+    let ex = views.iter().find(|v| v.key.0 == "s_ex").unwrap();
+    assert_eq!(
+        ex.correlation,
+        Some(musubi_model::store::Correlation {
+            uid: "s".into(),
+            recurrence_id: Some(common::t(25)),
+        })
+    );
 }
 
 /// Series horizon: `unindexed`, `series_to_extend` and `extend_occurrences`.
