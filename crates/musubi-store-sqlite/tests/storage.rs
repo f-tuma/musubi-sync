@@ -352,8 +352,32 @@ fn phase1_tenant_file_migrates_to_version_2() {
         )
         .unwrap();
     }
+    let before = tables(&main_db(d.path(), TENANT));
     let s = SqliteStorage::new(d.path(), 4).unwrap();
     let mut tn = s.open(TENANT).unwrap();
+    assert_eq!(
+        before,
+        tables(&main_db(d.path(), TENANT))
+            .into_iter()
+            .map(|(t, mut cols, rows)| {
+                // The one column v2 adds, always NULL after the migration.
+                if t == "collections" {
+                    let i = cols.iter().position(|c| c == "push_resource").unwrap();
+                    cols.remove(i);
+                    let rows = rows
+                        .into_iter()
+                        .map(|mut r| {
+                            assert_eq!(r.remove(i), rusqlite::types::Value::Null);
+                            r
+                        })
+                        .collect();
+                    return (t, cols, rows);
+                }
+                (t, cols, rows)
+            })
+            .collect::<Vec<_>>(),
+        "migration keeps every row"
+    );
     let schema: u32 = Connection::open(main_db(d.path(), TENANT))
         .unwrap()
         .query_row("SELECT v FROM meta WHERE k = 'schema'", [], |r| r.get(0))
@@ -371,4 +395,34 @@ fn phase1_tenant_file_migrates_to_version_2() {
         tn.collections().unwrap()[0].push_resource.as_deref(),
         Some("res")
     );
+}
+
+/// Every column and row (sorted) of the tenant data tables.
+type Table = (String, Vec<String>, Vec<Vec<rusqlite::types::Value>>);
+fn tables(path: &Path) -> Vec<Table> {
+    let c = Connection::open(path).unwrap();
+    let names = [
+        "collections",
+        "raw",
+        "entities",
+        "items",
+        "placements",
+        "occurrences",
+        "changes",
+    ];
+    names
+        .iter()
+        .map(|t| {
+            let mut q = c.prepare(&format!("SELECT * FROM {t}")).unwrap();
+            let cols: Vec<String> = q.column_names().map(str::to_owned).collect();
+            let mut rows: Vec<Vec<rusqlite::types::Value>> = q
+                .query_map([], |r| (0..cols.len()).map(|i| r.get(i)).collect())
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+            assert!(!rows.is_empty(), "{t} has data");
+            (t.to_string(), cols, rows)
+        })
+        .collect()
 }

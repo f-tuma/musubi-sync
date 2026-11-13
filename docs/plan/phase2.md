@@ -277,6 +277,7 @@ Nové operace `TenantStore`:
 | `list_entities(kind, collections, after: Option<EntityId>, limit, inc: Include)` | živé entity druhu s umístěním v daných kolekcích, po `id`, stránkovaně (keyset). S `inc.placements` i umístění; `inc.raw` se u entit ignoruje. Pro úkoly a kontakty |
 | `stale_items(kind, collections, schema_version, mapping_version, after, limit)` | živé položky druhu v daných kolekcích s jinou verzí schématu nebo mapování; pro přepočet (kapitola 10, bod 1). Verze mapování jsou po poskytovatelích, proto se volá s kolekcemi jednoho poskytovatele |
 | `redecode(col, items: &[ItemWrite])` | zapíše nový kanonický tvar a verze položek jedné kolekce bez nového surového těla; žurnál jen u položek, kde se kanonický tvar změnil |
+| `set_push_resource(col, resource: &str)` | zapíše `collections.push_resource` (nahradí hodnotu; `NotFound` bez kolekce); čte se z `CollectionState.push_resource`, smaže ho jen `purge_collection` |
 
 Meta klíč `mapping:<provider>:<kind>` (hodnota = verze mapování a schématu, po kterých přepočet doběhl) zajistí, že se přepočet spustí jednou.
 
@@ -295,7 +296,7 @@ Dnes `CONTROL` používá `CREATE TABLE IF NOT EXISTS` a jednorázové `migrate_
 - Verze 2: `ALTER TABLE accounts ADD COLUMN endpoint TEXT` (JSON `Endpoint`, kapitola 3.5) a `ALTER TABLE accounts ADD COLUMN missing TEXT` (JSON pole druhů bez oprávnění, kapitola 6.1). Jen přidané sloupce s `NULL`, žádná změna existujících.
 - Soubor s vyšší verzí, než binárka zná, je `SchemaTooNew`. `serve` skončí s chybou a soubor nezmění.
 
-Nové operace `ControlStore`: `set_endpoint(account, &Endpoint)`, `endpoint(account)`, `set_missing(account, &[EntityKind])`, `missing(account)`. Nová operace `TenantStore`: `set_push_resource(collection, &str)`; hodnotu vrací `CollectionState.push_resource`. `TokenVault` pracuje s `Credentials` (kapitola 3.5).
+Nové operace `ControlStore`: `set_endpoint(account, &Endpoint)`, `endpoint(account)`, `set_missing(account, &[EntityKind])`, `missing(account)`. `TokenVault` pracuje s `Credentials` (kapitola 3.5).
 
 ### 4.4 Přechod na fázi 2 a návrat
 

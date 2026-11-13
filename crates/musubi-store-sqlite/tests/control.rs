@@ -628,6 +628,50 @@ fn newer_control_db_is_refused_untouched() {
 }
 
 #[test]
+fn newer_wal_control_db_is_refused_untouched() {
+    let d = TempDir::new();
+    // URI metacharacters: the probe reads this path as a `file:` URI.
+    let path = d.path().join("con?tr#ol%20.db");
+    let wal = path.with_extension("db-wal");
+    let shm = path.with_extension("db-shm");
+    drop(SqliteControl::open(&path).unwrap());
+    // A newer binary that closed cleanly: WAL mode, no -wal or -shm left.
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute("UPDATE meta SET v = 3 WHERE k = 'schema'", [])
+            .unwrap();
+    }
+    assert!(!wal.exists() && !shm.exists());
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(
+        SqliteControl::open(&path),
+        Err(StoreError::SchemaTooNew { found: 3, .. })
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before, "file untouched");
+    assert!(!wal.exists() && !shm.exists(), "no -wal or -shm left");
+
+    // A newer binary killed mid-run: version 4 lives only in the -wal frames.
+    let crashed = d.path().join("crashed.db");
+    let crashed_wal = crashed.with_extension("db-wal");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        c.execute("UPDATE meta SET v = 4 WHERE k = 'schema'", [])
+            .unwrap();
+        std::fs::copy(&path, &crashed).unwrap();
+        std::fs::copy(&wal, &crashed_wal).unwrap();
+    }
+    let before = std::fs::read(&crashed).unwrap();
+    let before_wal = std::fs::read(&crashed_wal).unwrap();
+    assert!(matches!(
+        SqliteControl::open(&crashed),
+        Err(StoreError::SchemaTooNew { found: 4, .. })
+    ));
+    assert_eq!(std::fs::read(&crashed).unwrap(), before, "no checkpoint");
+    assert_eq!(std::fs::read(&crashed_wal).unwrap(), before_wal);
+}
+
+#[test]
 fn endpoint_and_missing_round_trip() {
     let (_d, c) = open();
     c.upsert_account(&account(A1, "s1")).unwrap();

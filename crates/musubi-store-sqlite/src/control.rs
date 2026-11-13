@@ -69,13 +69,11 @@ impl SqliteControl {
     /// at `path`. A newer file is `SchemaTooNew` before any pragma or write
     /// touches it.
     pub fn open(path: &std::path::Path) -> Result<Self, StoreError> {
-        let probe = Connection::open(path).map_err(crate::Error::from)?;
-        let found = crate::schema::main_version(&probe)?;
+        let found = crate::schema::probe_version(path)?;
         let supported = crate::schema::CONTROL_MIGRATIONS.len() as u32;
         if found > supported {
             return Err(StoreError::SchemaTooNew { found, supported });
         }
-        drop(probe);
         let mut writer = connect(path, "FULL", 1000)?;
         crate::schema::migrate_control(&mut writer)?;
         let reader = connect(path, "FULL", 1000)?;

@@ -76,6 +76,37 @@ CREATE INDEX entities_kind ON entities(kind, id) WHERE tombstone = 0;
 pub(crate) const LONG_SPAN: i64 = 7 * 24 * 3600 * 1_000_000;
 
 /// Schema version stored in a tenant or control file; 0 if it has none yet.
+/// Schema version of the file at `path` without changing it: a missing file
+/// is 0. The probe is read-only, so it never checkpoints WAL frames a newer
+/// binary left behind. Without a `-wal` the main file is complete and is read
+/// `immutable`, because even a read-only open would create `-wal` and `-shm`.
+pub(crate) fn probe_version(path: &std::path::Path) -> Result<u32> {
+    use rusqlite::OpenFlags;
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let c = match path.to_str() {
+        Some(p) if !std::path::Path::new(&wal).exists() => {
+            let mut uri = String::from("file:");
+            for ch in p.chars() {
+                match ch {
+                    '?' | '#' | '%' => uri.push_str(&format!("%{:02X}", ch as u32)),
+                    _ => uri.push(ch),
+                }
+            }
+            uri.push_str("?immutable=1");
+            Connection::open_with_flags(uri, flags | OpenFlags::SQLITE_OPEN_URI)?
+        }
+        // shortcut: a non-UTF-8 path takes the plain read-only open, which may leave empty -wal/-shm.
+        _ => Connection::open_with_flags(path, flags)?,
+    };
+    c.busy_timeout(crate::BUSY_TIMEOUT)?;
+    main_version(&c)
+}
+
 pub(crate) fn main_version(c: &Connection) -> Result<u32> {
     let has_meta: bool = c.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta')",
