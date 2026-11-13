@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use common::Node;
 use musubi_model::capability::ProviderId;
-use musubi_model::control::{AccountRecord, AccountState};
-use musubi_model::{AccountId, ControlStore, TenantId};
+use musubi_model::control::{AccountRecord, AccountState, AccountTokens};
+use musubi_model::{AccountId, ControlStore, Credentials, TenantId, TokenVault};
 use musubi_testkit::dav::{Config as DavConfig, FakeDav, Fault, Host, Kind, Req};
 use musubi_testkit::google::{Endpoint, Fault as GFault};
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
 const TODO: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//test//EN\r\nBEGIN:VTODO\r\nUID:todo-1\r\nDTSTAMP:20260101T000000Z\r\nSUMMARY:buy milk\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
@@ -369,6 +370,80 @@ async fn a_connect_cut_short_before_its_endpoint_is_finished_by_the_next() {
     assert_eq!((s, &v["error"]), (400, &json!("subject_mismatch")), "{v}");
 }
 
+/// How long a test holds a job's request; the reconnect must end well before.
+const HOLD: Duration = Duration::from_secs(3);
+
+/// Holds a discovery of `id` on its first request while `body` reconnects
+/// the account, then runs every job left.
+async fn reconnect_during_discovery(n: &Node, t: &Tenant, d: &FakeDav, id: &str, mut body: Value) {
+    let before = d.count("PROPFIND");
+    d.fail(Req::Method("PROPFIND"), Fault::Delay(HOLD), 1);
+    let account: AccountId = id.parse().expect("id");
+    n.app.engine().connect(account).await.expect("connect");
+    let app = n.app.clone();
+    let run = tokio::spawn(async move { app.engine().run_until_idle().await });
+    until("the held discovery", async || {
+        (d.count("PROPFIND") > before).then_some(())
+    })
+    .await;
+    let held = Instant::now();
+    body["account"] = json!(id);
+    let (s, v) = connect(n, t, body).await;
+    assert_eq!(s, 200, "{v}");
+    assert!(
+        held.elapsed() < HOLD / 2,
+        "the reconnect ended after the hold"
+    );
+    run.await.expect("join").expect("jobs");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_discovery_held_over_a_reconnect_stores_no_endpoint_over_it() {
+    let n = private_node().await;
+    let d = dav(DavConfig::default()).await;
+    let t = tenant(&n).await;
+    let (s, v) = connect(&n, &t, generic(&d, "secret")).await;
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().expect("id").to_owned();
+    n.app.engine().run_until_idle().await.expect("jobs");
+
+    // The reconnect allows one more origin; the held discovery has the old list.
+    let mut body = generic(&d, "secret");
+    body["allow_origins"] = json!(["https://extra.example"]);
+    reconnect_during_discovery(&n, &t, &d, &id, body).await;
+    let endpoint = n
+        .app
+        .control()
+        .endpoint(id.parse().expect("id"))
+        .expect("read")
+        .expect("endpoint");
+    assert!(
+        endpoint.state["origins"]
+            .as_array()
+            .expect("origins")
+            .contains(&json!("https://extra.example")),
+        "{}",
+        endpoint.state
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_discovery_held_over_a_reconnect_stores_no_reauth_over_it() {
+    let n = private_node().await;
+    let d = dav(DavConfig::default()).await;
+    let t = tenant(&n).await;
+    let (s, v) = connect(&n, &t, generic(&d, "secret")).await;
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().expect("id").to_owned();
+    n.app.engine().run_until_idle().await.expect("jobs");
+
+    // The password changed: the held discovery, with the old one, gets `401`
+    // after the user reconnected with the new one.
+    d.set_password("changed");
+    reconnect_during_discovery(&n, &t, &d, &id, generic(&d, "changed")).await;
+    assert_eq!(account(&n, &t, &id).await["state"], "active");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn simultaneous_first_connects_make_one_account() {
     let n = private_node().await;
@@ -538,6 +613,106 @@ async fn a_phase_one_google_account_keeps_its_calendars_and_reports_missing() {
                 "body": { "provider": "google", "account": id } }),
     );
     assert!(listed(&n, &t, "task").await.is_empty());
+}
+
+/// A Google account whose stored access token has expired, with `refresh`
+/// as its refresh token; every job of the connect has run.
+async fn expired_google_account(n: &Node, t: &Tenant, refresh: &str) -> AccountId {
+    let id: AccountId = google_account(n, t).await.parse().expect("id");
+    n.app.engine().run_until_idle().await.expect("jobs");
+    let expired = AccountTokens {
+        refresh: SecretString::from(refresh),
+        access: SecretString::from("expired"),
+        access_until: jiff::Timestamp::now(),
+    };
+    n.app
+        .vault()
+        .store(id, &Credentials::OAuth(expired))
+        .expect("store");
+    id
+}
+
+/// Holds the token refresh of a read of `id` while the OAuth callback
+/// reconnects the account, then runs every job left. Returns the tokens the
+/// reconnect stored.
+async fn reconnect_during_refresh(n: &Node, t: &Tenant, id: AccountId) -> AccountTokens {
+    let refreshes = || {
+        n.google
+            .requests()
+            .iter()
+            .filter(|r| r.starts_with("POST /token"))
+            .count()
+    };
+    let before = refreshes();
+    n.google.set_latency(HOLD);
+    let (s, v) = n.call("POST", "/v1/interest", Some(&t.read), None).await;
+    assert_eq!(s, 204, "{v}");
+    let app = n.app.clone();
+    let run = tokio::spawn(async move { app.engine().run_until_idle().await });
+    until("the held refresh", async || {
+        (refreshes() > before).then_some(())
+    })
+    .await;
+    let held = Instant::now();
+    n.google.set_latency(Duration::ZERO);
+
+    let (s, v) = n
+        .call(
+            "POST",
+            "/v1/accounts",
+            Some(&t.admin),
+            Some(json!({ "provider": "google", "account": id })),
+        )
+        .await;
+    assert_eq!(s, 201, "{v}");
+    let consent = n
+        .http
+        .get(v["authorization_url"].as_str().expect("url"))
+        .send()
+        .await
+        .expect("consent");
+    let callback = consent.headers()["location"].to_str().expect("ascii");
+    let (s, v) = n.call("GET", callback, None, None).await;
+    assert_eq!((s, &v["account"]), (200, &json!(id)), "{v}");
+    let stored = tokens(n, id);
+    assert!(
+        held.elapsed() < HOLD / 2,
+        "the reconnect ended after the hold"
+    );
+    run.await.expect("join").expect("jobs");
+    stored
+}
+
+fn tokens(n: &Node, id: AccountId) -> AccountTokens {
+    match n.app.vault().load(id).expect("load") {
+        Some(Credentials::OAuth(t)) => t,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_held_over_a_reconnect_stores_no_tokens_over_it() {
+    let n = Node::start().await;
+    let t = tenant(&n).await;
+    let id = expired_google_account(&n, &t, &n.google.refresh_token()).await;
+
+    let stored = reconnect_during_refresh(&n, &t, id).await;
+    let now = tokens(&n, id);
+    assert_eq!(
+        (now.access.expose_secret(), now.access_until),
+        (stored.access.expose_secret(), stored.access_until)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_held_over_a_reconnect_stores_no_reauth_over_it() {
+    let n = Node::start().await;
+    let t = tenant(&n).await;
+    // The held refresh gets `invalid_grant` after the user signed in again.
+    let id = expired_google_account(&n, &t, "1//revoked").await;
+
+    reconnect_during_refresh(&n, &t, id).await;
+    assert_eq!(account(&n, &t, &id.to_string()).await["state"], "active");
 }
 
 #[tokio::test(flavor = "multi_thread")]
