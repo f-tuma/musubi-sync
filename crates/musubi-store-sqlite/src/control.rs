@@ -65,12 +65,18 @@ fn after(now: Timestamp, d: Duration) -> Result<Timestamp> {
 }
 
 impl SqliteControl {
-    /// Opens (creating if missing) the control database at `path`.
+    /// Opens (creating if missing) and, if older, migrates the control database
+    /// at `path`. A newer file is `SchemaTooNew` before any pragma or write
+    /// touches it.
     pub fn open(path: &std::path::Path) -> Result<Self, StoreError> {
+        let probe = Connection::open(path).map_err(crate::Error::from)?;
+        let found = crate::schema::main_version(&probe)?;
+        let supported = crate::schema::CONTROL_MIGRATIONS.len() as u32;
+        if found > supported {
+            return Err(StoreError::SchemaTooNew { found, supported });
+        }
+        drop(probe);
         let mut writer = connect(path, "FULL", 1000)?;
-        writer
-            .execute_batch(crate::schema::CONTROL)
-            .map_err(crate::Error::from)?;
         crate::schema::migrate_control(&mut writer)?;
         let reader = connect(path, "FULL", 1000)?;
         Ok(Self {
@@ -178,6 +184,14 @@ fn channel(r: &Row<'_>) -> rusqlite::Result<Result<ChannelRecord>> {
             state,
         })
     })())
+}
+
+/// A nullable text column of an account; `NotFound` if the account is absent.
+fn account_column(c: &Connection, column: &str, id: AccountId) -> Result<Option<String>> {
+    c.prepare_cached(&format!("SELECT {column} FROM accounts WHERE id = ?1"))?
+        .query_row([id.to_bytes()], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound.into())
 }
 
 fn collect<T>(
@@ -371,19 +385,44 @@ impl ControlStore for SqliteControl {
         })
     }
 
-    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
-    fn set_endpoint(&self, _id: AccountId, _e: &Endpoint) -> Result<(), StoreError> {
-        todo!("K1")
+    fn set_endpoint(&self, id: AccountId, e: &Endpoint) -> Result<(), StoreError> {
+        let json = serde_json::to_string(e).map_err(crate::Error::from)?;
+        self.write(|c| {
+            found(c.execute(
+                "UPDATE accounts SET endpoint = ?2 WHERE id = ?1",
+                params![id.to_bytes(), json],
+            )?)
+        })
     }
 
-    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
-    fn endpoint(&self, _id: AccountId) -> Result<Option<Endpoint>, StoreError> {
-        todo!("K1")
+    fn endpoint(&self, id: AccountId) -> Result<Option<Endpoint>, StoreError> {
+        self.read(|c| {
+            let json = account_column(c, "endpoint", id)?;
+            Ok(json.map(|j| serde_json::from_str(&j)).transpose()?)
+        })
     }
 
-    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
-    fn set_missing(&self, _id: AccountId, _kinds: &[EntityKind]) -> Result<(), StoreError> {
-        todo!("K1")
+    fn set_missing(&self, id: AccountId, kinds: &[EntityKind]) -> Result<(), StoreError> {
+        let json = match kinds {
+            [] => None,
+            k => Some(serde_json::to_string(k).map_err(crate::Error::from)?),
+        };
+        self.write(|c| {
+            found(c.execute(
+                "UPDATE accounts SET missing = ?2 WHERE id = ?1",
+                params![id.to_bytes(), json],
+            )?)
+        })
+    }
+
+    fn missing(&self, id: AccountId) -> Result<Vec<EntityKind>, StoreError> {
+        self.read(|c| {
+            let json = account_column(c, "missing", id)?;
+            Ok(json
+                .map(|j| serde_json::from_str(&j))
+                .transpose()?
+                .unwrap_or_default())
+        })
     }
 
     fn put_oauth_state(&self, s: &OAuthPending) -> Result<(), StoreError> {

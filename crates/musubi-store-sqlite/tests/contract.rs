@@ -665,3 +665,267 @@ fn unseen_pages_by_key() {
     }
     assert_eq!(all, keys(&["k0", "k1", "k2", "k4", "k5", "k6"]));
 }
+
+/// An item of `kind` without occurrences (tasks, contacts).
+fn undated(key: &str, kind: musubi_model::EntityKind) -> musubi_model::store::ItemWrite {
+    let mut w = item(key, "1", Occurrences::default());
+    w.kind = kind;
+    w
+}
+
+#[test]
+fn list_entities_pages_one_kind_without_tombstones() {
+    use musubi_model::EntityKind::{Contact, Event, Task};
+    let (_d, _s, mut t) = setup();
+    let (a, b, other) = (
+        collection(&mut t, "a"),
+        collection(&mut t, "b"),
+        collection(&mut t, "other"),
+    );
+    let tasks = ["t1", "t2", "t3", "t4", "t5"];
+    t.apply_page(&page(
+        a,
+        vec![
+            undated("t1", Task),
+            undated("t2", Task),
+            undated("t3", Task),
+            undated("c1", Contact),
+            event("e1", "1", 0),
+        ],
+    ))
+    .unwrap();
+    t.apply_page(&page(b, vec![undated("t4", Task), undated("t5", Task)]))
+        .unwrap();
+    t.apply_page(&page(other, vec![undated("t9", Task)]))
+        .unwrap();
+    let mut gone = page(b, vec![]);
+    gone.removals = keys(&["t5"]);
+    t.apply_page(&gone).unwrap();
+
+    let mut seen = Vec::new();
+    let mut after = None;
+    loop {
+        let p = t
+            .list_entities(Task, &[a, b], after, 2, Include::default())
+            .unwrap();
+        assert!(p.len() <= 2);
+        assert!(p.iter().all(|e| e.kind == Task && !e.tombstone));
+        assert!(p.iter().all(|e| e.placements.is_empty()));
+        let Some(last) = p.last() else { break };
+        after = Some(last.id);
+        seen.extend(p);
+    }
+    let ids: Vec<_> = seen.iter().map(|e| e.id).collect();
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(ids, sorted, "in EntityId order");
+    let mut docs: Vec<String> = seen
+        .iter()
+        .map(|e| e.canonical.as_ref().unwrap().get().to_owned())
+        .collect();
+    docs.sort();
+    let want: Vec<String> = tasks[..4]
+        .iter()
+        .map(|k| format!(r#"{{"id":"{k}","v":"1"}}"#))
+        .collect();
+    assert_eq!(docs, want, "t5 tombstoned, t9 in another collection");
+
+    let inc = Include {
+        placements: true,
+        raw: true,
+    };
+    let c = t.list_entities(Contact, &[a, b], None, 10, inc).unwrap();
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].placements.len(), 1);
+    assert_eq!(c[0].placements[0].collection, a);
+    assert_eq!(
+        t.list_entities(Event, &[b], None, 10, inc).unwrap().len(),
+        0
+    );
+    assert!(
+        t.list_entities(Task, &[], None, 10, inc)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn stale_items_and_redecode() {
+    use musubi_model::EntityKind::{Event, Task};
+    let (_d, _s, mut t) = setup();
+    let col = collection(&mut t, "cal");
+    let mut current = event("cur", "1", 3);
+    current.mapping_version = 2;
+    t.apply_page(&page(
+        col,
+        vec![
+            event("a", "1", 0),
+            event("b", "1", 1),
+            event("dead", "1", 2),
+            current,
+            undated("task", Task),
+        ],
+    ))
+    .unwrap();
+    let mut gone = page(col, vec![]);
+    gone.removals = keys(&["dead"]);
+    t.apply_page(&gone).unwrap();
+
+    // Stale under mapping 2: `a` and `b`, not the tombstone, the current one or the task.
+    let p1 = t.stale_items(Event, &[col], 1, 2, None, 1).unwrap();
+    let p2 = t
+        .stale_items(Event, &[col], 1, 2, Some(p1[0].id), 1)
+        .unwrap();
+    assert!(p1[0].id < p2[0].id, "in ItemId order");
+    assert!(
+        t.stale_items(Event, &[col], 1, 2, Some(p2[0].id), 1)
+            .unwrap()
+            .is_empty()
+    );
+    let mut stale: Vec<_> = p1.into_iter().chain(p2).collect();
+    stale.sort_by(|x, y| x.key.0.cmp(&y.key.0));
+    assert_eq!(stale[0].key.0, "a");
+    assert_eq!(stale[1].key.0, "b");
+    let raw = stale[0].raw.as_ref().expect("with raw content");
+    assert_eq!(raw.body, br#"{"id":"a","v":"1"}"#);
+    assert_eq!(
+        t.stale_items(Event, &[col], 2, 2, None, 10).unwrap().len(),
+        3
+    );
+    assert!(
+        t.stale_items(Event, &[], 2, 2, None, 10)
+            .unwrap()
+            .is_empty()
+    );
+
+    let entity_of = |t: &musubi_store_sqlite::SqliteTenant, id| {
+        t.entity(
+            t.item(id, Include::default()).unwrap().unwrap().entity,
+            Include::default(),
+        )
+        .unwrap()
+        .unwrap()
+    };
+    let rev_a = entity_of(&t, stale[0].id).rev;
+    let rev_b = entity_of(&t, stale[1].id).rev;
+    let head = t.head().unwrap();
+
+    // `a` decodes to the same canonical form under mapping 2; `b` to a new one
+    // that moves its occurrence. A changed body and an unknown key are skipped.
+    let mut same = event("a", "1", 0);
+    same.mapping_version = 2;
+    same.validator = musubi_model::Validator("ignored".into());
+    let mut changed = event("b", "1", 1);
+    changed.mapping_version = 2;
+    changed.canonical =
+        Some(serde_json::value::RawValue::from_string(r#"{"id":"b","v":"new"}"#.into()).unwrap());
+    changed.occurrences.rows = vec![row(7, None)];
+    let mut moved = event("cur", "2", 3);
+    moved.mapping_version = 3;
+    let mut unknown = event("nope", "1", 0);
+    unknown.mapping_version = 2;
+    let after = t.redecode(col, &[same, changed, moved, unknown]).unwrap();
+
+    let ch = journal(&t, head);
+    assert_eq!(ch.len(), 1, "only the changed canonical form is journaled");
+    let b_entity = entity_of(&t, stale[1].id);
+    assert_eq!(
+        (ch[0].target, ch[0].op),
+        (ChangeTarget::Entity(b_entity.id), ChangeOp::Updated)
+    );
+    assert_eq!(after, ch[0].seq);
+    assert_eq!(b_entity.rev, rev_b + 1);
+    assert_eq!(b_entity.canonical.unwrap().get(), r#"{"id":"b","v":"new"}"#);
+    assert_eq!(entity_of(&t, stale[0].id).rev, rev_a);
+
+    let a = t.item(stale[0].id, Include::default()).unwrap().unwrap();
+    assert_eq!(a.mapping_version, 2);
+    assert_eq!(a.validator.0, "a@1", "no new validator");
+    let cur = &t.items_by_remote(col, &keys(&["cur"])).unwrap()[0];
+    assert_eq!(cur.mapping_version, 2, "changed raw body is skipped");
+    assert!(t.items_by_remote(col, &keys(&["nope"])).unwrap().is_empty());
+    let starts: Vec<_> = t
+        .range(&window(0, 10))
+        .unwrap()
+        .occurrences
+        .iter()
+        .map(|o| o.start)
+        .collect();
+    assert_eq!(starts, vec![common::t(0), common::t(3), common::t(7)]);
+    assert!(
+        t.stale_items(Event, &[col], 1, 2, None, 10)
+            .unwrap()
+            .is_empty()
+    );
+
+    // Nothing changes: the head stays.
+    let mut again = event("a", "1", 0);
+    again.mapping_version = 2;
+    assert_eq!(t.redecode(col, &[again]).unwrap(), after);
+    assert_eq!(t.head().unwrap(), after);
+    t.purge_collection(col).unwrap();
+    assert!(matches!(t.redecode(col, &[]), Err(StoreError::NotFound)));
+}
+
+#[test]
+fn push_resource_is_kept_until_purge() {
+    let (d, s, mut t) = setup();
+    let col = collection(&mut t, "cal");
+    let push =
+        |t: &musubi_store_sqlite::SqliteTenant| t.collections().unwrap()[0].push_resource.clone();
+    assert_eq!(push(&t), None);
+    t.set_push_resource(col, "res-1").unwrap();
+    // Rediscovery, pages and status writes keep it.
+    let mut renamed = remote("cal");
+    renamed.name = "Calendar".into();
+    t.apply_discovery(&DiscoveryWrite {
+        account: ACCOUNT,
+        collections: vec![renamed],
+        complete: true,
+    })
+    .unwrap();
+    t.apply_page(&page(col, vec![event("a", "1", 0)])).unwrap();
+    t.set_collection_state(col, &CollectionStatus::default())
+        .unwrap();
+    // A channel swap (docs/plan/phase2.md 4.1) touches only `control.db`.
+    channel_swap(&d, col);
+    drop(t);
+    let mut t = s.open(TENANT).unwrap();
+    assert_eq!(push(&t).as_deref(), Some("res-1"));
+    t.set_push_resource(col, "res-2").unwrap();
+    assert_eq!(push(&t).as_deref(), Some("res-2"));
+    t.purge_collection(col).unwrap();
+    assert!(matches!(
+        t.set_push_resource(col, "res-3"),
+        Err(StoreError::NotFound)
+    ));
+}
+
+/// Renews a channel of `col` the way the engine does: the new one pending,
+/// then open, then the old one deleted.
+fn channel_swap(d: &TempDir, col: musubi_model::CollectionId) {
+    use musubi_model::control::{ChannelRecord, ChannelState};
+    use musubi_model::provider::{ChannelId, Subscription};
+    use musubi_model::{CollectionRef, ControlStore};
+    let c = musubi_store_sqlite::SqliteControl::open(&d.path().join("control.db")).unwrap();
+    let open = |id: &str| ChannelRecord {
+        tenant: TENANT,
+        account: ACCOUNT,
+        collection: col,
+        state: ChannelState::Open(Subscription::new(
+            ChannelId(id.into()),
+            CollectionRef("cal".into()),
+            "res-1",
+            secrecy::SecretString::from("tok"),
+            common::t(100),
+        )),
+    };
+    c.put_channel(&open("old")).unwrap();
+    c.put_channel(&ChannelRecord {
+        state: ChannelState::Pending(ChannelId("new".into())),
+        ..open("new")
+    })
+    .unwrap();
+    c.put_channel(&open("new")).unwrap();
+    c.delete_channel(&ChannelId("old".into())).unwrap();
+}

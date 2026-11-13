@@ -291,11 +291,11 @@ Meta klíč `mapping:<provider>:<kind>` (hodnota = verze mapování a schématu,
 Dnes `CONTROL` používá `CREATE TABLE IF NOT EXISTS` a jednorázové `migrate_control`. Verze chybí, takže starší binárka by novější soubor otevřela a poškodila. Fáze 2:
 
 - `meta` dostane klíč `schema`. `CONTROL_MIGRATIONS[i]` vede z verze `i` na `i + 1`, stejný `migrate` jako u tenanta.
-- Soubor bez klíče `schema` je verze 1, pokud má tabulku `accounts`: projde dnešním `CONTROL` a `migrate_control` a dostane `schema = 1`. Prázdný soubor dostane rovnou poslední verzi.
+- Soubor bez klíče `schema` je verze 1, pokud má jakoukoli tabulku (i soubor jen se starou tabulkou `channels`): projde dnešním `CONTROL` a opravou kanálů (`fix_channels`, dřív `migrate_control`) a dostane `schema = 1`. Prázdný soubor dostane rovnou poslední verzi.
 - Verze 2: `ALTER TABLE accounts ADD COLUMN endpoint TEXT` (JSON `Endpoint`, kapitola 3.5) a `ALTER TABLE accounts ADD COLUMN missing TEXT` (JSON pole druhů bez oprávnění, kapitola 6.1). Jen přidané sloupce s `NULL`, žádná změna existujících.
 - Soubor s vyšší verzí, než binárka zná, je `SchemaTooNew`. `serve` skončí s chybou a soubor nezmění.
 
-Nové operace `ControlStore`: `set_endpoint(account, &Endpoint)`, `endpoint(account)`, `set_missing(account, &[EntityKind])`. `TokenVault` pracuje s `Credentials` (kapitola 3.5).
+Nové operace `ControlStore`: `set_endpoint(account, &Endpoint)`, `endpoint(account)`, `set_missing(account, &[EntityKind])`, `missing(account)`. Nová operace `TenantStore`: `set_push_resource(collection, &str)`; hodnotu vrací `CollectionState.push_resource`. `TokenVault` pracuje s `Credentials` (kapitola 3.5).
 
 ### 4.4 Přechod na fázi 2 a návrat
 

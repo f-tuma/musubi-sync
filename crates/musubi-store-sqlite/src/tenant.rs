@@ -467,6 +467,7 @@ fn collection_state(r: &Row<'_>) -> rusqlite::Result<Result<CollectionState>> {
     let (active, complete, last): (Option<i64>, bool, Option<i64>) =
         (r.get(5)?, r.get(6)?, r.get(7)?);
     let gone: bool = r.get(16)?;
+    let push_resource: Option<String> = r.get(17)?;
     Ok((|| {
         let coverage = match (coverage, cov_start, cov_end) {
             (0, _, _) => Coverage::None,
@@ -499,8 +500,179 @@ fn collection_state(r: &Row<'_>) -> rusqlite::Result<Result<CollectionState>> {
                 full_read_at: opt_ts(full_read_at)?,
             },
             gone,
+            push_resource,
         })
     })())
+}
+
+fn entity(c: &Connection, id: EntityId, inc: Include) -> Result<Option<EntityView>> {
+    let e = c
+        .prepare_cached(
+            "SELECT kind, rev, seq, tombstone,
+               (SELECT observed FROM items WHERE entity = e.id LIMIT 1)
+             FROM entities e WHERE id = ?1",
+        )?
+        .query_row([id.to_bytes()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, bool>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .optional()?;
+    let Some((kind, rev, seq, tombstone, doc)) = e else {
+        return Ok(None);
+    };
+    let mut placements = Vec::new();
+    if inc.placements {
+        let mut st = c.prepare_cached(
+            "SELECT id, item, collection, role, direction, projection, origin, delivery
+             FROM placements WHERE entity = ?1 AND tombstone = 0 ORDER BY id",
+        )?;
+        let mut rows = st.query([id.to_bytes()])?;
+        while let Some(r) = rows.next()? {
+            placements.push(PlacementView {
+                id: PlacementId::from_bytes(r.get(0)?),
+                item: ItemId::from_bytes(r.get(1)?),
+                collection: CollectionId::from_bytes(r.get(2)?),
+                role: parse_enum(r.get(3)?)?,
+                direction: parse_enum(r.get(4)?)?,
+                projection: parse_enum(r.get(5)?)?,
+                origin: parse_enum(r.get(6)?)?,
+                delivery: parse_enum(r.get(7)?)?,
+            });
+        }
+    }
+    Ok(Some(EntityView {
+        id,
+        kind: parse_enum(kind)?,
+        rev: rev as u64,
+        seq: Seq(seq as u64),
+        tombstone,
+        canonical: canonical(doc)?,
+        placements,
+    }))
+}
+
+fn item(c: &Connection, id: ItemId, inc: Include) -> Result<Option<ItemView>> {
+    let mut st = c.prepare_cached(&format!(
+        "SELECT i.entity, i.collection, i.kind, i.key, i.validator, i.raw_hash,
+           i.schema_version, i.mapping_version, i.observed, i.tombstone, {}
+         FROM items i LEFT JOIN raw r ON r.hash = i.raw_hash WHERE i.id = ?1",
+        if inc.raw {
+            "r.media_type, r.body"
+        } else {
+            "NULL, NULL"
+        }
+    ))?;
+    let mut rows = st.query([id.to_bytes()])?;
+    let Some(r) = rows.next()? else {
+        return Ok(None);
+    };
+    let media: Option<String> = r.get(10)?;
+    let raw = match media {
+        Some(m) => Some(Raw {
+            media_type: parse_enum::<MediaType>(m)?,
+            body: r.get(11)?,
+        }),
+        None => None,
+    };
+    Ok(Some(ItemView {
+        id,
+        entity: EntityId::from_bytes(r.get(0)?),
+        collection: CollectionId::from_bytes(r.get(1)?),
+        kind: parse_enum(r.get(2)?)?,
+        key: RemoteKey(r.get(3)?),
+        validator: Validator(r.get(4)?),
+        raw_hash: RawHash(r.get(5)?),
+        schema_version: r.get(6)?,
+        mapping_version: r.get(7)?,
+        observed: canonical(r.get(8)?)?,
+        tombstone: r.get(9)?,
+        raw,
+    }))
+}
+
+/// The ids `sql` selects: `args` bind `?1..`, and `{cols}` in `sql` becomes the
+/// placeholders of `cols`, bound after them.
+fn ids_page(
+    c: &Connection,
+    sql: &str,
+    args: Vec<rusqlite::types::Value>,
+    cols: &[CollectionId],
+) -> Result<Vec<[u8; 16]>> {
+    let sql = sql.replace(
+        "{cols}",
+        &(args.len() + 1..=args.len() + cols.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    let mut args = args;
+    args.extend(cols.iter().map(|c| c.to_bytes().to_vec().into()));
+    let mut st = c.prepare_cached(&sql)?;
+    let ids = st
+        .query_map(params_from_iter(&args), |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+/// Re-decodes one item from its stored raw content (see [`TenantStore::redecode`]).
+fn redecode(c: &Connection, j: &mut Journal, col: [u8; 16], w: &ItemWrite) -> Result<()> {
+    // A changed raw body means the item changed since it was read: skipped.
+    let live: Option<([u8; 16], [u8; 16], Option<String>)> = c
+        .prepare_cached(
+            "SELECT id, entity, observed FROM items
+             WHERE collection = ?1 AND key = ?2 AND raw_hash = ?3 AND tombstone = 0",
+        )?
+        .query_row(params![col, w.key.0, w.raw_hash.0], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .optional()?;
+    let Some((item, entity, old)) = live else {
+        return Ok(());
+    };
+    let observed = w.canonical.as_deref().map(RawValue::get);
+    let (uid, rid) = match &w.correlation {
+        Some(k) => (Some(k.uid.as_str()), k.recurrence_id.map(us)),
+        None => (None, None),
+    };
+    c.prepare_cached(
+        "UPDATE items SET schema_version = ?2, mapping_version = ?3, observed = ?4, uid = ?5,
+           recurrence_id = ?6
+         WHERE id = ?1",
+    )?
+    .execute(params![
+        item,
+        w.schema_version,
+        w.mapping_version,
+        observed,
+        uid,
+        rid
+    ])?;
+    if old.as_deref() != observed {
+        let seq = j.record(
+            ChangeTarget::Entity(EntityId::from_bytes(entity)),
+            ChangeOp::Updated,
+        );
+        c.prepare_cached("UPDATE entities SET rev = rev + 1, seq = ?2 WHERE id = ?1")?
+            .execute(params![entity, seq as i64])?;
+    }
+    let s = w.occurrences.series;
+    c.prepare_cached(
+        "UPDATE entities SET series_first = ?2, series_last = ?3, indexed_until = ?4 WHERE id = ?1",
+    )?
+    .execute(params![
+        entity,
+        s.map(|s| us(s.first)),
+        s.and_then(|s| s.last).map(us),
+        s.map(|s| us(s.indexed_until))
+    ])?;
+    c.prepare_cached("DELETE FROM occurrences WHERE entity = ?1")?
+        .execute([entity])?;
+    insert_occurrences(c, entity, item, col, &w.occurrences.rows)
 }
 
 /// Wall time read as UTC, placed in `zone`.
@@ -726,7 +898,7 @@ impl TenantStore for SqliteTenant {
             let mut st = c.prepare_cached(
                 "SELECT id, account, meta, remote, cursor, active_read, read_complete, last_read,
                    coverage, cov_start, cov_end, err_message, err_at, err_permanent,
-                   synced_at, full_read_at, gone
+                   synced_at, full_read_at, gone, push_resource
                  FROM collections ORDER BY id",
             )?;
             st.query_map([], collection_state)?.map(|r| r?).collect()
@@ -734,97 +906,11 @@ impl TenantStore for SqliteTenant {
     }
 
     fn entity(&self, id: EntityId, inc: Include) -> Result<Option<EntityView>, StoreError> {
-        Ok(self.shared.read(|c| {
-            let e = c
-                .prepare_cached(
-                    "SELECT kind, rev, seq, tombstone,
-                       (SELECT observed FROM items WHERE entity = e.id LIMIT 1)
-                     FROM entities e WHERE id = ?1",
-                )?
-                .query_row([id.to_bytes()], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, i64>(2)?,
-                        r.get::<_, bool>(3)?,
-                        r.get::<_, Option<String>>(4)?,
-                    ))
-                })
-                .optional()?;
-            let Some((kind, rev, seq, tombstone, doc)) = e else {
-                return Ok(None);
-            };
-            let mut placements = Vec::new();
-            if inc.placements {
-                let mut st = c.prepare_cached(
-                    "SELECT id, item, collection, role, direction, projection, origin, delivery
-                     FROM placements WHERE entity = ?1 AND tombstone = 0 ORDER BY id",
-                )?;
-                let mut rows = st.query([id.to_bytes()])?;
-                while let Some(r) = rows.next()? {
-                    placements.push(PlacementView {
-                        id: PlacementId::from_bytes(r.get(0)?),
-                        item: ItemId::from_bytes(r.get(1)?),
-                        collection: CollectionId::from_bytes(r.get(2)?),
-                        role: parse_enum(r.get(3)?)?,
-                        direction: parse_enum(r.get(4)?)?,
-                        projection: parse_enum(r.get(5)?)?,
-                        origin: parse_enum(r.get(6)?)?,
-                        delivery: parse_enum(r.get(7)?)?,
-                    });
-                }
-            }
-            Ok(Some(EntityView {
-                id,
-                kind: parse_enum(kind)?,
-                rev: rev as u64,
-                seq: Seq(seq as u64),
-                tombstone,
-                canonical: canonical(doc)?,
-                placements,
-            }))
-        })?)
+        Ok(self.shared.read(|c| entity(c, id, inc))?)
     }
 
     fn item(&self, id: ItemId, inc: Include) -> Result<Option<ItemView>, StoreError> {
-        Ok(self.shared.read(|c| {
-            let mut st = c.prepare_cached(&format!(
-                "SELECT i.entity, i.collection, i.kind, i.key, i.validator, i.raw_hash,
-                   i.schema_version, i.mapping_version, i.observed, i.tombstone, {}
-                 FROM items i LEFT JOIN raw r ON r.hash = i.raw_hash WHERE i.id = ?1",
-                if inc.raw {
-                    "r.media_type, r.body"
-                } else {
-                    "NULL, NULL"
-                }
-            ))?;
-            let mut rows = st.query([id.to_bytes()])?;
-            let Some(r) = rows.next()? else {
-                return Ok(None);
-            };
-            let media: Option<String> = r.get(10)?;
-            let raw = match media {
-                Some(m) => Some(Raw {
-                    media_type: parse_enum::<MediaType>(m)?,
-                    body: r.get(11)?,
-                }),
-                None => None,
-            };
-            Ok(Some(ItemView {
-                id,
-                entity: EntityId::from_bytes(r.get(0)?),
-                collection: CollectionId::from_bytes(r.get(1)?),
-                kind: parse_enum(r.get(2)?)?,
-                key: RemoteKey(r.get(3)?),
-                validator: Validator(r.get(4)?),
-                raw_hash: RawHash(r.get(5)?),
-                schema_version: r.get(6)?,
-                mapping_version: r.get(7)?,
-                observed: canonical(r.get(8)?)?,
-                tombstone: r.get(9)?,
-                raw,
-            }))
-        })?)
+        Ok(self.shared.read(|c| item(c, id, inc))?)
     }
 
     fn items_by_remote(
@@ -933,29 +1019,83 @@ impl TenantStore for SqliteTenant {
         })?)
     }
 
-    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
     fn list_entities(
         &self,
-        _kind: EntityKind,
-        _collections: &[CollectionId],
-        _after: Option<EntityId>,
-        _limit: u32,
-        _inc: Include,
+        kind: EntityKind,
+        collections: &[CollectionId],
+        after: Option<EntityId>,
+        limit: u32,
+        inc: Include,
     ) -> Result<Vec<EntityView>, StoreError> {
-        todo!("K1")
+        if collections.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self.shared.read(|c| {
+            // Driven by `entities_kind`; an empty blob sorts before every id.
+            let ids = ids_page(
+                c,
+                "SELECT e.id FROM entities e
+                 WHERE e.kind = ?1 AND e.tombstone = 0 AND e.id > ?2
+                   AND EXISTS (SELECT 1 FROM placements p WHERE p.entity = e.id
+                     AND p.tombstone = 0 AND p.collection IN ({cols}))
+                 ORDER BY e.id LIMIT ?3",
+                vec![
+                    kind.as_str().to_owned().into(),
+                    after.map_or(Vec::new(), |a| a.to_bytes().to_vec()).into(),
+                    i64::from(limit).into(),
+                ],
+                collections,
+            )?;
+            let inc = Include { raw: false, ..inc };
+            ids.into_iter()
+                .map(|id| {
+                    entity(c, EntityId::from_bytes(id), inc)?
+                        .ok_or_else(|| corrupt("listed entity vanished"))
+                })
+                .collect()
+        })?)
     }
 
-    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
     fn stale_items(
         &self,
-        _kind: EntityKind,
-        _collections: &[CollectionId],
-        _schema_version: u32,
-        _mapping_version: u32,
-        _after: Option<ItemId>,
-        _limit: u32,
+        kind: EntityKind,
+        collections: &[CollectionId],
+        schema_version: u32,
+        mapping_version: u32,
+        after: Option<ItemId>,
+        limit: u32,
     ) -> Result<Vec<ItemView>, StoreError> {
-        todo!("K1")
+        if collections.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self.shared.read(|c| {
+            let ids = ids_page(
+                c,
+                "SELECT i.id FROM items i
+                 WHERE i.kind = ?1 AND i.tombstone = 0 AND i.id > ?2
+                   AND (i.schema_version <> ?4 OR i.mapping_version <> ?5)
+                   AND i.collection IN ({cols})
+                 ORDER BY i.id LIMIT ?3",
+                vec![
+                    kind.as_str().to_owned().into(),
+                    after.map_or(Vec::new(), |a| a.to_bytes().to_vec()).into(),
+                    i64::from(limit).into(),
+                    i64::from(schema_version).into(),
+                    i64::from(mapping_version).into(),
+                ],
+                collections,
+            )?;
+            let inc = Include {
+                placements: false,
+                raw: true,
+            };
+            ids.into_iter()
+                .map(|id| {
+                    item(c, ItemId::from_bytes(id), inc)?
+                        .ok_or_else(|| corrupt("listed item vanished"))
+                })
+                .collect()
+        })?)
     }
 
     fn stats(&self) -> Result<StoreStats, StoreError> {
@@ -1047,9 +1187,16 @@ impl TenantStore for SqliteTenant {
         Ok(self.shared.write(|c| apply_page(c, p))?)
     }
 
-    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
-    fn redecode(&mut self, _col: CollectionId, _items: &[ItemWrite]) -> Result<Seq, StoreError> {
-        todo!("K1")
+    fn redecode(&mut self, col: CollectionId, items: &[ItemWrite]) -> Result<Seq, StoreError> {
+        Ok(self.shared.write(|c| {
+            let id = col.to_bytes();
+            read_state(c, id)?;
+            let mut j = Journal::new(c)?;
+            for w in items {
+                redecode(c, &mut j, id, w)?;
+            }
+            j.flush(c, Timestamp::now())
+        })?)
     }
 
     fn finish_full_read(&mut self, col: CollectionId, read: ReadId) -> Result<Seq, StoreError> {
@@ -1087,6 +1234,18 @@ impl TenantStore for SqliteTenant {
                 .execute([id])?;
             j.record(ChangeTarget::Collection(col), ChangeOp::Deleted);
             j.flush(c, now)
+        })?)
+    }
+
+    fn set_push_resource(&mut self, col: CollectionId, resource: &str) -> Result<(), StoreError> {
+        Ok(self.shared.write(|c| {
+            let n = c
+                .prepare_cached("UPDATE collections SET push_resource = ?2 WHERE id = ?1")?
+                .execute(params![col.to_bytes(), resource])?;
+            if n == 0 {
+                return Err(StoreError::NotFound.into());
+            }
+            Ok(())
         })?)
     }
 

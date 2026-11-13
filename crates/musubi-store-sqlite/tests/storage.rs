@@ -87,7 +87,7 @@ fn older_file_migrates_and_newer_is_refused_untouched() {
         s.open(new),
         Err(StoreError::SchemaTooNew {
             found: 99,
-            supported: 1
+            supported: 2
         })
     ));
     assert_eq!(std::fs::read(&path).unwrap(), before, "file untouched");
@@ -323,4 +323,52 @@ fn wal_reset_fails_backs_off_and_recovers() {
     assert!(st.wal_bytes < 8 << 20, "{st:?}");
     assert!(st.wal_max_bytes >= 64 << 20);
     println!("{st:?}");
+}
+
+/// docs/plan/phase2.md 4.1: a phase-1 tenant file (version 1) with data
+/// migrates to `MAIN_V2` on open and keeps its data.
+#[test]
+fn phase1_tenant_file_migrates_to_version_2() {
+    use musubi_model::EntityKind;
+    use musubi_model::store::{Include, Occurrences};
+    let d = TempDir::new();
+    let col;
+    {
+        let s = storage(d.path());
+        let mut tn = s.open(TENANT).unwrap();
+        col = collection(&mut tn, "a");
+        let mut task = item("t", "1", Occurrences::default());
+        task.kind = EntityKind::Task;
+        tn.apply_page(&page(col, vec![event("e", "1", 1), task]))
+            .unwrap();
+    }
+    // Back to the phase-1 schema: version 1 had neither the column nor the index.
+    {
+        let c = Connection::open(main_db(d.path(), TENANT)).unwrap();
+        c.execute_batch(
+            "DROP INDEX entities_kind;
+             ALTER TABLE collections DROP COLUMN push_resource;
+             UPDATE meta SET v = 1 WHERE k = 'schema';",
+        )
+        .unwrap();
+    }
+    let s = SqliteStorage::new(d.path(), 4).unwrap();
+    let mut tn = s.open(TENANT).unwrap();
+    let schema: u32 = Connection::open(main_db(d.path(), TENANT))
+        .unwrap()
+        .query_row("SELECT v FROM meta WHERE k = 'schema'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(schema, 2);
+    assert_eq!(tn.stats().unwrap().items, 2);
+    assert_eq!(tn.range(&all(10)).unwrap().occurrences.len(), 1);
+    let tasks = tn
+        .list_entities(EntityKind::Task, &[col], None, 10, Include::default())
+        .unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tn.collections().unwrap()[0].push_resource, None);
+    tn.set_push_resource(col, "res").unwrap();
+    assert_eq!(
+        tn.collections().unwrap()[0].push_resource.as_deref(),
+        Some("res")
+    );
 }
