@@ -10,7 +10,19 @@ publish = false
 
 [dependencies]
 calcard.workspace = true
+jiff.workspace = true
 musubi-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+musubi-recurrence.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "decode"
+harness = false
 
 [lints]
 workspace = true

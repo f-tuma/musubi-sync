@@ -1,0 +1,54 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (series))
+---
+{
+  "uid": "series-1@example.com",
+  "title": "Standup",
+  "start": "2026-11-02T09:00:00",
+  "timeZone": "Europe/Berlin",
+  "duration": "PT15M",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "recurrenceRules": [
+    "FREQ=WEEKLY;COUNT=10;BYDAY=MO"
+  ],
+  "recurrenceOverrides": {
+    "2026-11-16T09:00:00": {
+      "duration": "PT30M",
+      "start": "2026-11-16T10:00:00",
+      "title": "Standup (moved)"
+    },
+    "2026-11-23T09:00:00": {
+      "excluded": true
+    },
+    "2026-11-25T09:00:00": {},
+    "2026-11-30T09:00:00": {
+      "excluded": true
+    }
+  },
+  "participants": {
+    "alex@example.com": {
+      "email": "alex@example.com",
+      "roles": {
+        "owner": true
+      },
+      "participationStatus": "accepted",
+      "expectReply": false
+    }
+  },
+  "alerts": {
+    "1": {
+      "trigger": {
+        "@type": "OffsetTrigger",
+        "offset": "-PT10M",
+        "relativeTo": "start"
+      },
+      "action": "display"
+    }
+  },
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

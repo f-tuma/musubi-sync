@@ -1,0 +1,17 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (all_day))
+---
+{
+  "uid": "all-day-1@example.com",
+  "title": "Offsite",
+  "start": "2026-11-20T00:00:00",
+  "timeZone": null,
+  "duration": "P2D",
+  "showWithoutTime": true,
+  "status": "confirmed",
+  "freeBusyStatus": "free",
+  "privacy": "secret",
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

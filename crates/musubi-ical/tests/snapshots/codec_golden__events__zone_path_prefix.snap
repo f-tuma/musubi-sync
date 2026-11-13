@@ -1,0 +1,17 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (zone_path_prefix))
+---
+{
+  "uid": "mozilla-1@example.com",
+  "title": "Dinner",
+  "start": "2026-12-06T20:00:00",
+  "timeZone": "Europe/Paris",
+  "duration": "PT2H",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

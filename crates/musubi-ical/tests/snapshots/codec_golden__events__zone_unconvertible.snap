@@ -1,0 +1,17 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (zone_unconvertible))
+---
+{
+  "uid": "unconvertible-1@example.com",
+  "title": "Zone without a POSIX form",
+  "start": "2026-11-16T10:00:00",
+  "timeZone": "/Musubi Historic",
+  "duration": "PT1H",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

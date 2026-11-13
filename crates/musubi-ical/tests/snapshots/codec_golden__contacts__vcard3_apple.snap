@@ -1,0 +1,124 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: contact (stringify! (vcard3_apple))
+---
+{
+  "uid": "3f6c2a1e-4b5d-4e6f-8a7b-9c0d1e2f3a4b",
+  "kind": "individual",
+  "name": {
+    "components": [
+      {
+        "kind": "surname",
+        "value": "Sample"
+      },
+      {
+        "kind": "given",
+        "value": "Jordan"
+      },
+      {
+        "kind": "given2",
+        "value": "Lee"
+      },
+      {
+        "kind": "title",
+        "value": "Dr."
+      },
+      {
+        "kind": "credential",
+        "value": "PhD"
+      }
+    ],
+    "full": "Dr. Jordan Lee Sample PhD"
+  },
+  "nicknames": [
+    "Jo"
+  ],
+  "organizations": [
+    {
+      "name": "Example Corp",
+      "units": [
+        "Research"
+      ]
+    }
+  ],
+  "titles": [
+    "Lead Scientist"
+  ],
+  "emails": [
+    {
+      "address": "jordan@example.com",
+      "contexts": [
+        "work"
+      ],
+      "pref": 1
+    },
+    {
+      "address": "jordan.home@example.net",
+      "label": "Other"
+    }
+  ],
+  "phones": [
+    {
+      "number": "+1 555 0100",
+      "features": [
+        "cell",
+        "voice"
+      ],
+      "pref": 1
+    },
+    {
+      "number": "+1 555 0199",
+      "label": "Lab"
+    }
+  ],
+  "addresses": [
+    {
+      "street": "1 Example Street",
+      "locality": "Springfield",
+      "region": "IL",
+      "postcode": "62701",
+      "country": "USA",
+      "contexts": [
+        "private"
+      ],
+      "pref": 1
+    }
+  ],
+  "onlineServices": [
+    {
+      "uri": "https://social.example/@jordan",
+      "service": "mastodon"
+    },
+    {
+      "uri": "xmpp:jordan@example.com",
+      "service": "Jabber"
+    }
+  ],
+  "links": [
+    {
+      "uri": "https://example.com/jordan",
+      "pref": 1,
+      "label": "HomePage"
+    }
+  ],
+  "notes": [
+    "Synthetic Apple-style card."
+  ],
+  "anniversaries": [
+    {
+      "kind": "birth",
+      "date": {
+        "month": 3,
+        "day": 15
+      }
+    }
+  ],
+  "photos": [
+    {
+      "source": "embedded",
+      "size": 90,
+      "mediaType": "image/jpeg"
+    }
+  ],
+  "updated": "2026-11-04T10:10:10Z"
+}

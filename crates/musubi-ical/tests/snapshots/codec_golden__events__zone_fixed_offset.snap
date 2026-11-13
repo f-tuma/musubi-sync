@@ -1,0 +1,23 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (zone_fixed_offset))
+---
+{
+  "uid": "fixed-zone-1@example.com",
+  "title": "Fixed offset zone",
+  "start": "2026-11-16T10:00:00",
+  "timeZone": "/Musubi Fixed",
+  "timeZones": {
+    "/Musubi Fixed": "MFT-5:30"
+  },
+  "duration": "PT1H",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "recurrenceRules": [
+    "FREQ=DAILY;COUNT=2"
+  ],
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

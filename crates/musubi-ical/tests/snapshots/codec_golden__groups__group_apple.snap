@@ -1,0 +1,12 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: group (stringify! (group_apple))
+---
+{
+  "uid": "9e8d7c6b-5a4f-4e3d-2c1b-0a9f8e7d6c5b",
+  "name": "Family",
+  "members": [
+    "3f6c2a1e-4b5d-4e6f-8a7b-9c0d1e2f3a4b",
+    "6f1c1b8e-2d3a-4e5f-9a8b-7c6d5e4f3a2b"
+  ]
+}

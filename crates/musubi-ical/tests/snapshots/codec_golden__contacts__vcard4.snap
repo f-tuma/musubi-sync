@@ -1,0 +1,99 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: contact (stringify! (vcard4))
+---
+{
+  "uid": "6f1c1b8e-2d3a-4e5f-9a8b-7c6d5e4f3a2b",
+  "kind": "individual",
+  "name": {
+    "components": [
+      {
+        "kind": "surname",
+        "value": "Example"
+      },
+      {
+        "kind": "given",
+        "value": "Riley"
+      }
+    ],
+    "full": "Riley Example"
+  },
+  "organizations": [
+    {
+      "name": "Example Org"
+    }
+  ],
+  "titles": [
+    "Engineer"
+  ],
+  "emails": [
+    {
+      "address": "riley@example.com",
+      "contexts": [
+        "work"
+      ],
+      "pref": 1
+    },
+    {
+      "address": "riley.home@example.org",
+      "contexts": [
+        "private"
+      ],
+      "pref": 2
+    }
+  ],
+  "phones": [
+    {
+      "number": "tel:+1-555-0142",
+      "features": [
+        "voice",
+        "cell"
+      ],
+      "pref": 1
+    }
+  ],
+  "addresses": [
+    {
+      "full": "1 Example Plaza\nMetropolis",
+      "street": "1 Example Plaza",
+      "locality": "Metropolis",
+      "postcode": "10001",
+      "country": "USA",
+      "contexts": [
+        "work"
+      ]
+    }
+  ],
+  "links": [
+    {
+      "uri": "https://example.org/riley"
+    }
+  ],
+  "notes": [
+    "Synthetic vCard 4.0 card."
+  ],
+  "anniversaries": [
+    {
+      "kind": "birth",
+      "date": {
+        "month": 7,
+        "day": 4
+      }
+    },
+    {
+      "kind": "wedding",
+      "date": {
+        "year": 2015,
+        "month": 6,
+        "day": 12
+      }
+    }
+  ],
+  "photos": [
+    {
+      "source": "uri",
+      "uri": "https://example.org/riley.jpg"
+    }
+  ],
+  "updated": "2026-11-04T10:10:10Z"
+}

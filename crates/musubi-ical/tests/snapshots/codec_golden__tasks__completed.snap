@@ -1,0 +1,16 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: task (stringify! (completed))
+---
+{
+  "uid": "task-done-1@example.com",
+  "title": "File the report",
+  "due": "2026-11-05T00:00:00",
+  "showWithoutTime": true,
+  "progress": "completed",
+  "progressUpdated": "2026-11-04T15:30:00Z",
+  "percentComplete": 100,
+  "hidden": false,
+  "priority": 0,
+  "sequence": 0
+}

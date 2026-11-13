@@ -1,10 +1,26 @@
 //! iCalendar and vCard codecs of musubi-sync over `calcard` (docs/plan/phase2.md,
 //! chapters 2 and 3.7).
 //!
-//! Pure functions without I/O. Phase 2 K0 delivers [`kind_of`]; K2 adds the
-//! codecs (VEVENT → [`musubi_model::CalendarEvent`], VTODO →
-//! [`musubi_model::CalendarTask`], vCard → [`musubi_model::ContactCard`] and
-//! [`musubi_model::ContactGroupCard`]) and the zone chain `tz`.
+//! Pure functions without I/O, decode only (writes are phase 3):
+//!
+//! - [`kind_of`]: the kind of a resource without parsing it;
+//! - [`IcalCodec`]: VEVENT → [`musubi_model::CalendarEvent`], VTODO →
+//!   [`musubi_model::CalendarTask`]; one resource with a master and its
+//!   exceptions is one item with `recurrence_overrides` (chapter 3.2);
+//! - [`VCardCodec`]: vCard 3.0 and 4.0 → [`musubi_model::ContactCard`] and
+//!   [`musubi_model::ContactGroupCard`] (`KIND:group`, Apple groups);
+//! - the zone chain (chapter 3.7): IANA name, `X-LIC-LOCATION`, Windows name
+//!   (CLDR), path prefix, VTIMEZONE as a POSIX TZ string, else an unresolved
+//!   `/<TZID>`.
+//!
+//! The raw body is never re-serialized (`tests/no_reserialize.rs`).
+
+mod ical;
+mod tz;
+mod vcard;
+
+pub use ical::IcalCodec;
+pub use vcard::VCardCodec;
 
 use musubi_model::EntityKind;
 use musubi_model::remote::{MediaType, Raw};
