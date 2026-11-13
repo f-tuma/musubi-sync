@@ -1,0 +1,14 @@
+{
+  "name": "initial_read",
+  "description": "Initial read of a calendar: the events inside the window (30 days back, 90 forward) reach the journal before the ones outside it, then everything is read and every collection is fully covered.",
+  "kinds": ["event"],
+  "steps": [
+    { "op": "put", "ref": "past", "object": { "kind": "event", "title": "far past", "day": -100 } },
+    { "op": "put", "ref": "future", "object": { "kind": "event", "title": "far future", "day": 200 } },
+    { "op": "put", "ref": "soon", "object": { "kind": "event", "title": "soon", "day": 1 } },
+    { "op": "put", "ref": "today", "object": { "kind": "event", "title": "all day today", "day": 0, "all_day": true } },
+    { "op": "put", "ref": "recent", "object": { "kind": "event", "title": "recent", "day": -5, "hour": 14, "minutes": 30 } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true, "window_first": ["soon", "today", "recent"] }
+  ]
+}

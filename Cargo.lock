@@ -1082,6 +1082,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "musubi-model",
+ "quick-xml",
  "reqwest",
  "rustls",
  "secrecy",

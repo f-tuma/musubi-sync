@@ -39,6 +39,8 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # `--all-targets` skips the conformance runner (`test = false`).
+      - run: cargo clippy -p musubi-testkit --test conformance --locked -- -D warnings
 
   test:
     if: github.event_name != 'schedule'
@@ -55,6 +57,25 @@ jobs:
       # K7 (6.3): 20 SIGKILLs of the whole musubi-syncd binary. `crash-points` is an
       # off-by-default feature that only this test target requires.
       - run: cargo test -p musubi-syncd --features crash-points --release --locked --test crash -- --nocapture
+
+  # Phase 2 (plan 8.1, 8.3, 11.1): the conformance suite, with a local Radicale.
+  conformance:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m venv "$RUNNER_TEMP/radicale"
+          "$RUNNER_TEMP/radicale/bin/pip" install --require-hashes --only-binary :all: \
+            -r crates/musubi-testkit/radicale/requirements.txt
+      # The runner spawns the musubi-syncd binary next to it.
+      - run: cargo build -p musubi-syncd --locked
+      - run: MUSUBI_RADICALE="$RUNNER_TEMP/radicale" cargo test -p musubi-testkit --test conformance --locked -- --nocapture
 
   deny:
     runs-on: ubuntu-24.04

@@ -254,3 +254,61 @@ makes one calendar behave in each of the suspected ways. K8 recorded what
   `400 invalid`, as Google answers a bogus one (*verified (K8)*). Google was
   not seen rejecting a valid token; the quirk tests the adapter's bounded
   restart.
+
+# Fake DAV server: fidelity
+
+`src/dav.rs` (plan 8.2) mimics a CalDAV and CardDAV server (RFC 4918, 4791,
+6352, 6578, 6764) closely enough for the DAV adapter (K4, K7) and the
+conformance runner. This section lists where it knowingly differs from the
+RFCs or from real servers. `tests/dav_server.rs` pins every response shape
+listed here.
+
+- **Read-only over HTTP.** `PROPFIND`, `REPORT`, `GET`, `HEAD` and `OPTIONS`
+  only; `PUT`, `DELETE`, `MKCOL`, `PROPPATCH` and the rest answer `405`. Data
+  changes go through the Rust API (`put`, `delete`, `add_collection`, …).
+- **Every host serves the whole tree.** The partition and CardDAV hosts are
+  separate listeners over one state. Only the principal's home sets differ
+  per host, and the outside host always answers `404` (it only logs the
+  request). A real iCloud partition serves only its own homes.
+- **`allprop` is a subset:** `resourcetype`, `displayname`, `getetag` and
+  `getcontenttype` (where the resource has them). `propname` is answered like
+  `allprop`. Unknown properties in `D:prop` go to a `404` propstat, as RFC
+  4918 says.
+- **Hrefs are percent-encoded** like Radicale 3.9.0 encodes them: every byte
+  except unreserved characters and `/` (`a@b c.ics` → `a%40b%20c.ics`).
+  Request paths and request hrefs are decoded, so encoded and unencoded
+  hrefs both work in a multiget. Other servers may leave `@` or other
+  sub-delimiters unencoded.
+- **Sync tokens** are `http://musubi.test/sync{collection path}{n}`, where `n`
+  is a server-wide change counter, not a per-collection one: a change in
+  another collection moves every collection's current token. A token is valid while `n` is not older
+  than the last `expire_sync_tokens`. Expired, foreign and malformed tokens
+  answer `403` with `D:valid-sync-token` (RFC 6578 3.2). A request with a
+  Depth other than `0`, or without `D:sync-level`, answers `400`. Some servers answer
+  `409` instead; `Fault::InvalidSyncToken { status: 409 }` covers that.
+- **Truncation (RFC 6578 3.6)** ends the multistatus with a `507` response
+  for the collection's href and a token that continues the delta. A client
+  `DAV:limit` truncates the same way (3.7).
+- **`Quirk::NoSync`** drops `D:sync-token` and `sync-collection` from
+  `supported-report-set`, and the report answers `403` with
+  `D:supported-report`. Servers without sync differ in how they answer here;
+  the adapter must take its cue from `supported-report-set`, not from the
+  error.
+- **`calendar-query` is a small subset:** one comp-filter (`VEVENT` or
+  `VTODO`) under `VCALENDAR`, optionally with a `time-range`. Overlap follows
+  RFC 4791 9.9, but a recurring object matches every range from its start
+  on, and TZID or floating times are widened by 14 h instead of resolved.
+  Property and text filters are ignored.
+- **ETags** are `"e{n}"` per object version; `Quirk::WeakEtag` makes them
+  `W/"e{n}"`, and `Quirk::NoEtag` leaves them out of `PROPFIND`, `REPORT` and
+  `GET`.
+- **Profile `icloud`:** home sets are absolute URLs on the partition hosts.
+  The CalDAV entry's principal reports only `calendar-home-set` and the
+  CardDAV entry's only `addressbook-home-set`. `current-user-privilege-set`
+  is left out, and `supported-address-data` is vCard 3.0 only. `put` of a
+  vCard that is not 3.0 panics: the fixture is wrong, not the adapter. The
+  calendar home has a `CS:notification` collection. Address books advertise
+  and answer `sync-collection` like calendars, though nothing shows iCloud
+  CardDAV does (providers.md I1); `Quirk::NoSync` models the opposite.
+  *Unverified until T11 measures iCloud.*
+- **Plain HTTP/1.1 on 127.0.0.1**, Basic auth only, no TLS, no gzip.

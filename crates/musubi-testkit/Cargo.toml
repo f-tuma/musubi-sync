@@ -19,6 +19,8 @@ secrecy.workspace = true
 axum = { workspace = true, features = ["http1", "tokio", "json", "query", "form"] }
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+# Request bodies of the fake DAV server (src/dav.rs).
+quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # PKCE S256 and id_token encoding of the authorization-code grant.
@@ -31,6 +33,13 @@ reqwest.workspace = true
 rustls.workspace = true
 # Data directories of the `bench` nodes.
 tempfile.workspace = true
+
+# Needs the musubi-syncd binary and (for Radicale) MUSUBI_RADICALE; run by the
+# CI job `conformance`, not by `cargo test --workspace`.
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+test = false
 
 [lints]
 workspace = true
