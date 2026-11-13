@@ -11,7 +11,29 @@ publish = false
 [dependencies]
 musubi-ical.workspace = true
 musubi-model.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+jiff.workspace = true
 quick-xml.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# `net`: the guarded DNS resolver (tokio::net::lookup_host).
+tokio = { workspace = true, features = ["net"] }
+tracing.workspace = true
+
+[dev-dependencies]
+musubi-testkit.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+
+# Needs MUSUBI_RADICALE (a Radicale install); run by the CI job `conformance`.
+[[test]]
+name = "radicale"
+path = "tests/radicale.rs"
+test = false
 
 [lints]
 workspace = true
