@@ -868,6 +868,29 @@ fn stale_items_and_redecode() {
 }
 
 #[test]
+fn redecoded_versions_round_trip() {
+    use musubi_model::EntityKind::{Event, Task};
+    use musubi_model::capability::ProviderId;
+    let (_d, s, mut t) = setup();
+    let google = ProviderId("google".into());
+    let dav = ProviderId("dav".into());
+    assert_eq!(t.redecoded(&google, Event).unwrap(), None, "absent");
+    t.set_redecoded(&google, Event, 2, 3).unwrap();
+    assert_eq!(t.redecoded(&google, Event).unwrap(), Some((2, 3)));
+    assert_eq!(t.redecoded(&google, Task).unwrap(), None, "per kind");
+    assert_eq!(t.redecoded(&dav, Event).unwrap(), None, "per provider");
+    t.set_redecoded(&google, Event, 2, 4).unwrap();
+    assert_eq!(t.redecoded(&google, Event).unwrap(), Some((2, 4)));
+    drop(t);
+    let t = s.open(TENANT).unwrap();
+    assert_eq!(
+        t.redecoded(&google, Event).unwrap(),
+        Some((2, 4)),
+        "durable"
+    );
+}
+
+#[test]
 fn push_resource_is_kept_until_purge() {
     let (d, s, mut t) = setup();
     let col = collection(&mut t, "cal");

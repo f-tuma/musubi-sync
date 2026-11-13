@@ -39,6 +39,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::value::RawValue;
 
+use crate::capability::ProviderId;
 use crate::error::StoreError;
 use crate::id::{AccountId, CollectionId, EntityId, ItemId, PlacementId, ReadId, Seq, TenantId};
 use crate::journal::ChangesPage;
@@ -173,6 +174,28 @@ pub trait TenantStore: Send {
         after: Option<ItemId>,
         limit: u32,
     ) -> Result<Vec<ItemView>, StoreError>;
+
+    /// Schema and mapping version the re-decode of `kind` items of `provider`
+    /// last completed with ([`TenantStore::set_redecoded`]), `None` if it never
+    /// completed. The engine re-decodes when this differs from the current
+    /// versions (docs/plan/phase2.md 10, point 1).
+    fn redecoded(
+        &self,
+        provider: &ProviderId,
+        kind: EntityKind,
+    ) -> Result<Option<(u32, u32)>, StoreError>;
+
+    /// Records that every stored `kind` item of `provider` is decoded with
+    /// `schema` and `mapping`. The engine writes it only after the last page of
+    /// a re-decode succeeded, so an interrupted one runs again on the next
+    /// start. Both versions are written in one transaction.
+    fn set_redecoded(
+        &mut self,
+        provider: &ProviderId,
+        kind: EntityKind,
+        schema: u32,
+        mapping: u32,
+    ) -> Result<(), StoreError>;
 
     /// Records the result of discovery for one account: adds new collections
     /// (assigning [`CollectionId`]s), updates changed ones and, only if

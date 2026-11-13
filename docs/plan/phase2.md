@@ -276,10 +276,11 @@ Nové operace `TenantStore`:
 | --- | --- |
 | `list_entities(kind, collections, after: Option<EntityId>, limit, inc: Include)` | živé entity druhu s umístěním v daných kolekcích, po `id`, stránkovaně (keyset). S `inc.placements` i umístění; `inc.raw` se u entit ignoruje. Pro úkoly a kontakty |
 | `stale_items(kind, collections, schema_version, mapping_version, after, limit)` | živé položky druhu v daných kolekcích s jinou verzí schématu nebo mapování; pro přepočet (kapitola 10, bod 1). Verze mapování jsou po poskytovatelích, proto se volá s kolekcemi jednoho poskytovatele |
+| `redecoded(provider, kind)` / `set_redecoded(provider, kind, schema, mapping)` | verze schématu a mapování, po kterých přepočet druhu u poskytovatele doběhl (`None`, pokud nikdy); zápis až po poslední úspěšné stránce |
 | `redecode(col, items: &[ItemWrite])` | zapíše nový kanonický tvar a verze položek jedné kolekce bez nového surového těla; žurnál jen u položek, kde se kanonický tvar změnil |
 | `set_push_resource(col, resource: &str)` | zapíše `collections.push_resource` (nahradí hodnotu; `NotFound` bez kolekce); čte se z `CollectionState.push_resource`, smaže ho jen `purge_collection` |
 
-Meta klíč `mapping:<provider>:<kind>` (hodnota = verze mapování a schématu, po kterých přepočet doběhl) zajistí, že se přepočet spustí jednou.
+Dva celočíselné řádky tabulky `meta`, `mapping:<provider>:<kind>:schema` a `mapping:<provider>:<kind>:mapping` (verze schématu a mapování, po kterých přepočet doběhl; zapisují se v jedné transakci přes `set_redecoded`, čtou přes `redecoded`), zajistí, že se přepočet spustí jednou. Bez nové tabulky a bez migrace.
 
 ### 4.2 Výskyty
 
