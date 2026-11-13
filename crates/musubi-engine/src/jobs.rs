@@ -68,6 +68,13 @@ const EXTEND_BATCH: u32 = 200;
 const REFRESH_EARLY: Duration = Duration::from_secs(60);
 /// Wait after `RateLimited` without `Retry-After`.
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
+/// A collection asks for at most one rediscovery this often; asking again
+/// sooner after a discovery listed it is a transient error.
+const REDISCOVER_QUIET: Duration = Duration::from_secs(15 * 60);
+/// A `missing_scope` collection is retried by a discovery not reporting the
+/// kind unauthorised only after this long, unless the account's missing
+/// kinds changed (an inconsistent provider would loop otherwise).
+const MISSING_SCOPE_RETRY: Duration = Duration::from_secs(15 * 60);
 /// Wait for a job whose collection another job is working on.
 const BUSY_WAIT: Duration = Duration::from_secs(1);
 /// Longest backoff of a failing job or of repeated full reads.
@@ -204,6 +211,9 @@ impl<S: Storage + 'static> Engine<S> {
         match res {
             Ok(()) => {
                 self.with_rt(&rec, |rt| rt.unauthorized = false);
+                if let Work::Sync(c) = work {
+                    self.with_col(c, |r| r.rediscovered = None);
+                }
                 Outcome::Done
             }
             Err(e) => self.failed(job, &rec, &work, e).await,
@@ -272,17 +282,39 @@ impl<S: Storage + 'static> Engine<S> {
                     Err(e) => self.retry(job, e),
                 }
             }
-            // The collection's address changed: rediscover first (it runs
-            // first by its priority), then this job.
+            // The collection's address changed: rediscover. A discovery that
+            // works queues a sync of every collection it lists, this one too,
+            // so the job ends here and waits for it, however it is backed off.
             EngineError::Sync(SyncError::Rediscover) if !matches!(work, Work::Discover) => {
-                tracing::info!(collection = ?col, "collection moved; rediscovering");
                 let now = self.now();
-                match self.enqueue(discover_job(rec.tenant, rec.id, now)).await {
-                    Ok(()) => Outcome::Retry {
-                        due: after(now, BUSY_WAIT),
-                        count: false,
-                    },
-                    Err(e) => self.retry(job, e),
+                let Some(c) = col else {
+                    return match self.enqueue(discover_job(rec.tenant, rec.id, now)).await {
+                        Ok(()) => self.retry(job, e),
+                        Err(e) => self.retry(job, e),
+                    };
+                };
+                let asked = self.with_col(c, |r| r.rediscovered);
+                let (started, worked) = self.with_rt(rec, |rt| (rt.discoveries, rt.discovered));
+                match asked {
+                    // A discovery since the last ask listed it again: not a
+                    // move (a stale listing, ACL drift). Backed off as a
+                    // transient error until the ask expires.
+                    Some((at, n)) if after(at, REDISCOVER_QUIET) > now && worked > n => {
+                        tracing::warn!(collection = ?col, "collection still moved after a rediscovery");
+                        self.record_error(rec.tenant, col, e.to_string(), false)
+                            .await;
+                        self.retry(job, e)
+                    }
+                    // The discovery asked for has not worked yet.
+                    Some((at, _)) if after(at, REDISCOVER_QUIET) > now => Outcome::Done,
+                    _ => {
+                        tracing::info!(collection = ?col, "collection moved; rediscovering");
+                        self.with_col(c, |r| r.rediscovered = Some((now, started)));
+                        match self.enqueue(discover_job(rec.tenant, rec.id, now)).await {
+                            Ok(()) => Outcome::Done,
+                            Err(e) => self.retry(job, e),
+                        }
+                    }
                 }
             }
             EngineError::Sync(SyncError::Permanent(err)) => {
@@ -412,7 +444,11 @@ impl<S: Storage + 'static> Engine<S> {
         self.with_rt(rec, |rt| rt.clone())
     }
 
-    fn with_col<R>(&self, id: CollectionId, f: impl FnOnce(&mut CollectionRt) -> R) -> R {
+    pub(crate) fn with_col<R>(
+        &self,
+        id: CollectionId,
+        f: impl FnOnce(&mut CollectionRt) -> R,
+    ) -> R {
         let mut map = self
             .inner
             .collections
@@ -443,6 +479,8 @@ impl<S: Storage + 'static> Engine<S> {
                     .map(|n| Arc::new(Semaphore::new(n.max(1) as usize))),
                 blocked_until: None,
                 unauthorized: false,
+                discoveries: 0,
+                discovered: 0,
             }
         });
         f(rt)
@@ -450,6 +488,10 @@ impl<S: Storage + 'static> Engine<S> {
 
     async fn discover(&self, rec: &AccountRecord, cx: &Cx) -> Result<(), EngineError> {
         let (tenant, account) = (rec.tenant, rec.id);
+        let number = self.with_rt(rec, |rt| {
+            rt.discoveries += 1;
+            rt.discoveries
+        });
         let (mut collections, complete, unauthorized, endpoint) =
             match cx.provider.discover(cx).await {
                 Ok(d) => (d.collections, true, d.unauthorized, d.endpoint),
@@ -499,10 +541,12 @@ impl<S: Storage + 'static> Engine<S> {
             complete,
         };
         self.write(tenant, move |s| s.apply_discovery(&d)).await?;
+        let was_missing = self.ctl(move |c| c.missing(account)).await?;
         if complete {
             let kinds = unauthorized.clone();
             self.ctl(move |c| c.set_missing(account, &kinds)).await?;
         }
+        self.with_rt(rec, |rt| rt.discovered = rt.discovered.max(number));
         let cols: Vec<_> = self
             .collections(tenant)
             .await?
@@ -522,16 +566,23 @@ impl<S: Storage + 'static> Engine<S> {
         }
         let now = self.now();
         for col in cols.iter().filter(|c| !c.gone) {
+            let kind = col.remote.kind;
             let scoped = col
                 .status
                 .error
                 .as_ref()
-                .is_some_and(|e| e.message == MISSING_SCOPE);
+                .filter(|e| e.message == MISSING_SCOPE)
+                .map(|e| e.at);
+            // Known to have permission back: the kind was missing and is no
+            // longer, or the error is old enough to try again.
+            let back = |at| {
+                complete && (was_missing.contains(&kind) || after(at, MISSING_SCOPE_RETRY) <= now)
+            };
             // Without permission, or not known to have it back: not retried.
-            if unauthorized.contains(&col.remote.kind) || (scoped && !complete) {
+            if unauthorized.contains(&kind) || scoped.is_some_and(|at| !back(at)) {
                 continue;
             }
-            if scoped {
+            if scoped.is_some() {
                 self.set_status(tenant, col.id, |s| s.error = None).await?;
             }
             self.enqueue(sync_job(tenant, account, col.id, Lane::Sync, now))
@@ -1099,8 +1150,9 @@ impl<S: Storage + 'static> Engine<S> {
             .get(&tenant)
             .copied();
         let bounds = match touched {
-            // Every read of such a collection downloads every body.
-            _ if hashed => c.poll_normal,
+            // Every read of a hashed collection downloads every body: it does
+            // not poll faster than normal, while sleeping it sleeps too.
+            Some(t) if after(t, c.active_for) > now && hashed => c.poll_normal,
             Some(t) if after(t, c.active_for) > now => c.poll_active,
             // Interest before a restart is unknown: it counts from the start.
             t => {

@@ -61,6 +61,9 @@ impl<S: Storage + 'static> Engine<S> {
                 if done == Some((schema, mapping)) {
                     continue;
                 }
+                // Stale items include stubs a sync left alone because their
+                // validator was equal (it neither fetches nor re-decodes
+                // them): they are brought up to date here, at the next start.
                 let mut after = None;
                 loop {
                     let ids = cols.clone();
@@ -97,6 +100,9 @@ impl<S: Storage + 'static> Engine<S> {
                         break;
                     }
                 }
+                // Written even if the raw-hash guard skipped items: a sync
+                // changed them meanwhile and stored them in the current
+                // versions already.
                 let provider = id.clone();
                 self.write(tenant, move |s| {
                     s.set_redecoded(&provider, kind, schema, mapping)

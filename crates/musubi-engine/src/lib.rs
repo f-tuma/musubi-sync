@@ -275,6 +275,10 @@ struct AccountRt {
     running: Option<Arc<Semaphore>>,
     blocked_until: Option<Timestamp>,
     unauthorized: bool,
+    /// Discoveries started since the engine started.
+    discoveries: u64,
+    /// The start number (of `discoveries`) of the last discovery that worked.
+    discovered: u64,
 }
 
 /// In-memory per-collection state: full reads ended since the last delta
@@ -292,6 +296,9 @@ struct CollectionRt {
     changed: bool,
     /// The provider gives synthetic `musubi:sha256:` validators (plan 7.2).
     hashed: bool,
+    /// When a read of it last asked for a rediscovery, with the account's
+    /// [`AccountRt::discoveries`] then; cleared by a read that works.
+    rediscovered: Option<(Timestamp, u64)>,
 }
 
 /// Background scheduler started by [`Engine::start`]; stops when dropped.
@@ -351,8 +358,8 @@ impl<S: Storage + 'static> Engine<S> {
     /// Records that the tenant's user is looking at its data (`POST
     /// /v1/interest`, plan 7.3): the adaptive poll uses the active bounds for
     /// [`Config::active_for`]. A switch to active queues a sync of every
-    /// collection without an open push channel, due now; a touch while the
-    /// tenant is active queues nothing.
+    /// collection without an open push channel (and not hashed), due now; a
+    /// touch while the tenant is active queues nothing.
     pub async fn touch(&self, tenant: TenantId) -> Result<(), EngineError> {
         let now = self.now();
         let prev = self
@@ -374,7 +381,10 @@ impl<S: Storage + 'static> Engine<S> {
                 .error
                 .as_ref()
                 .is_some_and(|e| e.message == MISSING_SCOPE);
-            if col.gone || pushed || scoped {
+            // A hashed collection downloads every body per read: its poll
+            // never speeds up (plan 7.2), so a touch does not read it either.
+            let hashed = self.with_col(col.id, |r| r.hashed);
+            if col.gone || pushed || scoped || hashed {
                 continue;
             }
             self.enqueue(jobs::sync_job(tenant, col.account, col.id, Lane::Sync, now))
