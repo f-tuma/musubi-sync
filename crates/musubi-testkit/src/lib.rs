@@ -12,9 +12,16 @@
 //! [`google`] is the in-process fake Google Calendar HTTP server (K3) that
 //! the Google adapter's transport tests run against. [`harness`] runs the
 //! whole `musubi-syncd` binary over it (crash tests, the `bench` binary).
+//!
+//! [`dav`] is the in-process fake CalDAV/CardDAV server, [`radicale`] runs a
+//! local Radicale, and [`conformance`] holds the scenario format and the
+//! `Target` trait of the conformance runner (`tests/conformance.rs`).
 
+pub mod conformance;
+pub mod dav;
 pub mod google;
 pub mod harness;
+pub mod radicale;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::future::Future;

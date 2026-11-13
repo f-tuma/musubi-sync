@@ -1,0 +1,36 @@
+# Radicale 3.9.0 for the conformance suite (plan 8.3), pinned with hashes.
+# Pure-Python wheels only; install with:
+#   python3 -m venv /tmp/radicale-venv
+#   /tmp/radicale-venv/bin/pip install --require-hashes --only-binary :all: -r requirements.txt
+# Regenerate: in a fresh venv run
+#   pip install --dry-run --ignore-installed --only-binary :all: --report r.json radicale==3.9.0
+# and pin every package in r.json's "install" list with the sha256 of its
+# `*-none-any.whl` from https://pypi.org/pypi/<name>/<version>/json.
+certifi==2026.10.23 \
+    --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+charset-normalizer==3.5.2 \
+    --hash=sha256:b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685
+defusedxml==0.7.1 \
+    --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
+idna==3.20 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+libpass==1.9.4 \
+    --hash=sha256:a608621af2d7d64579957988fac287f230f88792c83a2d0f895afb05ee429489
+pika==1.4.4 \
+    --hash=sha256:48de960c97a93b55db06b8be4c53eb977c9c8a2754c57cdae9097abcbd70ce04
+python-dateutil==3.0.0 \
+    --hash=sha256:3c79630202e4152c6add678446984236efe4f57e84d8e892aab0637bab82e9fd
+pytz==2026.6 \
+    --hash=sha256:7fed3fee8fd6bd4a2b7b75a8d56021d0624127bf69bd5691f115db929ac570b3
+radicale==3.9.0 \
+    --hash=sha256:7bf5f81e7d9e3f116be741c57448f42835eb1f5104a1620eb8489a9b962fe17e
+requests==2.34.2 \
+    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+tzdata==2026.6 \
+    --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec
+urllib3==2.8.0 \
+    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+vobject==0.9.9 \
+    --hash=sha256:0fbdb982065cf4d1843a5d5950c88510041c6de026bda49c3502721de1c6ac3d
