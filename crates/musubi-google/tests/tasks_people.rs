@@ -222,18 +222,54 @@ async fn disabled_api_at_discovery_is_unauthorized_and_missing_scope_in_changes(
     }
 }
 
-/// A throttled or failing probe fails the whole discovery (retried by the
-/// engine) rather than degrading the calendar listing.
+/// A throttled, failing or refused probe skips its kind for the round: a
+/// partial listing with the calendars and the other kind, never an
+/// account-wide error, and the kind is not unauthorised.
 #[tokio::test]
-async fn throttled_or_failing_probe_fails_the_whole_discovery() {
-    for endpoint in [Endpoint::TaskLists, Endpoint::PeopleConnections] {
-        let e = env().await;
-        e.g.fail(endpoint, Fault::rate_limited(Some(7)), 1);
-        let err = e.p.discover(&e.cx).await.unwrap_err();
-        assert!(matches!(err, SyncError::RateLimited { .. }), "{err:?}");
-        e.g.fail(endpoint, Fault::backend_error(), 1);
-        let err = e.p.discover(&e.cx).await.unwrap_err();
-        assert!(matches!(err, SyncError::Transient(_)), "{err:?}");
+async fn throttled_failing_or_refused_probe_skips_its_kind() {
+    let refused = Fault {
+        status: 401,
+        domain: "global",
+        reason: "authError",
+        message: "Invalid Credentials",
+        retry_after: None,
+        rpc_status: None,
+    };
+    for (endpoint, skipped) in [
+        (Endpoint::TaskLists, EntityKind::Task),
+        (Endpoint::PeopleConnections, EntityKind::Contact),
+    ] {
+        for fault in [
+            Fault::rate_limited(Some(7)),
+            Fault::backend_error(),
+            refused.clone(),
+        ] {
+            let e = env().await;
+            e.g.put_task_list("Inbox");
+            e.g.fail(endpoint, fault.clone(), 1);
+            let err = e.p.discover(&e.cx).await.unwrap_err();
+            let SyncError::PartialDiscovery { found, source } = err else {
+                panic!("{fault:?}: {err:?}");
+            };
+            let kinds: BTreeSet<_> = found.iter().map(|c| format!("{:?}", c.kind)).collect();
+            let want: BTreeSet<_> = [EntityKind::Event, EntityKind::Task, EntityKind::Contact]
+                .into_iter()
+                .filter(|k| *k != skipped)
+                .map(|k| format!("{k:?}"))
+                .collect();
+            assert_eq!(kinds, want, "{fault:?}");
+            assert!(
+                matches!(
+                    source.downcast_ref::<SyncError>(),
+                    Some(
+                        SyncError::RateLimited { .. }
+                            | SyncError::Transient(_)
+                            | SyncError::Unauthorized
+                    )
+                ),
+                "{source:?}"
+            );
+        }
     }
 }
 

@@ -754,36 +754,29 @@ impl Provider for GoogleProvider {
         }
         // Tasks and People: a scope the user did not grant, or an API the
         // Cloud project has not enabled, is an unauthorised kind, not an error
-        // (plan 6.1). Throttling, server errors and a refused token fail the
-        // whole discovery, which the engine retries: a temporary failure must
-        // neither hide a kind nor stop deleted calendars from being dropped.
-        // Anything else leaves the listing incomplete, so nothing may count as
-        // deleted.
+        // (plan 6.1). Any other probe failure (throttling, server error,
+        // refused token, other 403) skips that kind for this round: a partial
+        // listing with the calendars and whatever kinds did succeed, which the
+        // engine only adds from. It never fails or blocks the account, and the
+        // kind is not unauthorised, so its collections keep their state.
+        let tasks = self.task_lists(cx, &mut found).await;
+        let people = self.people_probe(cx, &mut found).await;
         let mut unauthorized = Vec::new();
-        let mut scoped = |r: Result<(), SyncError>| match r {
-            Err(SyncError::MissingScope { kind }) => {
-                unauthorized.push(kind);
-                Ok(())
+        let mut failed = None;
+        for r in [tasks, people] {
+            match r {
+                Ok(()) => {}
+                Err(SyncError::MissingScope { kind }) => unauthorized.push(kind),
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
             }
-            r => r,
-        };
-        let listed = match scoped(self.task_lists(cx, &mut found).await) {
-            Ok(()) => scoped(self.people_probe(cx, &mut found).await),
-            e => e,
-        };
-        match listed {
-            Ok(()) => {}
-            Err(
-                e @ (SyncError::RateLimited { .. }
-                | SyncError::Transient(_)
-                | SyncError::Unauthorized),
-            ) => return Err(e),
-            Err(e) => {
-                return Err(SyncError::PartialDiscovery {
-                    found,
-                    source: e.into(),
-                });
-            }
+        }
+        if let Some(e) = failed {
+            return Err(SyncError::PartialDiscovery {
+                found,
+                source: e.into(),
+            });
         }
         let mut d = Discovery::new(found);
         d.unauthorized = unauthorized;
