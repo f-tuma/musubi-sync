@@ -283,15 +283,20 @@ impl<S: Storage + 'static> Engine<S> {
                 }
             }
             // The collection's address changed: rediscover. A discovery that
-            // works queues a sync of every collection it lists, this one too,
-            // so the job ends here and waits for it, however it is backed off.
+            // works queues a sync of every collection it lists, this one too
+            // (merged into this job, earliest due wins), so the job waits a
+            // quiet period uncounted: it stays the collection's poll job if
+            // the discovery fails or never lists it.
             EngineError::Sync(SyncError::Rediscover) if !matches!(work, Work::Discover) => {
                 let now = self.now();
+                let wait = Outcome::Retry {
+                    due: after(now, REDISCOVER_QUIET),
+                    count: false,
+                };
                 let Some(c) = col else {
-                    return match self.enqueue(discover_job(rec.tenant, rec.id, now)).await {
-                        Ok(()) => self.retry(job, e),
-                        Err(e) => self.retry(job, e),
-                    };
+                    // Queued or not, the job retries.
+                    let _ = self.enqueue(discover_job(rec.tenant, rec.id, now)).await;
+                    return self.retry(job, e);
                 };
                 let asked = self.with_col(c, |r| r.rediscovered);
                 let (started, worked) = self.with_rt(rec, |rt| (rt.discoveries, rt.discovered));
@@ -306,12 +311,12 @@ impl<S: Storage + 'static> Engine<S> {
                         self.retry(job, e)
                     }
                     // The discovery asked for has not worked yet.
-                    Some((at, _)) if after(at, REDISCOVER_QUIET) > now => Outcome::Done,
+                    Some((at, _)) if after(at, REDISCOVER_QUIET) > now => wait,
                     _ => {
                         tracing::info!(collection = ?col, "collection moved; rediscovering");
                         self.with_col(c, |r| r.rediscovered = Some((now, started)));
                         match self.enqueue(discover_job(rec.tenant, rec.id, now)).await {
-                            Ok(()) => Outcome::Done,
+                            Ok(()) => wait,
                             Err(e) => self.retry(job, e),
                         }
                     }
@@ -492,19 +497,31 @@ impl<S: Storage + 'static> Engine<S> {
             rt.discoveries += 1;
             rt.discoveries
         });
-        let (mut collections, complete, unauthorized, endpoint) =
+        let was_missing = self.ctl(move |c| c.missing(account)).await?;
+        // `missing`: the kinds without permission after this round. `keep`:
+        // the kinds whose stored collections stay although the listing lacks
+        // them (plan 3.5).
+        let (mut collections, complete, missing, keep, endpoint) =
             match cx.provider.discover(cx).await {
-                Ok(d) => (d.collections, true, d.unauthorized, d.endpoint),
+                Ok(d) => {
+                    // A kind in both lists is unauthorised.
+                    let incomplete: Vec<_> = d
+                        .incomplete
+                        .into_iter()
+                        .filter(|k| !d.unauthorized.contains(k))
+                        .collect();
+                    // An incomplete kind keeps its stored permission state.
+                    let mut missing = d.unauthorized.clone();
+                    missing.extend(was_missing.iter().filter(|k| incomplete.contains(k)));
+                    let mut keep = d.unauthorized;
+                    keep.extend(incomplete);
+                    (d.collections, true, missing, keep, d.endpoint)
+                }
                 // A partial listing only adds and updates: a missing calendar
                 // is not gone, and no missing permission is cleared.
                 Err(SyncError::PartialDiscovery { found, source }) => {
                     tracing::warn!(%account, error = %source, "partial discovery");
-                    (
-                        found,
-                        false,
-                        self.ctl(move |c| c.missing(account)).await?,
-                        None,
-                    )
+                    (found, false, was_missing.clone(), Vec::new(), None)
                 }
                 Err(e) => return Err(e.into()),
             };
@@ -524,11 +541,11 @@ impl<S: Storage + 'static> Engine<S> {
             .filter(|c| c.account == account)
             .collect();
         if complete {
-            // Collections of a kind without permission are absent from the
-            // listing but not gone (plan 3.5).
+            // Collections of an unauthorised or incomplete kind are absent
+            // from the listing but not gone (plan 3.5).
             for col in &stored {
                 if !col.gone
-                    && unauthorized.contains(&col.remote.kind)
+                    && keep.contains(&col.remote.kind)
                     && !collections.iter().any(|c| c.remote == col.remote.remote)
                 {
                     collections.push(col.remote.clone());
@@ -541,9 +558,8 @@ impl<S: Storage + 'static> Engine<S> {
             complete,
         };
         self.write(tenant, move |s| s.apply_discovery(&d)).await?;
-        let was_missing = self.ctl(move |c| c.missing(account)).await?;
         if complete {
-            let kinds = unauthorized.clone();
+            let kinds = missing.clone();
             self.ctl(move |c| c.set_missing(account, &kinds)).await?;
         }
         self.with_rt(rec, |rt| rt.discovered = rt.discovered.max(number));
@@ -573,13 +589,15 @@ impl<S: Storage + 'static> Engine<S> {
                 .as_ref()
                 .filter(|e| e.message == MISSING_SCOPE)
                 .map(|e| e.at);
-            // Known to have permission back: the kind was missing and is no
-            // longer, or the error is old enough to try again.
+            // Known to have permission back: the kind was listed this round
+            // and was missing before, or the error is old enough to try again.
             let back = |at| {
-                complete && (was_missing.contains(&kind) || after(at, MISSING_SCOPE_RETRY) <= now)
+                complete
+                    && !keep.contains(&kind)
+                    && (was_missing.contains(&kind) || after(at, MISSING_SCOPE_RETRY) <= now)
             };
             // Without permission, or not known to have it back: not retried.
-            if unauthorized.contains(&kind) || scoped.is_some_and(|at| !back(at)) {
+            if missing.contains(&kind) || scoped.is_some_and(|at| !back(at)) {
                 continue;
             }
             if scoped.is_some() {
@@ -589,12 +607,15 @@ impl<S: Storage + 'static> Engine<S> {
                 .await?;
         }
         let c = &self.inner.config;
-        self.enqueue(discover_job(
-            tenant,
-            account,
-            after(now, c.rediscover_every),
-        ))
-        .await?;
+        // A kind skipped this round is asked again soon, not in hours.
+        let skipped = !complete || keep.iter().any(|k| !missing.contains(k));
+        let every = if skipped {
+            REDISCOVER_QUIET.min(c.rediscover_every)
+        } else {
+            c.rediscover_every
+        };
+        self.enqueue(discover_job(tenant, account, after(now, every)))
+            .await?;
         self.enqueue(JobSpec {
             tenant,
             lane: Lane::Background,

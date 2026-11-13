@@ -767,3 +767,129 @@ async fn hashed_collection_sleeps_with_its_tenant() {
         assert!(gap >= min, "{gap:?} faster than the sleeping poll");
     }
 }
+
+/// Due time of the account's queued discovery.
+fn discover_due(h: &H) -> Option<Timestamp> {
+    h.jobs(Lane::Sync)
+        .into_iter()
+        .find(|j| matches!(j.kind, JobKind::Discover { .. }))
+        .map(|j| j.due)
+}
+
+#[tokio::test]
+async fn deleted_calendar_is_dropped_while_the_tasks_probe_is_throttled() {
+    let h = H::new();
+    h.fake.add_collection(meta("cal2"));
+    h.fake.add_collection(task_list("tasks"));
+    put_task(&h, "tasks", "t1", "v1");
+    h.connect_and_sync().await;
+    settle(&h).await;
+
+    h.fake.unlist_collection(&cal("cal2"));
+    h.fake.set_incomplete(vec![EntityKind::Task]);
+    h.advance(h.config.rediscover_every + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    assert!(h.collection("cal2").is_none(), "a complete kind drops it");
+    assert!(!h.collection("tasks").unwrap().gone, "an incomplete kind keeps it");
+    assert_eq!(h.live("tasks", &["t1"]), ["t1"]);
+}
+
+#[tokio::test]
+async fn incomplete_kind_is_rediscovered_after_a_quiet_period() {
+    let h = H::new();
+    h.fake.add_collection(task_list("tasks"));
+    h.connect_and_sync().await;
+    settle(&h).await;
+
+    h.fake.set_incomplete(vec![EntityKind::Task]);
+    h.advance(h.config.rediscover_every + Duration::from_secs(1));
+    h.engine.run_until_idle().await.unwrap();
+    let quiet = Duration::try_from(discover_due(&h).unwrap() - h.clock_now()).unwrap();
+    assert!(quiet <= Duration::from_secs(15 * 60), "{quiet:?}");
+
+    // Re-consent: an immediate discovery, not after the quiet period.
+    let discover = h.fake.calls().discover;
+    h.fake.set_incomplete(vec![]);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.fake.calls().discover, discover + 1);
+    let every = Duration::try_from(discover_due(&h).unwrap() - h.clock_now()).unwrap();
+    assert!(every > Duration::from_secs(15 * 60), "complete: {every:?}");
+}
+
+#[tokio::test]
+async fn incomplete_kind_keeps_its_stored_missing_state() {
+    let h = H::new();
+    h.fake.add_collection(task_list("tasks"));
+    put_task(&h, "tasks", "t1", "v1");
+    h.connect_and_sync().await;
+    settle(&h).await;
+
+    h.fake.set_unauthorized(vec![EntityKind::Task]);
+    h.fake.fail(
+        Op::Page,
+        SyncError::MissingScope {
+            kind: EntityKind::Task,
+        },
+    );
+    h.advance(Duration::from_secs(1000));
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.control.missing(ACCOUNT).unwrap(), [EntityKind::Task]);
+
+    // Contacts lose permission while the Tasks probe is throttled: the
+    // contacts are recorded, tasks stay missing and parked.
+    h.fake.set_unauthorized(vec![EntityKind::Contact]);
+    h.fake.set_incomplete(vec![EntityKind::Task]);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    let mut missing = h.control.missing(ACCOUNT).unwrap();
+    missing.sort_by_key(|k| format!("{k:?}"));
+    assert_eq!(missing, [EntityKind::Contact, EntityKind::Task]);
+    assert_eq!(h.sync_due("tasks"), None, "still parked");
+    assert!(!h.collection("tasks").unwrap().gone);
+
+    // Probe works and grants Tasks again: cleared.
+    h.fake.set_unauthorized(vec![]);
+    h.fake.set_incomplete(vec![]);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert!(h.control.missing(ACCOUNT).unwrap().is_empty());
+    assert!(h.collection("tasks").unwrap().status.error.is_none());
+}
+
+#[tokio::test]
+async fn kind_both_unauthorized_and_incomplete_is_unauthorized() {
+    let h = H::new();
+    h.fake.add_collection(task_list("tasks"));
+    h.connect_and_sync().await;
+    settle(&h).await;
+
+    h.fake.set_unauthorized(vec![EntityKind::Task]);
+    h.fake.set_incomplete(vec![EntityKind::Task]);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(h.control.missing(ACCOUNT).unwrap(), [EntityKind::Task]);
+    assert!(!h.collection("tasks").unwrap().gone);
+    // Nothing skipped: the next discovery is the regular one.
+    let every = Duration::try_from(discover_due(&h).unwrap() - h.clock_now()).unwrap();
+    assert!(every > Duration::from_secs(15 * 60), "{every:?}");
+}
+
+#[tokio::test]
+async fn rediscover_keeps_the_collection_poll_job_when_discovery_fails() {
+    let h = H::new();
+    h.fake.add_collection(polled("poll"));
+    h.connect_and_sync().await;
+    settle(&h).await;
+
+    h.fake.fail(Op::Page, SyncError::Rediscover);
+    for _ in 0..100 {
+        h.fake.fail(Op::Discover, SyncError::Transient("down".into()));
+    }
+    let due = h.sync_due("poll").unwrap();
+    h.advance(Duration::try_from(due - h.clock_now()).unwrap());
+    h.engine.run_until_idle().await.unwrap();
+    let next = h.sync_due("poll").expect("the poll job stays");
+    let wait = Duration::try_from(next - h.clock_now()).unwrap();
+    assert!(wait <= Duration::from_secs(15 * 60), "{wait:?}");
+}

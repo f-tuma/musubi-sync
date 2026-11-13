@@ -222,8 +222,8 @@ async fn disabled_api_at_discovery_is_unauthorized_and_missing_scope_in_changes(
     }
 }
 
-/// A throttled, failing or refused probe skips its kind for the round: a
-/// partial listing with the calendars and the other kind, never an
+/// A throttled, failing or refused probe makes its kind incomplete for the
+/// round: the calendars and the other kind are complete, never an
 /// account-wide error, and the kind is not unauthorised.
 #[tokio::test]
 async fn throttled_failing_or_refused_probe_skips_its_kind() {
@@ -247,30 +247,34 @@ async fn throttled_failing_or_refused_probe_skips_its_kind() {
             let e = env().await;
             e.g.put_task_list("Inbox");
             e.g.fail(endpoint, fault.clone(), 1);
-            let err = e.p.discover(&e.cx).await.unwrap_err();
-            let SyncError::PartialDiscovery { found, source } = err else {
-                panic!("{fault:?}: {err:?}");
-            };
-            let kinds: BTreeSet<_> = found.iter().map(|c| format!("{:?}", c.kind)).collect();
+            let d = e.p.discover(&e.cx).await.unwrap();
+            let kinds: BTreeSet<_> = d
+                .collections
+                .iter()
+                .map(|c| format!("{:?}", c.kind))
+                .collect();
             let want: BTreeSet<_> = [EntityKind::Event, EntityKind::Task, EntityKind::Contact]
                 .into_iter()
                 .filter(|k| *k != skipped)
                 .map(|k| format!("{k:?}"))
                 .collect();
             assert_eq!(kinds, want, "{fault:?}");
-            assert!(
-                matches!(
-                    source.downcast_ref::<SyncError>(),
-                    Some(
-                        SyncError::RateLimited { .. }
-                            | SyncError::Transient(_)
-                            | SyncError::Unauthorized
-                    )
-                ),
-                "{source:?}"
-            );
+            assert_eq!(d.incomplete, vec![skipped], "{fault:?}");
+            assert!(d.unauthorized.is_empty(), "{fault:?}");
         }
     }
+}
+
+/// People unauthorised while Tasks is throttled: both are reported, each in
+/// its own list.
+#[tokio::test]
+async fn unauthorized_people_is_recorded_while_tasks_is_incomplete() {
+    let e = env().await;
+    e.g.fail(Endpoint::TaskLists, Fault::rate_limited(None), 1);
+    e.g.fail(Endpoint::PeopleConnections, Fault::scope_insufficient(), 1);
+    let d = e.p.discover(&e.cx).await.unwrap();
+    assert_eq!(d.incomplete, vec![EntityKind::Task]);
+    assert_eq!(d.unauthorized, vec![EntityKind::Contact]);
 }
 
 #[tokio::test]
@@ -295,18 +299,13 @@ async fn discovery_without_the_flag_is_phase_1() {
 }
 
 #[tokio::test]
-async fn other_403_at_discovery_is_a_permanent_partial_discovery() {
+async fn other_403_at_discovery_makes_the_kind_incomplete() {
     let e = env().await;
     e.g.fail(Endpoint::PeopleConnections, Fault::forbidden(), 1);
-    let err = e.p.discover(&e.cx).await.unwrap_err();
-    let SyncError::PartialDiscovery { found, source } = err else {
-        panic!("{err:?}");
-    };
-    assert_eq!(found.len(), 1, "the calendars listed before the failure");
-    assert!(matches!(
-        source.downcast_ref::<SyncError>(),
-        Some(SyncError::Permanent(_))
-    ));
+    let d = e.p.discover(&e.cx).await.unwrap();
+    assert!(d.collections.iter().all(|c| c.kind != EntityKind::Contact));
+    assert_eq!(d.incomplete, vec![EntityKind::Contact]);
+    assert!(d.unauthorized.is_empty());
 }
 
 #[tokio::test]

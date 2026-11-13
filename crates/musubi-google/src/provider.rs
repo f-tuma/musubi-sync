@@ -755,31 +755,24 @@ impl Provider for GoogleProvider {
         // Tasks and People: a scope the user did not grant, or an API the
         // Cloud project has not enabled, is an unauthorised kind, not an error
         // (plan 6.1). Any other probe failure (throttling, server error,
-        // refused token, other 403) skips that kind for this round: a partial
-        // listing with the calendars and whatever kinds did succeed, which the
-        // engine only adds from. It never fails or blocks the account, and the
-        // kind is not unauthorised, so its collections keep their state.
+        // refused token, other 403) makes that kind incomplete for this round:
+        // the calendars and the other kind stay complete, so a deleted
+        // calendar is still dropped. It never fails or blocks the account,
+        // and the kind is not unauthorised, so its collections keep their state.
         let tasks = self.task_lists(cx, &mut found).await;
         let people = self.people_probe(cx, &mut found).await;
-        let mut unauthorized = Vec::new();
-        let mut failed = None;
-        for r in [tasks, people] {
+        let mut d = Discovery::new(Vec::new());
+        for (kind, r) in [(EntityKind::Task, tasks), (EntityKind::Contact, people)] {
             match r {
                 Ok(()) => {}
-                Err(SyncError::MissingScope { kind }) => unauthorized.push(kind),
+                Err(SyncError::MissingScope { kind }) => d.unauthorized.push(kind),
                 Err(e) => {
-                    failed.get_or_insert(e);
+                    tracing::warn!(?kind, error = %e, "probe failed; kind skipped this round");
+                    d.incomplete.push(kind);
                 }
             }
         }
-        if let Some(e) = failed {
-            return Err(SyncError::PartialDiscovery {
-                found,
-                source: e.into(),
-            });
-        }
-        let mut d = Discovery::new(found);
-        d.unauthorized = unauthorized;
+        d.collections = found;
         Ok(d)
     }
 

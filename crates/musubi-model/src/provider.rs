@@ -57,10 +57,13 @@ pub trait Provider: Send + Sync {
 
     /// Lists the account's collections.
     ///
-    /// `Ok` means the list is complete: a collection the store knows and this
-    /// list lacks was deleted or unshared. If the listing fails part-way, return
-    /// [`SyncError::PartialDiscovery`] with what was found; the engine then does
-    /// not delete anything.
+    /// `Ok` means the list is complete for every kind not in
+    /// [`Discovery::incomplete`]: a collection of such a kind that the store
+    /// knows and this list lacks was deleted or unshared. If the listing of
+    /// one kind fails (a throttled Tasks probe), list it in `incomplete`. If
+    /// the listing fails part-way with no kind known complete, return
+    /// [`SyncError::PartialDiscovery`] with what was found; the engine then
+    /// does not delete anything.
     async fn discover(&self, cx: &AccountCx) -> Result<Discovery, SyncError>;
 
     /// Streams pages of changes in one collection.
@@ -372,6 +375,13 @@ pub struct Discovery {
     /// earlier [`SyncError::MissingScope`]; a discovery that ended in
     /// [`SyncError::PartialDiscovery`] never clears it.
     pub unauthorized: Vec<EntityKind>,
+    /// Kinds whose listing failed this round (a throttled or failing Tasks or
+    /// People probe). Their collections are kept and their stored missing
+    /// state ([`crate::control::ControlStore::missing`]) is kept; every kind
+    /// not listed here is complete: its absent collections are gone and its
+    /// permission state comes from `unauthorized`. A kind in both lists is
+    /// treated as unauthorised.
+    pub incomplete: Vec<EntityKind>,
 }
 
 impl Discovery {
@@ -381,6 +391,7 @@ impl Discovery {
             collections,
             endpoint: None,
             unauthorized: Vec::new(),
+            incomplete: Vec::new(),
         }
     }
 }

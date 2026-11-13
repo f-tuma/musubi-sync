@@ -8,6 +8,7 @@
 //! [`FakeProvider::unlist_collection`], [`FakeProvider::hide_from_reads`],
 //! [`FakeProvider::hide_from_fetch`], [`FakeProvider::expire_cursors`],
 //! [`FakeProvider::full_on_next_delta`], [`FakeProvider::set_unauthorized`],
+//! [`FakeProvider::set_incomplete`],
 //! [`FakeProvider::set_endpoint`] and [`FakeProvider::without_oauth`], read
 //! [`FakeProvider::unsubscribed`], and use [`ManualClock`],
 //! [`MemoryVault`], [`CanonicalCodec`] and [`event_object`].
@@ -148,6 +149,8 @@ struct State {
     open_reads: BTreeMap<CollectionRef, u32>,
     /// Kinds `discover` reports as unauthorised.
     unauthorized: Vec<EntityKind>,
+    /// Kinds `discover` reports as incomplete.
+    incomplete: Vec<EntityKind>,
     /// Endpoint update `discover` returns.
     endpoint: Option<Endpoint>,
     /// The next delta request is answered with a full listing.
@@ -340,6 +343,12 @@ impl FakeProvider {
     /// their collections out of the listing).
     pub fn set_unauthorized(&self, kinds: Vec<EntityKind>) {
         self.lock().unauthorized = kinds;
+    }
+
+    /// `discover` reports these kinds as incomplete from now on (and leaves
+    /// their collections out of the listing), as a throttled probe does.
+    pub fn set_incomplete(&self, kinds: Vec<EntityKind>) {
+        self.lock().incomplete = kinds;
     }
 
     /// `discover` returns this endpoint update from now on.
@@ -740,10 +749,11 @@ impl Provider for FakeProvider {
             s.collections
                 .values()
                 .filter_map(|c| c.meta.clone())
-                .filter(|m| !s.unauthorized.contains(&m.kind))
+                .filter(|m| !s.unauthorized.contains(&m.kind) && !s.incomplete.contains(&m.kind))
                 .collect(),
         );
         d.unauthorized = s.unauthorized.clone();
+        d.incomplete = s.incomplete.clone();
         d.endpoint = s.endpoint.clone();
         Ok(d)
     }
