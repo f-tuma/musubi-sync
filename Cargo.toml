@@ -18,11 +18,18 @@ musubi-model = { path = "crates/musubi-model", version = "0.0.0" }
 musubi-recurrence = { path = "crates/musubi-recurrence", version = "0.0.0" }
 musubi-store-sqlite = { path = "crates/musubi-store-sqlite", version = "0.0.0" }
 musubi-google = { path = "crates/musubi-google", version = "0.0.0" }
+musubi-ical = { path = "crates/musubi-ical", version = "0.0.0" }
+musubi-dav = { path = "crates/musubi-dav", version = "0.0.0" }
 musubi-engine = { path = "crates/musubi-engine", version = "0.0.0" }
 musubi-testkit = { path = "crates/musubi-testkit", version = "0.0.0" }
 
 async-trait = "0.1.92"
 base64 = "0.23.1"
+# iCalendar and vCard parsing of musubi-ical. Exact pin: its serialisation
+# normalises, so even a patch release can change behaviour (phase 0, calcard.md).
+# Without the default `jmap` feature: musubi-ical maps to its own JSCalendar
+# and JSContact profiles.
+calcard = { version = "=0.3.14", default-features = false }
 axum = { version = "0.8.9", default-features = false }
 # Only for the vendored rrule core in musubi-recurrence (civil time marked UTC);
 # no "clock", so no host time zone is ever consulted.
@@ -41,6 +48,8 @@ jiff = { version = "0.2.43", default-features = false, features = [
     "perf-inline",
     "serde",
 ] }
+# WebDAV XML of musubi-dav.
+quick-xml = { version = "0.42.0", features = ["serialize"] }
 # rustls with ring, never aws-lc-rs (C and CMake; proposal chapter 8). reqwest's
 # `rustls-no-provider` takes the process default provider, which musubi-google
 # installs from `rustls` below.

@@ -29,16 +29,15 @@ use futures_core::Stream;
 use http::{HeaderMap, HeaderValue, Uri};
 use jiff::{SignedDuration, Timestamp};
 use musubi_model::capability::{
-    ConditionalWrite, DeltaSupport, Fidelity, InviteSuppression, KindCapabilities, Limits,
-    ProviderId, PushSupport, RecurrenceSupport, ReminderCapabilities, SchedulingCapabilities,
-    SchedulingMode, ZoneSupport,
+    DeltaSupport, Fidelity, KindCapabilities, Limits, ProviderId, PushSupport, RecurrenceSupport,
+    ZoneSupport,
 };
-use musubi_model::control::AccountTokens;
+use musubi_model::control::Credentials;
 use musubi_model::provider::ChannelId;
 use musubi_model::provider::Decoded;
 use musubi_model::provider::{
-    AccessToken, BoxStream, Clock, Discovery, FetchHint, Limiter, Pass, PushHint, RemoteCollection,
-    Start, Subscription,
+    AccessToken, BoxStream, Clock, Credential, Discovery, FetchHint, Limiter, Pass, PushHint,
+    RemoteCollection, Start, Stub, Subscription, TokenRefresh,
 };
 use musubi_model::remote::MediaType;
 use musubi_model::remote::RemoteRef;
@@ -84,7 +83,7 @@ pub enum Op {
     Page,
     /// [`Provider::fetch`].
     Fetch,
-    /// [`Provider::refresh`].
+    /// [`TokenRefresh::refresh`].
     Refresh,
     /// [`PushSource::subscribe`].
     Subscribe,
@@ -138,11 +137,19 @@ struct State {
 }
 
 /// In-memory provider. Cheap to clone; clones share state.
+///
+/// The delta mechanism of a collection is its [`RemoteCollection::delta`], or
+/// else its kind's [`KindCapabilities::delta`] in the descriptor. A collection
+/// with [`DeltaSupport::CtagEtag`] lists the objects of a full read as
+/// [`ChangePage::stubs`] (key and validator, no body), as a DAV server does;
+/// `fetch` returns the bodies. Every other collection sends bodies in
+/// `upserts`.
 #[derive(Debug, Clone)]
 pub struct FakeProvider {
     state: Arc<Mutex<State>>,
     page_size: u32,
     empty_page_after_first: bool,
+    descriptor: Option<Arc<ProviderDescriptor>>,
 }
 
 impl Default for FakeProvider {
@@ -158,7 +165,16 @@ impl FakeProvider {
             state: Arc::default(),
             page_size: 2,
             empty_page_after_first: false,
+            descriptor: None,
         }
+    }
+
+    /// Replaces the default descriptor (one kind, events, with sync-token
+    /// delta and webhook push). Its `limits.max_page_size` is ignored: the
+    /// page size stays [`FakeProvider::with_page_size`].
+    pub fn with_descriptor(mut self, d: ProviderDescriptor) -> Self {
+        self.descriptor = Some(Arc::new(d));
+        self
     }
 
     /// Default page size (a hint's `page_size` overrides it).
@@ -341,13 +357,8 @@ impl FakeProvider {
         match pos {
             Pos::Full { .. } | Pos::Window { .. } if empty_next => {
                 let full = matches!(pos, Pos::Full { .. });
-                let page = ChangePage {
-                    pass: if full { Pass::Full } else { Pass::Window },
-                    upserts: Vec::new(),
-                    removals: Vec::new(),
-                    cursor: full.then(|| pos.encode()),
-                    last: false,
-                };
+                let pass = if full { Pass::Full } else { Pass::Window };
+                let page = ChangePage::new(pass, full.then(|| pos.encode()), false);
                 Ok((page, pos))
             }
             Pos::Full { snapshot, after } => {
@@ -358,8 +369,17 @@ impl FakeProvider {
                     .range(past(&after))
                     .filter(|(k, _)| !c.hidden.contains(*k))
                     .map(|(_, o)| &o.object);
-                let upserts: Vec<_> = rest.by_ref().take(size).cloned().collect();
+                let mut upserts: Vec<_> = rest.by_ref().take(size).cloned().collect();
                 let last = rest.next().is_none();
+                let after_key = upserts.last().map(|o| o.key.clone());
+                let stubs = if self.delta_of(c) == Some(DeltaSupport::CtagEtag) {
+                    std::mem::take(&mut upserts)
+                        .into_iter()
+                        .map(|o| Stub::new(o.key, Some(o.validator)))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let pos = if last {
                     Pos::Delta {
                         since: snapshot,
@@ -369,20 +389,13 @@ impl FakeProvider {
                 } else {
                     Pos::Full {
                         snapshot,
-                        after: upserts.last().map(|o| o.key.clone()),
+                        after: after_key,
                     }
                 };
-                let cursor = Some(pos.encode());
-                Ok((
-                    ChangePage {
-                        pass: Pass::Full,
-                        upserts,
-                        removals: Vec::new(),
-                        cursor,
-                        last,
-                    },
-                    pos,
-                ))
+                let mut page = ChangePage::new(Pass::Full, Some(pos.encode()), last);
+                page.upserts = upserts;
+                page.stubs = stubs;
+                Ok((page, pos))
             }
             Pos::Window { window, after } => {
                 let mut rest = c
@@ -395,13 +408,8 @@ impl FakeProvider {
                 let upserts: Vec<_> = rest.by_ref().take(size).cloned().collect();
                 let last = rest.next().is_none();
                 let after = upserts.last().map(|o| o.key.clone()).or(after);
-                let page = ChangePage {
-                    pass: Pass::Window,
-                    upserts,
-                    removals: Vec::new(),
-                    cursor: None,
-                    last,
-                };
+                let mut page = ChangePage::new(Pass::Window, None, last);
+                page.upserts = upserts;
                 Ok((page, Pos::Window { window, after }))
             }
             Pos::Delta {
@@ -444,19 +452,45 @@ impl FakeProvider {
                         after: changed.last().map(|k| (*k).clone()),
                     }
                 };
-                let cursor = Some(pos.encode());
-                Ok((
-                    ChangePage {
-                        pass: Pass::Delta,
-                        upserts,
-                        removals,
-                        cursor,
-                        last,
-                    },
-                    pos,
-                ))
+                let mut page = ChangePage::new(Pass::Delta, Some(pos.encode()), last);
+                page.upserts = upserts;
+                page.removals = removals;
+                Ok((page, pos))
             }
         }
+    }
+}
+
+impl FakeProvider {
+    /// The collection's delta mechanism; `None` for an unlisted collection.
+    fn delta_of(&self, c: &FakeCollection) -> Option<DeltaSupport> {
+        let meta = c.meta.as_ref()?;
+        meta.delta.or_else(|| {
+            self.describe()
+                .kinds
+                .iter()
+                .find(|k| k.kind == meta.kind)
+                .map(|k| k.delta)
+        })
+    }
+
+    fn describe(&self) -> Arc<ProviderDescriptor> {
+        self.descriptor.clone().unwrap_or_else(|| {
+            let events = KindCapabilities::new(
+                EntityKind::Event,
+                DeltaSupport::SyncToken,
+                PushSupport::Webhook,
+            );
+            let mut d = ProviderDescriptor::new(
+                ProviderId("fake".into()),
+                vec![events],
+                Limits::new(self.page_size),
+            );
+            d.recurrence = RecurrenceSupport::Full;
+            d.zones = vec![ZoneSupport::Iana];
+            d.field_fidelity = BTreeMap::from([("title".to_owned(), Fidelity::Exact)]);
+            Arc::new(d)
+        })
     }
 }
 
@@ -616,53 +650,21 @@ impl Stream for Pages {
 #[async_trait]
 impl Provider for FakeProvider {
     fn descriptor(&self) -> ProviderDescriptor {
-        ProviderDescriptor {
-            id: ProviderId("fake".into()),
-            kinds: vec![KindCapabilities {
-                kind: EntityKind::Event,
-                read: true,
-                write: false,
-                conditional_update: ConditionalWrite::None,
-                conditional_delete: ConditionalWrite::None,
-                client_id: None,
-            }],
-            delta: DeltaSupport::SyncToken,
-            push: PushSupport::Webhook,
-            recurrence: RecurrenceSupport::Full,
-            zones: vec![ZoneSupport::Iana],
-            scheduling: SchedulingCapabilities {
-                mode: SchedulingMode::None,
-                invite_suppression: InviteSuppression::None,
-                organizer_writes_reply: false,
-            },
-            field_fidelity: BTreeMap::from([("title".to_owned(), Fidelity::Exact)]),
-            hidden_marker: false,
-            reminders: ReminderCapabilities {
-                relative: false,
-                absolute: false,
-                actions: Vec::new(),
-                max_per_item: None,
-            },
-            tasks: None,
-            limits: Limits {
-                max_page_size: self.page_size,
-                requests_per_minute: None,
-                max_batch: None,
-            },
-        }
+        let mut d = (*self.describe()).clone();
+        d.limits.max_page_size = self.page_size;
+        d
     }
 
     async fn discover(&self, _cx: &AccountCx) -> Result<Discovery, SyncError> {
         self.enter(Op::Discover)?;
         self.gate(Op::Discover).await;
         let s = self.lock();
-        Ok(Discovery {
-            collections: s
-                .collections
+        Ok(Discovery::new(
+            s.collections
                 .values()
                 .filter_map(|c| c.meta.clone())
                 .collect(),
-        })
+        ))
     }
 
     fn changes<'a>(
@@ -684,6 +686,7 @@ impl Provider for FakeProvider {
                 window,
                 after: None,
             }),
+            (None, _) => Err(Some(SyncError::Permanent("unsupported start".into()))),
         };
         match &pos {
             Ok(Pos::Full { after: None, .. }) => s.calls.full_reads += 1,
@@ -722,17 +725,23 @@ impl Provider for FakeProvider {
             .collect())
     }
 
-    async fn refresh(&self, _refresh_token: &SecretString) -> Result<AccessToken, SyncError> {
-        self.enter(Op::Refresh)?;
-        Ok(AccessToken {
-            access: SecretString::from("fake-access-token"),
-            expires_in: std::time::Duration::from_secs(3600),
-            rotated_refresh: None,
-        })
+    fn oauth(&self) -> Option<&dyn TokenRefresh> {
+        Some(self)
     }
 
     fn push(&self) -> Option<&dyn PushSource> {
         Some(self)
+    }
+}
+
+#[async_trait]
+impl TokenRefresh for FakeProvider {
+    async fn refresh(&self, _refresh_token: &SecretString) -> Result<AccessToken, SyncError> {
+        self.enter(Op::Refresh)?;
+        Ok(AccessToken::new(
+            SecretString::from("fake-access-token"),
+            std::time::Duration::from_secs(3600),
+        ))
     }
 }
 
@@ -752,13 +761,13 @@ impl PushSource for FakeProvider {
         if let Some(e) = s.lost_subscribe.pop_front() {
             return Err(e);
         }
-        Ok(Subscription {
-            token: SecretString::from(format!("token-{}", channel.0)),
-            channel: channel.clone(),
-            collection: col.clone(),
-            resource: fake_resource(col),
-            expiration: cx.clock.now() + SignedDuration::from_hours(24),
-        })
+        Ok(Subscription::new(
+            channel.clone(),
+            col.clone(),
+            fake_resource(col),
+            SecretString::from(format!("token-{}", channel.0)),
+            cx.clock.now() + SignedDuration::from_hours(24),
+        ))
     }
 
     /// Like Google: any resource id of the channel's collection stops it; an
@@ -873,42 +882,45 @@ pub fn event_object(
     ev: &CalendarEvent,
     master: Option<&str>,
 ) -> RemoteObject {
-    RemoteObject {
-        key: RemoteKey(key.to_owned()),
-        validator: Validator(validator.to_owned()),
-        raw: Raw {
-            media_type: MediaType::Json,
-            body: serde_json::to_vec(ev).unwrap_or_default(),
-        },
-        master: master.map(|m| RemoteKey(m.to_owned())),
-    }
+    let raw = Raw {
+        media_type: MediaType::Json,
+        body: serde_json::to_vec(ev).unwrap_or_default(),
+    };
+    let mut o = RemoteObject::new(
+        RemoteKey(key.to_owned()),
+        EntityKind::Event,
+        Validator(validator.to_owned()),
+        raw,
+    );
+    o.master = master.map(|m| RemoteKey(m.to_owned()));
+    o
 }
 
-/// Account tokens in memory.
+/// Account credentials in memory, any variant.
 #[derive(Debug, Default)]
-pub struct MemoryVault(Mutex<HashMap<AccountId, AccountTokens>>);
+pub struct MemoryVault(Mutex<HashMap<AccountId, Credentials>>);
 
 impl TokenVault for MemoryVault {
-    fn load(&self, account: AccountId) -> Result<Option<AccountTokens>, StoreError> {
+    fn load(&self, account: AccountId) -> Result<Option<Credentials>, StoreError> {
         let m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         Ok(m.get(&account).cloned())
     }
 
-    fn store(&self, account: AccountId, t: &AccountTokens) -> Result<(), StoreError> {
+    fn store(&self, account: AccountId, c: &Credentials) -> Result<(), StoreError> {
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        m.insert(account, t.clone());
+        m.insert(account, c.clone());
         Ok(())
     }
 }
 
 /// Account context for tests: no rate limit, clock fixed at `now`.
 pub fn account_cx(account: AccountId, now: Timestamp) -> AccountCx {
-    AccountCx {
+    AccountCx::new(
         account,
-        token: SecretString::from("fake-access-token"),
-        limiter: Arc::new(NoLimit),
-        clock: Arc::new(FixedClock(now)),
-    }
+        Credential::Bearer(SecretString::from("fake-access-token")),
+        Arc::new(NoLimit),
+        Arc::new(FixedClock(now)),
+    )
 }
 
 /// Polls a future that never returns `Pending` (everything in this crate).

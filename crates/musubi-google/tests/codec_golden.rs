@@ -17,6 +17,7 @@ fn decode(name: &str) -> CalendarEvent {
     }) {
         Decoded::Canonical(event) => event,
         Decoded::Unsupported { reason } => panic!("{name}: unsupported: {reason}"),
+        _ => panic!("{name}: unexpected decode result"),
     }
 }
 

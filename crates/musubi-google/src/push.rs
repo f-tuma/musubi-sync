@@ -88,13 +88,13 @@ impl PushSource for GoogleProvider {
         let bytes = self.call(cx, self.http.post(url).json(&body)).await?;
         let ch: Channel = serde_json::from_slice(&bytes).unwrap_or_default();
         match (ch.resource_id, ch.expiration.as_ref().and_then(millis)) {
-            (Some(resource), Some(expiration)) => Ok(Subscription {
-                channel: channel.clone(),
-                collection: col.clone(),
+            (Some(resource), Some(expiration)) => Ok(Subscription::new(
+                channel.clone(),
+                col.clone(),
                 resource,
-                token: SecretString::from(token),
+                SecretString::from(token),
                 expiration,
-            }),
+            )),
             (resource, _) => {
                 // The channel is open at Google but unusable here: close it
                 // rather than leak it until it expires. Best effort.
@@ -160,13 +160,13 @@ mod tests {
     }
 
     fn sub(channel: &str, token: &str) -> Subscription {
-        Subscription {
-            channel: ChannelId(channel.into()),
-            collection: CollectionRef("primary".into()),
-            resource: "res-1".into(),
-            token: SecretString::from(token),
-            expiration: "2026-11-18T00:00:00Z".parse().unwrap(),
-        }
+        Subscription::new(
+            ChannelId(channel.into()),
+            CollectionRef("primary".into()),
+            "res-1",
+            SecretString::from(token),
+            "2026-11-18T00:00:00Z".parse().unwrap(),
+        )
     }
 
     fn headers(pairs: &[(&'static str, &str)]) -> HeaderMap {

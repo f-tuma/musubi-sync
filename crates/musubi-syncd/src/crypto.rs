@@ -24,7 +24,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jiff::Timestamp;
-use musubi_model::control::{AccountTokens, Scope, SealedTokens};
+use musubi_model::control::{AccountTokens, Credentials, Scope, SealedTokens};
 use musubi_model::{AccountId, ControlStore, StoreError, TenantId, TokenVault};
 use musubi_store_sqlite::SqliteControl;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
@@ -229,17 +229,26 @@ pub struct Vault {
 }
 
 impl TokenVault for Vault {
-    fn load(&self, account: AccountId) -> Result<Option<AccountTokens>, StoreError> {
+    fn load(&self, account: AccountId) -> Result<Option<Credentials>, StoreError> {
         let Some(a) = self.control.account(account)? else {
             return Ok(None);
         };
         match self.control.read_tokens(account)? {
-            Some(sealed) => self.sealer.open(a.tenant, account, &sealed).map(Some),
+            Some(sealed) => self
+                .sealer
+                .open(a.tenant, account, &sealed)
+                .map(|t| Some(Credentials::OAuth(t))),
             None => Ok(None),
         }
     }
 
-    fn store(&self, account: AccountId, t: &AccountTokens) -> Result<(), StoreError> {
+    fn store(&self, account: AccountId, c: &Credentials) -> Result<(), StoreError> {
+        // shortcut: OAuth only (phase 1 format); K1 adds Basic under `musubi-basic-v1`.
+        let Credentials::OAuth(t) = c else {
+            return Err(StoreError::Backend(
+                "this vault stores OAuth tokens only (Basic comes in K1)".into(),
+            ));
+        };
         let a = self.control.account(account)?.ok_or(StoreError::NotFound)?;
         self.control
             .write_tokens(account, &self.sealer.seal(a.tenant, account, t))

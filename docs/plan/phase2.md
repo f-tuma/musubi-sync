@@ -81,7 +81,7 @@ Nové externí závislosti a proč:
 | `quick-xml` (s `serialize`) | `musubi-dav` | WebDAV odpovědi; malé, bez C |
 | žádný nový HTTP klient | `musubi-dav` | stejný `reqwest` (rustls, `ring`) jako `musubi-google` |
 
-Licence obou nových závislostí je potřeba ověřit v K0 přes `cargo deny check` **(neověřeno: calcard deklaruje Apache-2.0 OR MIT)**. DNS SRV z RFC 6764 se nedělá (kapitola 5.1), proto `hickory-resolver` nepřibývá.
+Licence obou nových závislostí ověřil K0 přes `cargo deny check`: `calcard` je Apache-2.0 OR MIT, `quick-xml` MIT. `calcard` přes `ahash` 0.8 přináší druhé verze `getrandom` (0.3) a `r-efi` (5); obě mají v `deny.toml` výjimku s důvodem. `calcard` se bere bez výchozí vlastnosti `jmap`, protože `musubi-ical` mapuje na vlastní profily JSCalendar a JSContact. DNS SRV z RFC 6764 se nedělá (kapitola 5.1), proto `hickory-resolver` nepřibývá.
 
 ## 3. Změny modelu a kontraktu adaptéru
 
@@ -176,7 +176,7 @@ Google dál vrací jen `upserts`. Jeden kanál pro obě cesty (seznam ETagů u c
 - `DeltaSupport` a `PushSupport` se přesunou do `KindCapabilities` jako výchozí hodnoty druhu.
 - `RemoteCollection` dostane `delta: Option<DeltaSupport>` a `push: Option<PushSupport>` (serde default `None` = výchozí hodnota druhu). DAV je vyplní při zjišťování.
 - `collections.meta` je JSON, takže nová pole nepotřebují migraci SQL. Starý řádek se přečte s `None`.
-- `Limits` dostane `max_concurrency_per_account: Option<u32>` (iCloud 2, obecný DAV 2, Google bez omezení). Engine ho vynucuje (kapitola 7.4).
+- `Limits` dostane `max_concurrency_per_account: Option<u32>` (iCloud 2, obecný DAV 2 **(neověřeno)**, Google bez omezení). Engine ho vynucuje (kapitola 7.4).
 
 **Pověření.** DAV používá Basic s heslem (u iCloudu heslo pro aplikace). OAuth pro DAV ve fázi 2 není.
 
@@ -192,10 +192,10 @@ Google dál vrací jen `upserts`. Jeden kanál pro obě cesty (seznam ETagů u c
 
 - `AccountCx` dostane `endpoint: Option<Endpoint>`, `Endpoint { base: String, state: serde_json::Value }`. Google ho nemá.
 - `Discovery` dostane `endpoint: Option<Endpoint>`: adaptér vrátí aktualizovaný stav (nalezený principal a home sety) a engine ho uloží (`ControlStore::set_endpoint`).
-- `SyncError` dostane `Rediscover`: kolekce nebo principal vrátí `404`, nebo přesměruje na jinou adresu uvnitř povolených originů účtu (kapitola 5.5). Engine zařadí `Discover` účtu a úlohu kolekce odloží za něj. Přesměrování mimo povolené originy je `ReauthRequired` s důvodem `endpoint_moved`, ne nové zjišťování.
+- `SyncError` dostane `Rediscover`: kolekce nebo principal vrátí `404`, nebo přesměruje na jinou adresu uvnitř povolených originů účtu (kapitola 5.5). Engine zařadí `Discover` účtu a úlohu kolekce odloží za něj. Přesměrování mimo povolené originy je `ReauthRequired` s důvodem `endpoint_moved`, ne nové zjišťování. `SyncError::ReauthRequired` proto dostane pole `reason: ReauthReason`, `enum ReauthReason { Rejected, EndpointMoved }` (`Rejected`: poskytovatel odmítl pověření, jako ve fázi 1).
 - `Discovery` dostane `unauthorized: Vec<EntityKind>`: druhy, ke kterým účet nemá oprávnění (Google bez scope pro Tasks nebo People, kapitola 6.1). Kolekce těchto druhů se nemažou. Engine seznam uloží do `accounts.missing` (kapitola 4.3), odkud ho čte pohled na účet.
 - `SyncError` dostane `MissingScope { kind }`: `changes()` nebo `fetch()` narazily na chybějící oprávnění k druhu (Google `403` s `insufficientPermissions` nebo `ACCESS_TOKEN_SCOPE_INSUFFICIENT`, kapitola 6.1), třeba proto, že ho uživatel mezitím odebral. Engine kolekci označí chybou `missing_scope`, nezkouší ji znovu a zařadí `Discover`, který `accounts.missing` doplní. Není to `Unauthorized`: obnova tokenu nepomůže.
-- **Zrušení `missing_scope`:** každé úplné zjišťování, jehož `unauthorized` druh neobsahuje (typicky po opětovném souhlasu), zruší `missing_scope` u kolekcí toho druhu, odebere druh z `accounts.missing` a zařadí jejich `Sync` s `due = now`. Jinak by kolekce po opětovném souhlasu zůstala mrtvá.
+- **Zrušení `missing_scope`:** každé úplné zjišťování (ne `PartialDiscovery`), jehož `unauthorized` druh neobsahuje (typicky po opětovném souhlasu), zruší `missing_scope` u kolekcí toho druhu, odebere druh z `accounts.missing` a zařadí jejich `Sync` s `due = now`. Jinak by kolekce po opětovném souhlasu zůstala mrtvá.
 
 ### 3.6 Engine pro víc poskytovatelů a druhů
 
@@ -219,7 +219,7 @@ Dnes je `Engine<S: Storage, C: Codec<Event>>` s jedním poskytovatelem. Fáze 2:
 5. vlastní VTIMEZONE převedená na pravidlo POSIX TZ (`jiff` ho umí vyhodnotit), pokud má nejvýš jedno pravidlo STANDARD a jedno DAYLIGHT s `RRULE` tvaru `FREQ=YEARLY;BYMONTH=…;BYDAY=…`;
 6. jinak zóna zůstane nevyřešená (níže).
 
-Kanonická událost (i úkol) s vlastní zónou nese `time_zone: "/<TZID>"` a novou mapu `time_zones: { "/<TZID>": "<POSIX TZ>" }` (JSCalendar `timeZones`, zjednodušeně na řetězec POSIX). Proto `Event::SCHEMA_VERSION` = 2. Google zóny nemění; uložené položky Googlu se přepočtou jednorázově (kapitola 10, bod 1) a jejich kanonický tvar se nezmění, takže žurnál nic nedostane.
+Kanonická událost (i úkol) s vlastní zónou nese `time_zone: "/<TZID>"` a novou mapu `time_zones: { "/<TZID>": "<POSIX TZ>" }` (JSCalendar `timeZones`, zjednodušeně na řetězec POSIX). Proto `Event::SCHEMA_VERSION` = 2; zvýší ho až K5 spolu s dekodérem, který `time_zones` plní, a s přepočtem (kapitola 10, bod 1). Dřívější zvýšení by engine (`ingest::prepare` porovnává verzi schématu) donutilo přepsat a zažurnálovat každou uloženou událost. Google zóny nemění; uložené položky Googlu se přepočtou jednorázově (kapitola 10, bod 1) a jejich kanonický tvar se nezmění, takže žurnál nic nedostane.
 
 **Engine musí zónu umět vyhodnotit.** Dnes `musubi-engine` (`ingest.rs`, `event_zone` → `musubi_recurrence::resolve_tzid`) zná jen jména IANA a jména s předponou; cokoli jiného indexuje jako plovoucí čas s varováním. To je přesně tichý špatný čas, kterému se kapitola vyhýbá. K5 proto změní `event_zone`:
 
@@ -239,7 +239,7 @@ Kontrakt v0 tvoří veřejné položky těchto modulů `musubi-model`: `provider
 - Zmrazení nastane v K11: až oba adaptéry projdou stejnou sadou (K9) **a** živá kontrola K10 proti Googlu i iCloudu projde. Ne dřív, protože živé odchylky by jinak skončily jako lámající změna hned po zmrazení (kapitola 6.3 návrhu).
 - Bez testovacího účtu iCloud (otevřená otázka 1) se v0 zmrazí jen pro to, co bylo živě ověřené: `docs/contract/v0.md` výslovně uvede, že profil `icloud` je ověřený jen proti falešnému serveru. Profil je data v `musubi-dav`, takže jeho pozdější oprava kontrakt nemění.
 - `docs/contract/v0.md` popíše kontrakt slovy a nese SHA-256 normalizovaného textu těch souborů (bez komentářů a prázdných řádků). Test `crates/musubi-testkit/tests/contract_freeze.rs` hash spočítá a porovná. Každá změna kontraktu tak musí v tomtéž PR upravit `v0.md`.
-- **Aby aditivní změna byla opravdu aditivní**, K0 označí v hashovaných modulech `#[non_exhaustive]` všechny veřejné výčty (dnes ho má jen `EntityKind` a `ClientIdCharset`; chybí třeba u `DeltaSupport`, `PushSupport`, `Access`, `Pass`, `Start`, `SyncError`, `Decoded`) i struktury (`Discovery`, `RemoteCollection`, `RemoteObject`, `ChangePage`, `FetchHint`, `Subscription`, `AccountCx`, `ProviderDescriptor`, `KindCapabilities`, `Limits`, kanonické typy). Výjimkou jsou newtypy (`Validator`, `Cursor`, `RemoteKey`, identifikátory). Struktura s `#[non_exhaustive]` nejde mimo `musubi-model` sestavit literálem ani `..Default::default()`, proto dostane konstruktor `new(…)` s povinnými poli (nebo `Default`) a volitelná pole adaptér nastaví přiřazením (`let mut c = RemoteCollection::new(key, kind); c.delta = Some(…);`). Engine u výčtů potřebuje větev `_`.
+- **Aby aditivní změna byla opravdu aditivní**, K0 označí v hashovaných modulech `#[non_exhaustive]` všechny veřejné výčty (dnes ho má jen `EntityKind` a `ClientIdCharset`; chybí třeba u `DeltaSupport`, `PushSupport`, `Access`, `Pass`, `Start`, `SyncError`, `Decoded`) i struktury (`Discovery`, `RemoteCollection`, `RemoteObject`, `ChangePage`, `Stub`, `Endpoint`, `FetchHint`, `Subscription`, `AccountCx`, `ProviderDescriptor`, `KindCapabilities`, `Limits`, kanonické typy). Výjimkou jsou newtypy (`Validator`, `Cursor`, `RemoteKey`, identifikátory). Struktura s `#[non_exhaustive]` nejde mimo `musubi-model` sestavit literálem ani `..Default::default()`, proto dostane konstruktor `new(…)` s povinnými poli (nebo `Default`) a volitelná pole adaptér nastaví přiřazením (`let mut c = RemoteCollection::new(key, kind); c.delta = Some(…);`). Engine u výčtů potřebuje větev `_`.
 - **Aditivní změna** (nová varianta výčtu, nové pole se serde default, nová metoda traitu s výchozí implementací) je v0.x: záznam do `docs/contract/v0.md` s důvodem a nový hash.
 - **Lámající změna** (změna signatury, odebrání, změna významu) znamená v1: nový soubor `docs/contract/v1.md`, všechny adaptéry upravené v tomtéž PR a celá konformační sada zelená. Před vydáním 1.0 je to dovolené, ale nikdy potichu.
 - Zápisy fáze 3 přijdou aditivně (kapitola 3.9), takže v0 nezlomí. `Codec::encode`, `project` a `lift` ale `Codec` rozšíří o metody bez výchozí implementace; fáze 3 je proto přidá jako samostatný trait (`CodecWrite<K>: Codec<K>`), aby zůstala v0.x.
@@ -252,7 +252,7 @@ Tvar zápisů už určuje návrh (kapitola 6.1: `apply(cx, &Delivery) -> ApplyOu
 
 ### 3.10 Drobnosti kontraktu z fáze 1
 
-- Dokumentace `PushSource::subscribe` doplní: `RateLimited`, `ReauthRequired` a `Unauthorized` (a trvalé odmítnutí `Permanent`) znamenají „kanál nevznikl"; engine pak čekající řádek smaže. `Transient` znamená „nevím". Engine se tak už chová (K9 fáze 1), jen to kontrakt neříkal.
+- Dokumentace `PushSource::subscribe` doplní: `RateLimited`, `ReauthRequired` a `Unauthorized` (a trvalé odmítnutí `Permanent`) znamenají „kanál nevznikl"; engine pak čekající řádek smaže. `Transient` znamená „nevím". Každá jiná varianta (`Rediscover`, `MissingScope`, `CursorExpired`, `PartialDiscovery`, …) se bere jako `Transient`: kanál může existovat. Engine se tak už chová (K9 fáze 1), jen to kontrakt neříkal.
 
 ## 4. Úložiště
 
@@ -274,9 +274,9 @@ Nové operace `TenantStore`:
 
 | Operace | Co dělá |
 | --- | --- |
-| `list_entities(kind, collections, after: Option<EntityId>, limit)` | živé entity druhu s umístěním v daných kolekcích, po `id`, stránkovaně (keyset). Pro úkoly a kontakty |
-| `stale_items(kind, schema_version, mapping_version, after, limit)` | živé položky druhu s jinou verzí schématu nebo mapování; pro přepočet (kapitola 10, bod 1) |
-| `redecode(items: Vec<ItemWrite>)` | zapíše nový kanonický tvar a verze bez nového surového těla; žurnál jen u položek, kde se kanonický tvar změnil |
+| `list_entities(kind, collections, after: Option<EntityId>, limit, inc: Include)` | živé entity druhu s umístěním v daných kolekcích, po `id`, stránkovaně (keyset). S `inc.placements` i umístění; `inc.raw` se u entit ignoruje. Pro úkoly a kontakty |
+| `stale_items(kind, collections, schema_version, mapping_version, after, limit)` | živé položky druhu v daných kolekcích s jinou verzí schématu nebo mapování; pro přepočet (kapitola 10, bod 1). Verze mapování jsou po poskytovatelích, proto se volá s kolekcemi jednoho poskytovatele |
+| `redecode(col, items: &[ItemWrite])` | zapíše nový kanonický tvar a verze položek jedné kolekce bez nového surového těla; žurnál jen u položek, kde se kanonický tvar změnil |
 
 Meta klíč `mapping:<provider>:<kind>` (hodnota = verze mapování a schématu, po kterých přepočet doběhl) zajistí, že se přepočet spustí jednou.
 
@@ -621,6 +621,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 
 - **Cíl:** kapitoly 3.4–3.7, 7 a přepočet z kapitoly 10.
 - **Crates:** `musubi-engine` (`ingest.rs`: `event_zone`; `musubi-recurrence` beze změny).
+- **Převzato z K0:** `Event::SCHEMA_VERSION` je do K5 stále 1. K5 ho zvýší na 2 v tomtéž PR jako dekodér, který plní `time_zones`, a přepočet uložených položek (kapitola 3.7). Stránku se `stubs` engine do K5 odmítá jako `Permanent` („pages with stubs are not supported yet"); K5 to nahradí stahováním podle kapitoly 3.4.
 - **Přijetí (s `FakeProvider` a `musubi-store-sqlite` jako dev-závislostí):**
   - registr: dva `FakeProvider` s různým `ProviderId` a popisem procházejí stejnými testy; objekt druhu bez kodeku se uloží jen surově;
   - `stubs`: shodný validátor nestáhne nic, rozdílný stáhne přes `fetch` po dávkách; pád mezi výpisem a stažením stránku zopakuje bez duplicit; objekt chybějící ve `fetch` u delty nic nezmění, u úplného čtení zmizí nepřítomností;

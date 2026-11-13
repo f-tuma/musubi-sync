@@ -140,45 +140,37 @@ fn decode(raw: &Raw) -> Res<CalendarEvent> {
         }
     };
 
-    let mut event = CalendarEvent {
-        uid: uid(&ev)?,
-        recurrence_id,
-        recurrence_id_time_zone,
-        title: ev.summary.clone().unwrap_or_default(),
-        description: ev.description.clone().unwrap_or_default(),
-        locations: ev
-            .location
-            .iter()
-            .filter(|l| !l.is_empty())
-            .map(|l| ("location".to_owned(), Location { name: l.clone() }))
-            .collect(),
-        start,
-        time_zone,
-        duration: Duration(duration),
-        show_without_time,
-        status: match ev.status.as_deref() {
-            Some("tentative") => EventStatus::Tentative,
-            Some("cancelled") => EventStatus::Cancelled,
-            _ => EventStatus::Confirmed,
-        },
-        free_busy_status: match ev.transparency.as_deref() {
-            Some("transparent") => FreeBusyStatus::Free,
-            _ => FreeBusyStatus::Busy,
-        },
-        privacy: match ev.visibility.as_deref() {
-            Some("private" | "confidential") => Privacy::Private,
-            _ => Privacy::Public,
-        },
-        recurrence_rules: Vec::new(),
-        excluded_recurrence_rules: Vec::new(),
-        recurrence_overrides: BTreeMap::new(),
-        participants: participants(&ev),
-        alerts: BTreeMap::new(),
-        use_default_alerts: false,
-        created: ev.created.as_deref().and_then(|s| s.parse().ok()),
-        updated: ev.updated.as_deref().and_then(|s| s.parse().ok()),
-        sequence: ev.sequence.unwrap_or(0),
+    let mut event = CalendarEvent::new(uid(&ev)?, start);
+    event.recurrence_id = recurrence_id;
+    event.recurrence_id_time_zone = recurrence_id_time_zone;
+    event.title = ev.summary.clone().unwrap_or_default();
+    event.description = ev.description.clone().unwrap_or_default();
+    event.locations = ev
+        .location
+        .iter()
+        .filter(|l| !l.is_empty())
+        .map(|l| ("location".to_owned(), Location::new(l.clone())))
+        .collect();
+    event.time_zone = time_zone;
+    event.duration = Duration(duration);
+    event.show_without_time = show_without_time;
+    event.status = match ev.status.as_deref() {
+        Some("tentative") => EventStatus::Tentative,
+        Some("cancelled") => EventStatus::Cancelled,
+        _ => EventStatus::Confirmed,
     };
+    event.free_busy_status = match ev.transparency.as_deref() {
+        Some("transparent") => FreeBusyStatus::Free,
+        _ => FreeBusyStatus::Busy,
+    };
+    event.privacy = match ev.visibility.as_deref() {
+        Some("private" | "confidential") => Privacy::Private,
+        _ => Privacy::Public,
+    };
+    event.participants = participants(&ev);
+    event.created = ev.created.as_deref().and_then(|s| s.parse().ok());
+    event.updated = ev.updated.as_deref().and_then(|s| s.parse().ok());
+    event.sequence = ev.sequence.unwrap_or(0);
     let zone_tz = zone.map(|(_, tz)| tz);
     for line in ev.recurrence.iter().flatten() {
         recurrence_line(line, zone_tz.as_ref(), start, &mut event)?;
@@ -193,16 +185,14 @@ fn decode(raw: &Raw) -> Res<CalendarEvent> {
                 _ => continue,
             };
             let minutes = i64::from(o.minutes.unwrap_or(0));
-            event.alerts.insert(
-                (i + 1).to_string(),
-                Alert {
-                    trigger: AlertTrigger::Offset {
-                        offset: SignedDuration::from_secs(-minutes * 60),
-                        relative_to: RelativeTo::Start,
-                    },
-                    action,
-                },
-            );
+            event.alerts.insert((i + 1).to_string(), {
+                let mut alert = Alert::new(AlertTrigger::Offset {
+                    offset: SignedDuration::from_secs(-minutes * 60),
+                    relative_to: RelativeTo::Start,
+                });
+                alert.action = action;
+                alert
+            });
         }
     }
     Ok(event)
@@ -419,9 +409,10 @@ fn participants(ev: &GEvent) -> BTreeMap<String, Participant> {
         // Without an attendee entry the organizer is the event's owner, whom
         // Google's UI shows as going: Google sends no `responseStatus` here.
         out.entry(key)
-            .or_insert_with(|| Participant {
-                participation_status: ParticipationStatus::Accepted,
-                ..person(o)
+            .or_insert_with(|| {
+                let mut p = person(o);
+                p.participation_status = ParticipationStatus::Accepted;
+                p
             })
             .roles
             .insert(ParticipantRole::Owner, true);
@@ -430,18 +421,16 @@ fn participants(ev: &GEvent) -> BTreeMap<String, Participant> {
 }
 
 fn person(p: &GPerson) -> Participant {
-    Participant {
-        name: p.display_name.clone(),
-        email: p.email.clone(),
-        roles: BTreeMap::new(),
-        participation_status: match p.response_status.as_deref() {
-            Some("accepted") => ParticipationStatus::Accepted,
-            Some("declined") => ParticipationStatus::Declined,
-            Some("tentative") => ParticipationStatus::Tentative,
-            _ => ParticipationStatus::NeedsAction,
-        },
-        expect_reply: false,
-    }
+    let mut out = Participant::default();
+    out.name = p.display_name.clone();
+    out.email = p.email.clone();
+    out.participation_status = match p.response_status.as_deref() {
+        Some("accepted") => ParticipationStatus::Accepted,
+        Some("declined") => ParticipationStatus::Declined,
+        Some("tentative") => ParticipationStatus::Tentative,
+        _ => ParticipationStatus::NeedsAction,
+    };
+    out
 }
 
 #[cfg(test)]
@@ -459,6 +448,7 @@ mod tests {
         match decode_json(v) {
             Decoded::Canonical(e) => e,
             Decoded::Unsupported { reason } => panic!("unsupported: {reason}"),
+            _ => panic!("unexpected decode result"),
         }
     }
 

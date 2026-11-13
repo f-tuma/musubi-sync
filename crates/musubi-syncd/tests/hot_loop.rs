@@ -11,7 +11,7 @@ use jiff::{SignedDuration, Timestamp};
 use musubi_engine::{Config, Engine};
 use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider};
 use musubi_model::capability::ProviderId;
-use musubi_model::control::{AccountRecord, AccountState, AccountTokens};
+use musubi_model::control::{AccountRecord, AccountState, AccountTokens, Credentials};
 use musubi_model::store::{CollectionState, Coverage};
 use musubi_model::{AccountId, ControlStore, Storage, TenantId, TenantStore, TokenVault};
 use musubi_store_sqlite::{SqliteControl, SqliteStorage};
@@ -83,11 +83,11 @@ impl H {
         vault
             .store(
                 ACCOUNT,
-                &AccountTokens {
+                &Credentials::OAuth(AccountTokens {
                     refresh: SecretString::from(g.refresh_token()),
                     access: SecretString::from(g.access_token()),
                     access_until: Timestamp::now() + SignedDuration::from_hours(24 * 365),
-                },
+                }),
             )
             .expect("tokens");
         // The job queue compares leases with the wall clock: start there.

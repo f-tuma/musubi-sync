@@ -1,0 +1,17 @@
+[package]
+name = "musubi-dav"
+description = "CalDAV and CardDAV provider of musubi-sync."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+musubi-ical.workspace = true
+musubi-model.workspace = true
+quick-xml.workspace = true
+
+[lints]
+workspace = true

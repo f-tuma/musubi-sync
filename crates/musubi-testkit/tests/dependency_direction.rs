@@ -1,5 +1,5 @@
-//! Dependency direction between workspace crates (docs/plan/phase1.md, chapter 2;
-//! CONTRIBUTING.md). Runs in CI with `cargo test --workspace`.
+//! Dependency direction between workspace crates (docs/plan/phase1.md and
+//! docs/plan/phase2.md, chapter 2; CONTRIBUTING.md). Runs in CI with `cargo test --workspace`.
 //!
 //! cargo-deny cannot express this: `[[bans.deny]] wrappers` treats dev-dependencies
 //! like normal ones, and `[graph] exclude-dev` drops all dev-dependencies, so it
@@ -15,6 +15,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("musubi-recurrence", &[]),
     ("musubi-store-sqlite", &["musubi-model"]),
     ("musubi-google", &["musubi-model"]),
+    ("musubi-ical", &["musubi-model"]),
+    ("musubi-dav", &["musubi-model", "musubi-ical"]),
     ("musubi-engine", &["musubi-model", "musubi-recurrence"]),
     (
         "musubi-syncd",
@@ -23,6 +25,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "musubi-recurrence",
             "musubi-store-sqlite",
             "musubi-google",
+            "musubi-ical",
+            "musubi-dav",
             "musubi-engine",
         ],
     ),
@@ -30,7 +34,13 @@ const ALLOWED: &[(&str, &[&str])] = &[
 ];
 
 /// Internal crates a workspace crate must not use even in `[dev-dependencies]`.
-const DEV_FORBIDDEN: &[(&str, &str)] = &[("musubi-engine", "musubi-google")];
+/// The engine knows only traits and canonical types: no adapter or codec, not
+/// even in tests.
+const DEV_FORBIDDEN: &[(&str, &str)] = &[
+    ("musubi-engine", "musubi-google"),
+    ("musubi-engine", "musubi-dav"),
+    ("musubi-engine", "musubi-ical"),
+];
 
 #[derive(Debug)]
 struct Dep {
@@ -143,12 +153,18 @@ fn injected_violations_are_detected() {
                 dep("musubi-store-sqlite", Some("dev")),
                 dep("musubi-testkit", Some("dev")),
                 dep("musubi-google", Some("dev")),
+                dep("musubi-dav", Some("dev")),
+                dep("musubi-ical", None),
                 dep("serde", None),
             ],
         ),
         (
             "musubi-model".to_owned(),
             vec![dep("musubi-testkit", Some("build"))],
+        ),
+        (
+            "musubi-ical".to_owned(),
+            vec![dep("musubi-model", None), dep("musubi-dav", None)],
         ),
         ("musubi-new".to_owned(), vec![]),
     ];
@@ -157,7 +173,10 @@ fn injected_violations_are_detected() {
         [
             "musubi-engine -> musubi-store-sqlite (normal): not allowed",
             "musubi-engine -> musubi-google (dev): forbidden even in tests",
+            "musubi-engine -> musubi-dav (dev): forbidden even in tests",
+            "musubi-engine -> musubi-ical (normal): not allowed",
             "musubi-model -> musubi-testkit (build): not allowed",
+            "musubi-ical -> musubi-dav (normal): not allowed",
             "musubi-new: workspace member missing from ALLOWED",
         ]
     );

@@ -9,8 +9,10 @@
 //! - no `@type` members;
 //! - recurrence rules are RFC 5545 `RRULE` values, not JSCalendar objects
 //!   ([`RecurrenceRule`]);
-//! - no `virtualLocations`, `links`, `relatedTo`, `categories`, `color`
-//!   in schema version 1.
+//! - no `virtualLocations`, `links`, `relatedTo`, `categories`, `color`;
+//! - `timeZones` maps a custom zone id to a POSIX TZ string instead of a
+//!   JSCalendar `TimeZone` object ([`CalendarEvent::time_zones`], schema
+//!   version 2, docs/plan/phase2.md chapter 3.7).
 //!
 //! Recurring series in phase 1: the master event carries the rules and the
 //! `recurrenceOverrides` it has itself (RDATE as an empty patch, EXDATE as
@@ -33,8 +35,12 @@ use jiff::{SignedDuration, Span, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// A calendar event (JSCalendar `Event`).
+///
+/// Non-exhaustive: build it with [`CalendarEvent::new`] and set the other
+/// fields by assignment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEvent {
     /// iCalendar UID. Not the series join key: an exception joins its master by
     /// [`crate::remote::RemoteObject::master`] (plan ch. 9, question 3).
@@ -57,10 +63,18 @@ pub struct CalendarEvent {
     pub locations: BTreeMap<String, Location>,
     /// Local start time in `time_zone`.
     pub start: DateTime,
-    /// IANA zone of `start`; `None` means floating (the same wall time everywhere).
-    /// All-day events are floating with `show_without_time`.
+    /// Zone of `start`: an IANA name, or `/<TZID>` naming an entry of
+    /// `time_zones` (a custom zone from an iCalendar VTIMEZONE). `None` means
+    /// floating (the same wall time everywhere). All-day events are floating
+    /// with `show_without_time`.
     #[serde(default)]
     pub time_zone: Option<String>,
+    /// Custom zones used by this event: `"/<TZID>"` → POSIX TZ string (e.g.
+    /// `"CET-1CEST,M3.5.0,M10.5.0/3"`), evaluable by
+    /// `jiff::tz::TimeZone::posix`. Empty for providers with IANA zones only
+    /// (Google). Since schema version 2.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub time_zones: BTreeMap<String, String>,
     /// Length of the event. Nominal: `P1D` is one calendar day, even across DST.
     #[serde(default)]
     pub duration: Duration,
@@ -106,6 +120,38 @@ pub struct CalendarEvent {
     pub sequence: u32,
 }
 
+impl CalendarEvent {
+    /// A floating, untitled, zero-length, confirmed single event with every
+    /// optional field empty or at its JSCalendar default.
+    pub fn new(uid: impl Into<String>, start: DateTime) -> Self {
+        CalendarEvent {
+            uid: uid.into(),
+            recurrence_id: None,
+            recurrence_id_time_zone: None,
+            title: String::new(),
+            description: String::new(),
+            locations: BTreeMap::new(),
+            start,
+            time_zone: None,
+            time_zones: BTreeMap::new(),
+            duration: Duration::default(),
+            show_without_time: false,
+            status: EventStatus::default(),
+            free_busy_status: FreeBusyStatus::default(),
+            privacy: Privacy::default(),
+            recurrence_rules: Vec::new(),
+            excluded_recurrence_rules: Vec::new(),
+            recurrence_overrides: BTreeMap::new(),
+            participants: BTreeMap::new(),
+            alerts: BTreeMap::new(),
+            use_default_alerts: false,
+            created: None,
+            updated: None,
+            sequence: 0,
+        }
+    }
+}
+
 /// JSCalendar `PatchObject`: JSON pointers (relative to the master) to values.
 pub type PatchObject = serde_json::Map<String, serde_json::Value>;
 
@@ -141,14 +187,23 @@ pub struct RecurrenceRule(pub String);
 /// A physical location.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Location {
     /// Free-text name or address as the provider gave it.
     pub name: String,
 }
 
+impl Location {
+    /// A location with this name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Location { name: name.into() }
+    }
+}
+
 /// JSCalendar `status`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum EventStatus {
     /// Confirmed (default).
     #[default]
@@ -162,6 +217,7 @@ pub enum EventStatus {
 /// JSCalendar `freeBusyStatus`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum FreeBusyStatus {
     /// Blocks time (default).
     #[default]
@@ -173,6 +229,7 @@ pub enum FreeBusyStatus {
 /// JSCalendar `privacy`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum Privacy {
     /// Visible according to collection sharing (default).
     #[default]
@@ -183,9 +240,10 @@ pub enum Privacy {
     Secret,
 }
 
-/// A JSCalendar `Participant`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A JSCalendar `Participant`. Build it from [`Participant::default`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Participant {
     /// Display name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,6 +265,7 @@ pub struct Participant {
 /// JSCalendar participant role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ParticipantRole {
     /// Owns the event (organizer).
     Owner,
@@ -223,6 +282,7 @@ pub enum ParticipantRole {
 /// JSCalendar `participationStatus`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ParticipationStatus {
     /// No reply yet (default).
     #[default]
@@ -240,6 +300,7 @@ pub enum ParticipationStatus {
 /// A JSCalendar `Alert`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Alert {
     /// When it fires.
     pub trigger: AlertTrigger,
@@ -248,9 +309,20 @@ pub struct Alert {
     pub action: AlertAction,
 }
 
+impl Alert {
+    /// A displayed alert with this trigger.
+    pub fn new(trigger: AlertTrigger) -> Self {
+        Alert {
+            trigger,
+            action: AlertAction::default(),
+        }
+    }
+}
+
 /// When an alert fires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "@type")]
+#[non_exhaustive]
 pub enum AlertTrigger {
     /// Relative to the start or end of the event (negative = before).
     #[serde(rename = "OffsetTrigger", rename_all = "camelCase")]
@@ -272,6 +344,7 @@ pub enum AlertTrigger {
 /// Anchor of an [`AlertTrigger::Offset`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum RelativeTo {
     /// Event start (default).
     #[default]
@@ -285,6 +358,7 @@ pub enum RelativeTo {
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum AlertAction {
     /// Shown by the client (Google `popup`; default).
     #[default]
@@ -315,30 +389,14 @@ mod tests {
                 action: AlertAction::Display,
             },
         );
-        let event = CalendarEvent {
-            uid: "abc@google.com".into(),
-            recurrence_id: None,
-            recurrence_id_time_zone: None,
-            title: "Standup".into(),
-            description: String::new(),
-            locations: BTreeMap::new(),
-            start: "2026-11-11T09:00:00".parse().unwrap(),
-            time_zone: Some("Europe/Prague".into()),
-            duration: Duration(Span::new().minutes(15)),
-            show_without_time: false,
-            status: EventStatus::Confirmed,
-            free_busy_status: FreeBusyStatus::Busy,
-            privacy: Privacy::Public,
-            recurrence_rules: vec![RecurrenceRule("FREQ=WEEKLY;BYDAY=WE".into())],
-            excluded_recurrence_rules: vec![],
-            recurrence_overrides: overrides,
-            participants: BTreeMap::new(),
-            alerts,
-            use_default_alerts: false,
-            created: None,
-            updated: None,
-            sequence: 0,
-        };
+        let mut event =
+            CalendarEvent::new("abc@google.com", "2026-11-11T09:00:00".parse().unwrap());
+        event.title = "Standup".into();
+        event.time_zone = Some("Europe/Prague".into());
+        event.duration = Duration(Span::new().minutes(15));
+        event.recurrence_rules = vec![RecurrenceRule("FREQ=WEEKLY;BYDAY=WE".into())];
+        event.recurrence_overrides = overrides;
+        event.alerts = alerts;
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(
             value,
@@ -367,6 +425,24 @@ mod tests {
         assert_ne!(
             Duration(Span::new().days(1)),
             Duration(Span::new().hours(24))
+        );
+    }
+
+    #[test]
+    fn custom_zones_serialize_as_time_zones() {
+        let mut event = CalendarEvent::new("u", "2026-11-11T09:00:00".parse().unwrap());
+        event.time_zone = Some("/Custom".into());
+        event
+            .time_zones
+            .insert("/Custom".into(), "CET-1CEST,M3.5.0,M10.5.0/3".into());
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value["timeZones"],
+            json!({"/Custom": "CET-1CEST,M3.5.0,M10.5.0/3"})
+        );
+        assert_eq!(
+            serde_json::from_value::<CalendarEvent>(value).unwrap(),
+            event
         );
     }
 }

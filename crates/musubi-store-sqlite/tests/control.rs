@@ -53,13 +53,13 @@ fn channel(id: &str, account: AccountId, expires: i64) -> ChannelRecord {
         tenant: T1,
         account,
         collection: CollectionId::from_u128(5),
-        state: ChannelState::Open(Subscription {
-            channel: ChannelId(id.into()),
-            collection: CollectionRef("primary".into()),
-            resource: "res".into(),
-            token: SecretString::from("tok"),
-            expiration: t(expires),
-        }),
+        state: ChannelState::Open(Subscription::new(
+            ChannelId(id.into()),
+            CollectionRef("primary".into()),
+            "res",
+            SecretString::from("tok"),
+            t(expires),
+        )),
     }
 }
 

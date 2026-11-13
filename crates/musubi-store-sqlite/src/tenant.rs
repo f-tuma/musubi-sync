@@ -9,6 +9,7 @@ use jiff::tz::TimeZone;
 use musubi_model::error::StoreError;
 use musubi_model::id::{AccountId, CollectionId, EntityId, ItemId, PlacementId, ReadId, Seq};
 use musubi_model::journal::{Change, ChangeOp, ChangeTarget, ChangesPage};
+use musubi_model::kind::EntityKind;
 use musubi_model::placement::{Delivery, Direction, Origin, Projection, Role};
 use musubi_model::remote::{Cursor, MediaType, Raw, RawHash, RemoteKey, Validator};
 use musubi_model::store::{
@@ -932,6 +933,31 @@ impl TenantStore for SqliteTenant {
         })?)
     }
 
+    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
+    fn list_entities(
+        &self,
+        _kind: EntityKind,
+        _collections: &[CollectionId],
+        _after: Option<EntityId>,
+        _limit: u32,
+        _inc: Include,
+    ) -> Result<Vec<EntityView>, StoreError> {
+        todo!("K1")
+    }
+
+    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
+    fn stale_items(
+        &self,
+        _kind: EntityKind,
+        _collections: &[CollectionId],
+        _schema_version: u32,
+        _mapping_version: u32,
+        _after: Option<ItemId>,
+        _limit: u32,
+    ) -> Result<Vec<ItemView>, StoreError> {
+        todo!("K1")
+    }
+
     fn stats(&self) -> Result<StoreStats, StoreError> {
         let s = &self.shared;
         let (head, items, entities) = s.read(|c| {
@@ -1019,6 +1045,11 @@ impl TenantStore for SqliteTenant {
 
     fn apply_page(&mut self, p: &PageWrite) -> Result<Seq, StoreError> {
         Ok(self.shared.write(|c| apply_page(c, p))?)
+    }
+
+    #[allow(clippy::todo, reason = "implemented in phase 2 K1")]
+    fn redecode(&mut self, _col: CollectionId, _items: &[ItemWrite]) -> Result<Seq, StoreError> {
+        todo!("K1")
     }
 
     fn finish_full_read(&mut self, col: CollectionId, read: ReadId) -> Result<Seq, StoreError> {

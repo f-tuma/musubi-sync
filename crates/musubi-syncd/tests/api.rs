@@ -9,7 +9,8 @@ use common::{ADMIN_KEY, Node, event, next_event};
 use jiff::{SignedDuration, Timestamp};
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{
-    AccountRecord, AccountState, AccountTokens, ChannelRecord, ChannelState, JobKind, Lane, Scope,
+    AccountRecord, AccountState, AccountTokens, ChannelRecord, ChannelState, Credentials, JobKind,
+    Lane, Scope,
 };
 use musubi_model::provider::{ChannelId, Subscription};
 use musubi_model::{
@@ -422,8 +423,12 @@ async fn sealed_account_tokens_do_not_open_in_another_row() {
         access: "access-1".to_owned().into(),
         access_until: Timestamp::now(),
     };
-    vault.store(one, &tokens).expect("store");
-    let back = vault.load(one).expect("load").expect("tokens");
+    vault
+        .store(one, &Credentials::OAuth(tokens))
+        .expect("store");
+    let Some(Credentials::OAuth(back)) = vault.load(one).expect("load") else {
+        panic!("OAuth tokens");
+    };
     assert_eq!(back.refresh.expose_secret(), "refresh-1");
 
     let c = n.app.control();
@@ -453,13 +458,13 @@ async fn webhook_rejects_unknown_and_forged_and_enqueues_a_valid_one_fast() {
             tenant: a,
             account: acc,
             collection: col,
-            state: ChannelState::Open(Subscription {
-                channel: ChannelId("ch-1".into()),
-                collection: CollectionRef("cal".into()),
-                resource: "res-1".into(),
-                token: "channel-secret".to_owned().into(),
-                expiration: Timestamp::now() + SignedDuration::from_hours(24),
-            }),
+            state: ChannelState::Open(Subscription::new(
+                ChannelId("ch-1".into()),
+                CollectionRef("cal".into()),
+                "res-1",
+                "channel-secret".to_owned().into(),
+                Timestamp::now() + SignedDuration::from_hours(24),
+            )),
         })
         .expect("channel");
     control
@@ -673,7 +678,9 @@ async fn connecting_an_account_runs_pkce_once_and_seals_its_tokens() {
         (rec.tenant, rec.subject.as_str()),
         (a, "100000000000000000001")
     );
-    let tokens = n.app.vault().load(id).expect("load").expect("tokens");
+    let Some(Credentials::OAuth(tokens)) = n.app.vault().load(id).expect("load") else {
+        panic!("OAuth tokens");
+    };
     assert_eq!(tokens.refresh.expose_secret(), n.google.refresh_token());
 
     // Signing in as the same user again keeps the account.
