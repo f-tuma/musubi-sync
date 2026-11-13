@@ -95,7 +95,10 @@ fn openapi_operations() -> BTreeSet<(String, String)> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_route_checks_credential_scope_and_tenant() {
-    let n = Node::start().await;
+    let n = Node::start_with(|c| c["dav"] = json!({ "allow_private": true })).await;
+    let dav = musubi_testkit::dav::FakeDav::start(Default::default())
+        .await
+        .expect("fake dav");
     let (a, b, spare) = (n.tenant().await, n.tenant().await, n.tenant().await);
     let (a_admin, _) = n.key(a, "admin").await;
     let (a_read, _) = n.key(a, "read").await;
@@ -154,6 +157,23 @@ async fn every_route_checks_credential_scope_and_tenant() {
             "/v1/accounts".into(),
             Some(json!({ "provider": "google" })),
             Need::Admin,
+        ),
+        r(
+            "POST",
+            "/v1/accounts/dav",
+            "/v1/accounts/dav".into(),
+            Some(json!({
+                "profile": "generic", "server_url": dav.server_url(),
+                "username": "alice", "password": "secret",
+            })),
+            Need::Admin,
+        ),
+        r(
+            "POST",
+            "/v1/interest",
+            "/v1/interest".into(),
+            None,
+            Need::Read,
         ),
         r(
             "GET",
@@ -307,6 +327,7 @@ async fn every_route_checks_credential_scope_and_tenant() {
                 "/v1/entities" => assert_eq!(v["occurrences"], json!([]), "{what}"),
                 "/v1/changes" => assert_eq!(v["changes"], json!([]), "{what}"),
                 "/v1/stream" => assert_eq!(s, 200, "B's own stream; content tested below"),
+                "/v1/interest" => assert_eq!(s, 204, "B's own interest: {v}"),
                 t => panic!("no foreign-tenant check for {t}"),
             }
         }

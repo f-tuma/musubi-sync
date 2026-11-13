@@ -55,6 +55,11 @@ pub fn config_json(listen: &str, data: &Path, g: &FakeGoogle) -> Value {
 
 impl Node {
     pub async fn start() -> Self {
+        Self::start_with(|_| {}).await
+    }
+
+    /// As [`Node::start`], with `edit` applied to the configuration file.
+    pub async fn start_with(edit: impl FnOnce(&mut Value)) -> Self {
         let google = FakeGoogle::start(Default::default())
             .await
             .expect("fake google");
@@ -63,9 +68,9 @@ impl Node {
             .await
             .expect("bind");
         let addr = listener.local_addr().expect("addr").to_string();
-        let config: Config =
-            serde_json::from_value(config_json(&addr, &dir.path().join("data"), &google))
-                .expect("config");
+        let mut json = config_json(&addr, &dir.path().join("data"), &google);
+        edit(&mut json);
+        let config: Config = serde_json::from_value(json).expect("config");
         let app = App::open(&config).expect("open");
         let router = app.clone().router();
         tokio::spawn(async move { axum::serve(listener, router).await });

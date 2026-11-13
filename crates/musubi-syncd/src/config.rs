@@ -8,7 +8,8 @@
 //!   "admin_key": "<long random string>",
 //!   "signing_key": "<base64 of 32 random bytes>",
 //!   "token_key": "<base64 of 32 random bytes>",
-//!   "google": { "client_id": "...", "client_secret": "..." }
+//!   "google": { "client_id": "...", "client_secret": "..." },
+//!   "dav": { "allow_private": false }
 //! }
 //! ```
 //!
@@ -43,6 +44,20 @@ pub struct Config {
     pub token_key: String,
     /// Google OAuth client and endpoints.
     pub google: GoogleSettings,
+    /// DAV accounts; optional.
+    #[serde(default)]
+    pub dav: DavSettings,
+}
+
+/// DAV accounts (`POST /v1/accounts/dav`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DavSettings {
+    /// Lets DAV accounts reach private addresses and `http` on loopback (a
+    /// server on the LAN, tests with Radicale). Off: only public addresses
+    /// over `https`.
+    #[serde(default)]
+    pub allow_private: bool,
 }
 
 /// Google OAuth client. Endpoints default to Google's production ones.
@@ -102,6 +117,7 @@ impl fmt::Debug for Config {
             .field("signing_key", &REDACTED)
             .field("token_key", &REDACTED)
             .field("google", &self.google)
+            .field("dav", &self.dav)
             .finish()
     }
 }
@@ -182,6 +198,7 @@ mod tests {
                 tasks_api_base: default_tasks_api_base(),
                 people_api_base: default_people_api_base(),
             },
+            dav: DavSettings::default(),
         };
         let long = "a".repeat(32);
         assert!(c(&long).check().is_ok());

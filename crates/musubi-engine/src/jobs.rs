@@ -251,7 +251,10 @@ impl<S: Storage + 'static> Engine<S> {
             }
             EngineError::Sync(SyncError::ReauthRequired { .. } | SyncError::Unauthorized) => {
                 self.with_rt(rec, |rt| rt.unauthorized = false);
-                tracing::warn!(account = %rec.id, "account requires sign-in");
+                tracing::warn!(account = %rec.id, error = %e, "account requires sign-in");
+                // The reason (e.g. `EndpointMoved`) reaches the user on the collection.
+                self.record_error(rec.tenant, col, e.to_string(), true)
+                    .await;
                 let id = rec.id;
                 match self
                     .ctl(move |c| c.set_account_state(id, AccountState::ReauthRequired))

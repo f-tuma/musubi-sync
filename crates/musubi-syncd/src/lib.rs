@@ -1,15 +1,18 @@
-//! `musubi-syncd`: the phase 1 server (docs/plan/phase1.md, K6).
+//! `musubi-syncd`: the server (docs/plan/phase1.md K6, phase2.md K8).
 //!
 //! HTTP API (`openapi.yaml` next to this crate's `Cargo.toml`), caller
-//! authentication, the OAuth flow, the Google webhook, the commit bus behind
-//! SSE, and the `backup` / `restore` operations. The binary in `main.rs` only
+//! authentication, the OAuth flow, DAV connect (`dav`), the Google webhook,
+//! the commit bus behind SSE, and the `backup` / `restore` operations. The binary in `main.rs` only
 //! parses the command line.
 //!
 //! **Engine.** [`App::engine`] runs the sync engine over the same stores. Its
 //! commits reach SSE through [`CommitBus::notify`]; the OAuth callback starts
 //! a new account's discovery, the webhook enqueues the engine's push job, and
 //! deleting a tenant removes its accounts through the engine first, so their
-//! watch channels are stopped while their tokens still exist.
+//! watch channels are stopped while their tokens still exist. Its registry
+//! has the `google` instance (Calendar, Tasks, People) and `dav`
+//! (CalDAV/CardDAV, codecs of musubi-ical). Only `POST /v1/interest` raises a
+//! tenant's polling ([`SyncEngine::touch`]); SSE and reads do not.
 //!
 //! **Callers.** Every `/v1` route except the OAuth callback and the webhook
 //! needs `Authorization: Bearer <credential>`:
@@ -35,6 +38,7 @@
 mod admin;
 pub mod config;
 pub mod crypto;
+mod dav;
 mod oauth;
 mod push;
 mod read;
@@ -56,11 +60,13 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use jiff::Timestamp;
+use musubi_dav::{DavConfig, DavProvider};
 use musubi_engine::{Codecs, DecodeFn, Engine, Providers};
-use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider};
+use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider, PeopleCodec, TasksCodec};
+use musubi_ical::{IcalCodec, VCardCodec};
 use musubi_model::control::{ApiKeyHash, Scope};
 use musubi_model::provider::Clock;
-use musubi_model::{ControlStore, Seq, StoreError, TenantId};
+use musubi_model::{ControlStore, Seq, Storage, StoreError, TenantId};
 use musubi_store_sqlite::{SqliteControl, SqliteStorage};
 use reqwest::Url;
 use secrecy::SecretString;
@@ -93,6 +99,7 @@ pub struct App {
     control: Arc<SqliteControl>,
     storage: Arc<SqliteStorage>,
     google: Arc<GoogleProvider>,
+    dav: Arc<DavProvider>,
     engine: SyncEngine,
     oauth: oauth::Client,
     http: reqwest::Client,
@@ -137,10 +144,16 @@ impl App {
                     token_url: url("google.token_url", &g.token_url)?,
                     tasks_base: url("google.tasks_api_base", &g.tasks_api_base)?,
                     people_base: url("google.people_api_base", &g.people_api_base)?,
-                    discover_tasks_people: false,
+                    discover_tasks_people: true,
                 },
                 clock.clone(),
             )
+            .map_err(err)?,
+        );
+        let dav = Arc::new(
+            DavProvider::new(DavConfig {
+                allow_private: c.dav.allow_private,
+            })
             .map_err(err)?,
         );
         // GoogleProvider::new installed the ring provider reqwest needs.
@@ -155,13 +168,18 @@ impl App {
         let callback = public.join("v1/webhooks/google").map_err(err)?;
         let engine = Engine::new(
             storage.clone(),
-            Providers::new().with(
-                google.clone(),
-                Codecs {
-                    event: Some(DecodeFn::of::<GoogleCodec>()),
-                    ..Codecs::default()
-                },
-            ),
+            Providers::new()
+                .with(
+                    google.clone(),
+                    Codecs {
+                        event: Some(DecodeFn::of::<GoogleCodec>()),
+                        task: Some(DecodeFn::of::<TasksCodec>()),
+                        contact: Some(DecodeFn::of::<PeopleCodec>()),
+                        contact_group: None,
+                    },
+                )
+                // K7: register the `icloud` instance (musubi-dav, profile icloud) here with dav_codecs().
+                .with(dav.clone(), dav_codecs()),
             control.clone(),
             Arc::new(Vault {
                 control: control.clone(),
@@ -183,6 +201,7 @@ impl App {
             control,
             storage,
             google,
+            dav,
             engine,
             oauth: oauth::Client {
                 client_id: g.client_id.clone(),
@@ -209,7 +228,9 @@ impl App {
     pub fn router(self: Arc<Self>) -> Router {
         let bounded = Router::new()
             .route("/v1/accounts", post(oauth::start))
+            .route("/v1/accounts/dav", post(dav::connect))
             .route("/v1/accounts/{id}", get(read::account))
+            .route("/v1/interest", post(interest))
             .route("/v1/collections", get(read::collections))
             .route("/v1/entities", get(read::entities))
             .route("/v1/entities/{id}", get(read::entity))
@@ -298,6 +319,17 @@ impl App {
         tokio::task::spawn_blocking(move || f(&app))
             .await
             .map_err(|e| ApiError::internal(&e))?
+    }
+}
+
+/// Codecs of a DAV instance: iCalendar for events and tasks, vCard for
+/// contacts and groups.
+fn dav_codecs() -> Codecs {
+    Codecs {
+        event: Some(DecodeFn::of::<IcalCodec>()),
+        task: Some(DecodeFn::of::<IcalCodec>()),
+        contact: Some(DecodeFn::of::<VCardCodec>()),
+        contact_group: Some(DecodeFn::of::<VCardCodec>()),
     }
 }
 
@@ -584,6 +616,20 @@ impl FromRequestParts<Arc<App>> for Caller {
 struct TokenRequest {
     scope: Option<Scope>,
     ttl: Option<u64>,
+}
+
+/// `POST /v1/interest`: the user is looking at the tenant's data; speeds up
+/// its adaptive polling (plan 7.3). The only caller of [`SyncEngine::touch`]:
+/// SSE and reads are not interest.
+async fn interest(State(app): State<Arc<App>>, caller: Caller) -> Result<StatusCode, ApiError> {
+    let tenant = caller.tenant(Scope::Read)?;
+    app.run(move |a| Ok(a.storage.open(tenant).map(drop)?))
+        .await?;
+    app.engine
+        .touch(tenant)
+        .await
+        .map_err(|e| ApiError::internal(&e))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `POST /v1/tokens`: a short-lived token for the presenting API key.
