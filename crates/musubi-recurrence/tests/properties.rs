@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use jiff::civil::{DateTime, date};
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp, ToSpan};
-use musubi_recurrence::{Moment, Override, RecurrenceError, Series, expand};
+use musubi_recurrence::{Instance, Moment, Override, RecurrenceError, Series, expand};
 use proptest::prelude::*;
 
 const ZONES: &[Option<&str>] = &[
@@ -118,6 +118,15 @@ fn window(s: &Series, offset: i64, len: i64) -> std::ops::Range<Timestamp> {
     lo..lo + len.hours()
 }
 
+/// `musubi_model::TimeWindow::overlaps` for a window that may be empty: the window is
+/// half-open, so `[t, t)` contains no instant and nothing overlaps it, not even an occurrence
+/// spanning `t` (`TimeWindow::new` rejects it; `expand` returns nothing for it).
+fn overlaps(i: &Instance, w: &std::ops::Range<Timestamp>) -> bool {
+    w.start < w.end
+        && i.start < w.end
+        && (i.end > w.start || (i.start == i.end && i.start >= w.start))
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
@@ -131,9 +140,7 @@ proptest! {
                 let rids: BTreeSet<_> = out.iter().map(|i| i.recurrence_id).collect();
                 prop_assert_eq!(rids.len(), out.len(), "duplicate recurrence id");
                 for i in &out {
-                    let overlaps = i.start < w.end
-                        && (i.end > w.start || (i.start == i.end && i.start >= w.start));
-                    prop_assert!(overlaps, "{:?} outside {:?}", i, w);
+                    prop_assert!(overlaps(i, &w), "{:?} outside {:?}", i, w);
                 }
             }
             Err(RecurrenceError::TooManyOccurrences { limit: l }) => {
@@ -154,26 +161,53 @@ proptest! {
     /// is found, identically, by any window it overlaps.
     #[test]
     fn narrower_window_is_a_subset(s in series(), offset in -720i64..24 * 300, len in 0i64..24 * 200) {
-        let w = window(&s, offset, len);
-        let wide = date(2000, 1, 1).at(0, 0, 0, 0).to_zoned(TimeZone::UTC).unwrap().timestamp()
-            ..date(2050, 1, 1).at(0, 0, 0, 0).to_zoned(TimeZone::UTC).unwrap().timestamp();
-        let (all, part) = (expand(&s, wide, 100_000), expand(&s, w.clone(), 100_000));
-        // As above, these windows never need the budget; only an invalid rule may stop here.
-        for r in [&all, &part] {
-            prop_assert!(
-                !matches!(r, Err(RecurrenceError::TooExpensive)),
-                "TooExpensive for a generated series"
-            );
-        }
-        let (Ok(all), Ok(part)) = (all, part) else {
-            return Ok(());
-        };
-        let expected: Vec<_> = all
-            .into_iter()
-            .filter(|i| i.start < w.end && (i.end > w.start || (i.start == i.end && i.start >= w.start)))
-            .collect();
-        prop_assert_eq!(part, expected);
+        narrower_is_subset(&s, offset, len)?;
     }
+}
+
+fn narrower_is_subset(s: &Series, offset: i64, len: i64) -> Result<(), TestCaseError> {
+    let w = window(s, offset, len);
+    let wide = date(2000, 1, 1)
+        .at(0, 0, 0, 0)
+        .to_zoned(TimeZone::UTC)
+        .unwrap()
+        .timestamp()
+        ..date(2050, 1, 1)
+            .at(0, 0, 0, 0)
+            .to_zoned(TimeZone::UTC)
+            .unwrap()
+            .timestamp();
+    let (all, part) = (expand(s, wide, 100_000), expand(s, w.clone(), 100_000));
+    // As above, these windows never need the budget; only an invalid rule may stop here.
+    for r in [&all, &part] {
+        prop_assert!(
+            !matches!(r, Err(RecurrenceError::TooExpensive)),
+            "TooExpensive for a generated series"
+        );
+    }
+    let (Ok(all), Ok(part)) = (all, part) else {
+        return Ok(());
+    };
+    let expected: Vec<_> = all.into_iter().filter(|i| overlaps(i, &w)).collect();
+    prop_assert_eq!(part, expected);
+    Ok(())
+}
+
+/// Reported seed: 32 h occurrences overlap each other, and a zero-length window one hour
+/// after DTSTART lies inside the first one.
+#[test]
+fn zero_length_window_inside_an_occurrence() {
+    let s = Series {
+        start: date(2020, 1, 1).at(0, 0, 0, 0),
+        zone: None,
+        duration: 32.hours(),
+        rules: vec!["FREQ=DAILY;INTERVAL=1".into()],
+        exrules: vec![],
+        rdates: vec![],
+        exdates: vec![],
+        overrides: vec![],
+    };
+    narrower_is_subset(&s, 1, 0).unwrap();
 }
 
 #[test]
