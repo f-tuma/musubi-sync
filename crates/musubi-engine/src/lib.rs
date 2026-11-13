@@ -11,26 +11,26 @@
 //! construction; the HTTP layer connects it to its change bus.
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use http::Uri;
 use jiff::Timestamp;
-use musubi_model::Codec;
+use musubi_model::capability::ProviderId;
 use musubi_model::control::{
     AccountRecord, AccountState, ChannelRecord, Job, JobKind, JobSpec, Lane,
 };
 use musubi_model::provider::{Clock, Limiter};
 use musubi_model::{
-    AccountId, CollectionId, ControlStore, Event, Provider, Seq, Storage, StoreError, SyncError,
-    TenantId, TenantStore, TokenVault,
+    AccountId, Codec, CollectionId, Contact, ContactGroup, ControlStore, Decoded, Event, Kind,
+    Provider, Raw, Seq, Storage, StoreError, SyncError, Task, TenantId, TenantStore, TokenVault,
 };
 use tokio::sync::{Notify, Semaphore};
 
 mod ingest;
 mod jobs;
+mod redecode;
 mod writer;
 
 use writer::Writer;
@@ -40,6 +40,12 @@ pub type CommitSink = Arc<dyn Fn(TenantId, Seq) + Send + Sync>;
 
 /// How long push notifications for one collection are coalesced into one delta.
 pub const COALESCE: Duration = Duration::from_millis(150);
+
+/// [`musubi_model::CollectionError::message`] of a collection whose kind the
+/// account has no permission for ([`SyncError::MissingScope`], plan 3.5). It
+/// is permanent: the collection is not retried until a complete discovery
+/// finds the kind authorised again, which clears exactly this error.
+pub const MISSING_SCOPE: &str = "missing_scope";
 
 /// Engine failure.
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +59,71 @@ pub enum EngineError {
     /// The engine or a tenant writer is shutting down.
     #[error("engine stopped")]
     Stopped,
+}
+
+/// A typed decoder of one kind: the [`Codec`] of a provider without its type.
+pub struct DecodeFn<K: Kind> {
+    /// [`Codec::MAPPING_VERSION`].
+    pub mapping_version: u32,
+    /// [`Codec::decode`].
+    pub decode: fn(&Raw) -> Decoded<K::Canonical>,
+}
+
+impl<K: Kind> DecodeFn<K> {
+    /// The decoder of codec `C`.
+    pub fn of<C: Codec<K>>() -> Self {
+        Self {
+            mapping_version: C::MAPPING_VERSION,
+            decode: C::decode,
+        }
+    }
+}
+
+// Manual: a derive would require `K: Clone`.
+impl<K: Kind> Clone for DecodeFn<K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<K: Kind> Copy for DecodeFn<K> {}
+
+/// A provider's decoders by kind. An object of a kind without one is stored
+/// raw only (`canonical: None`), as for [`Decoded::Unsupported`].
+#[derive(Clone, Copy, Default)]
+pub struct Codecs {
+    /// Events.
+    pub event: Option<DecodeFn<Event>>,
+    /// Tasks.
+    pub task: Option<DecodeFn<Task>>,
+    /// Contacts.
+    pub contact: Option<DecodeFn<Contact>>,
+    /// Contact groups.
+    pub contact_group: Option<DecodeFn<ContactGroup>>,
+}
+
+/// The providers an engine serves, by [`ProviderId`]; an account's provider
+/// selects its instance (plan 3.6). The engine never branches on the id.
+#[derive(Clone, Default)]
+pub struct Providers {
+    map: HashMap<ProviderId, (Arc<dyn Provider>, Codecs)>,
+}
+
+impl Providers {
+    /// An empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds `provider` under its descriptor's id, replacing one with that id.
+    pub fn with(mut self, provider: Arc<dyn Provider>, codecs: Codecs) -> Self {
+        self.map
+            .insert(provider.descriptor().id.clone(), (provider, codecs));
+        self
+    }
+
+    fn get(&self, id: &ProviderId) -> Option<&(Arc<dyn Provider>, Codecs)> {
+        self.map.get(id)
+    }
 }
 
 /// Engine tuning.
@@ -93,6 +164,27 @@ pub struct Config {
     pub tick: Duration,
     /// A tenant writer without a write for this long stops its thread.
     pub writer_idle: Duration,
+    /// Adaptive polling (plan 7.2) of a collection without an open push
+    /// channel while its tenant is active (touched in the last
+    /// [`Config::active_for`]).
+    pub poll_active: PollBounds,
+    /// Adaptive polling while the tenant is neither active nor sleeping.
+    pub poll_normal: PollBounds,
+    /// Adaptive polling of a tenant not touched for [`Config::sleep_after`].
+    pub poll_sleeping: PollBounds,
+    /// A tenant is active this long after [`Engine::touch`].
+    pub active_for: Duration,
+    /// A tenant not touched for this long sleeps (counted from the start).
+    pub sleep_after: Duration,
+}
+
+/// Bounds of an adaptive poll interval: `min · 2^quiet`, at most `max`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PollBounds {
+    /// Interval right after a change.
+    pub min: Duration,
+    /// Interval after many reads without a change.
+    pub max: Duration,
 }
 
 const DAY: Duration = Duration::from_secs(86_400);
@@ -117,16 +209,30 @@ impl Default for Config {
             background_concurrency: 4,
             tick: Duration::from_millis(50),
             writer_idle: Duration::from_secs(30),
+            poll_active: PollBounds {
+                min: Duration::from_secs(15),
+                max: Duration::from_secs(60),
+            },
+            poll_normal: PollBounds {
+                min: Duration::from_secs(120),
+                max: Duration::from_secs(900),
+            },
+            poll_sleeping: PollBounds {
+                min: Duration::from_secs(3600),
+                max: Duration::from_secs(6 * 3600),
+            },
+            active_for: Duration::from_secs(120),
+            sleep_after: 7 * DAY,
         }
     }
 }
 
 /// The sync engine. Cheap to clone; clones share all state.
-pub struct Engine<S: Storage, C> {
-    inner: Arc<Inner<S, C>>,
+pub struct Engine<S: Storage> {
+    inner: Arc<Inner<S>>,
 }
 
-impl<S: Storage, C> Clone for Engine<S, C> {
+impl<S: Storage> Clone for Engine<S> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -134,9 +240,9 @@ impl<S: Storage, C> Clone for Engine<S, C> {
     }
 }
 
-struct Inner<S: Storage, C> {
+struct Inner<S: Storage> {
     storage: Arc<S>,
-    provider: Arc<dyn Provider>,
+    providers: Providers,
     control: Arc<dyn ControlStore>,
     vault: Arc<dyn TokenVault>,
     clock: Arc<dyn Clock>,
@@ -153,7 +259,11 @@ struct Inner<S: Storage, C> {
     accounts: Mutex<HashMap<AccountId, AccountRt>>,
     // Same shortcut, and lost on restart: one extra full read or watch request per restart.
     collections: Mutex<HashMap<CollectionId, CollectionRt>>,
-    codec: PhantomData<fn() -> C>,
+    /// The last [`Engine::touch`] of each tenant. Lost on restart by design
+    /// (plan 7.3): at most one normal interval.
+    interest: Mutex<HashMap<TenantId, Timestamp>>,
+    /// Start of this process: interest is counted from it (plan 7.2).
+    started: Timestamp,
 }
 
 /// In-memory per-account state: request pacing, a rate-limit block and
@@ -161,6 +271,8 @@ struct Inner<S: Storage, C> {
 #[derive(Clone)]
 struct AccountRt {
     limiter: Arc<dyn Limiter>,
+    /// `limits.max_concurrency_per_account` (plan 7.4); `None` without a limit.
+    running: Option<Arc<Semaphore>>,
     blocked_until: Option<Timestamp>,
     unauthorized: bool,
 }
@@ -174,6 +286,12 @@ struct CollectionRt {
     full_reads: u32,
     full_only_until: Option<Timestamp>,
     push_refused_until: Option<Timestamp>,
+    /// Reads in a row without a change (plan 7.2).
+    quiet: u32,
+    /// The running read wrote a change (an upsert or a removal).
+    changed: bool,
+    /// The provider gives synthetic `musubi:sha256:` validators (plan 7.2).
+    hashed: bool,
 }
 
 /// Background scheduler started by [`Engine::start`]; stops when dropped.
@@ -189,12 +307,12 @@ impl Drop for Running {
     }
 }
 
-impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
+impl<S: Storage + 'static> Engine<S> {
     /// Creates an engine. Nothing runs until [`Engine::start`] or
     /// [`Engine::run_until_idle`].
     pub fn new(
         storage: Arc<S>,
-        provider: Arc<dyn Provider>,
+        providers: Providers,
         control: Arc<dyn ControlStore>,
         vault: Arc<dyn TokenVault>,
         clock: Arc<dyn Clock>,
@@ -203,8 +321,9 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                started: clock.now(),
                 storage,
-                provider,
+                providers,
                 control,
                 vault,
                 clock,
@@ -216,7 +335,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 account_locks: Default::default(),
                 accounts: Default::default(),
                 collections: Default::default(),
-                codec: PhantomData,
+                interest: Default::default(),
             }),
         }
     }
@@ -225,15 +344,43 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// callback. Discovery moves it to `Active` and schedules its collections.
     pub async fn connect(&self, account: AccountId) -> Result<(), EngineError> {
         let rec = self.account(account).await?.ok_or(StoreError::NotFound)?;
-        let spec = JobSpec {
-            tenant: rec.tenant,
-            lane: Lane::Sync,
-            kind: JobKind::Discover { account },
-            priority: 10,
-            due: self.now(),
-            dedup: Some(format!("discover:{account}")),
-        };
-        self.enqueue(spec).await
+        self.enqueue(discover_job(rec.tenant, account, self.now()))
+            .await
+    }
+
+    /// Records that the tenant's user is looking at its data (`POST
+    /// /v1/interest`, plan 7.3): the adaptive poll uses the active bounds for
+    /// [`Config::active_for`]. A switch to active queues a sync of every
+    /// collection without an open push channel, due now; a touch while the
+    /// tenant is active queues nothing.
+    pub async fn touch(&self, tenant: TenantId) -> Result<(), EngineError> {
+        let now = self.now();
+        let prev = self
+            .inner
+            .interest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(tenant, now);
+        if prev.is_some_and(|t| after(t, self.inner.config.active_for) > now) {
+            return Ok(());
+        }
+        let channels = self.ctl(move |c| c.channels(tenant, None)).await?;
+        for col in self.collections(tenant).await? {
+            let pushed = channels
+                .iter()
+                .any(|ch| ch.collection == col.id && ch.open().is_some());
+            let scoped = col
+                .status
+                .error
+                .as_ref()
+                .is_some_and(|e| e.message == MISSING_SCOPE);
+            if col.gone || pushed || scoped {
+                continue;
+            }
+            self.enqueue(jobs::sync_job(tenant, col.account, col.id, Lane::Sync, now))
+                .await?;
+        }
+        Ok(())
     }
 
     /// The job a push notification for `collection` enqueues: a delta of the
@@ -286,15 +433,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 .await?;
             // The resume point; due after this call normally finished and deleted it.
             let due = after(self.now(), self.inner.config.lease_for);
-            self.enqueue(JobSpec {
-                tenant: rec.tenant,
-                lane: Lane::Sync,
-                kind: JobKind::Discover { account },
-                priority: 10,
-                due,
-                dedup: Some(format!("discover:{account}")),
-            })
-            .await?;
+            self.enqueue(discover_job(rec.tenant, account, due)).await?;
         }
         self.removal(&rec).await
     }
@@ -304,31 +443,24 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// step finds already gone counts as done.
     pub(crate) async fn removal(&self, rec: &AccountRecord) -> Result<(), EngineError> {
         let (tenant, account) = (rec.tenant, rec.id);
+        let mut cx = None;
         // Under the collection lock: a running job finishes first (including a
-        // channel it opens), and later ones find the collection gone.
+        // channel it opens), and later ones find the collection gone. Its
+        // channels are stopped before the purge, which takes the stored
+        // `push_resource` a lone pending channel is stopped by.
         let cols = self.collections(tenant).await?;
         for col in cols.into_iter().filter(|c| c.account == account) {
             let _lock = self.lock(col.id).lock_owned().await;
+            let mut chs = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
+            chs.retain(|ch| ch.collection == col.id);
+            self.stop_channels(rec, &mut cx, &chs, Some(&col)).await?;
             gone_ok(
                 self.write(tenant, move |s| s.purge_collection(col.id).map(drop))
                     .await,
             )?;
         }
         let channels = self.ctl(move |c| c.channels(tenant, Some(account))).await?;
-        if !channels.is_empty() {
-            match self.cx(account, false).await {
-                Ok(cx) => gone_ok(self.drop_channels(&cx, &channels).await)?,
-                // Without a grant the channels cannot be stopped; they expire.
-                // Any other failure retries the removal, which keeps the tokens.
-                Err(EngineError::Sync(SyncError::ReauthRequired { .. })) => {
-                    tracing::warn!(%account, "no grant to stop push channels with");
-                    for ch in channels {
-                        gone_ok(self.ctl(move |c| c.delete_channel(ch.id())).await)?;
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        }
+        self.stop_channels(rec, &mut cx, &channels, None).await?;
         gone_ok(self.ctl(move |c| c.delete_account(account)).await)?;
         self.inner
             .accounts
@@ -336,6 +468,38 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&account);
         Ok(())
+    }
+
+    /// [`Engine::drop_channels`] for a removal, with the account's context
+    /// made on first use (`cx`). Without a grant the channels cannot be
+    /// stopped and only expire; any other failure retries the removal, which
+    /// keeps the tokens.
+    async fn stop_channels(
+        &self,
+        rec: &AccountRecord,
+        cx: &mut Option<Option<jobs::Cx>>,
+        chs: &[ChannelRecord],
+        col: Option<&musubi_model::store::CollectionState>,
+    ) -> Result<(), EngineError> {
+        if chs.is_empty() {
+            return Ok(());
+        }
+        if cx.is_none() {
+            *cx = Some(match self.cx(rec, false).await {
+                Ok(cx) => Some(cx),
+                Err(EngineError::Sync(
+                    e @ (SyncError::ReauthRequired { .. } | SyncError::Permanent(_)),
+                )) => {
+                    tracing::warn!(account = %rec.id, error = %e, "no grant to stop push channels with");
+                    None
+                }
+                Err(e) => return Err(e),
+            });
+        }
+        gone_ok(
+            self.drop_channels(cx.as_ref().and_then(Option::as_ref), chs, col)
+                .await,
+        )
     }
 
     /// Stops the writer of a deleted tenant, so its store handle (and the
@@ -487,6 +651,17 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         self.inner.clock.now()
     }
 
+    /// The occurrence index bounds of a decode now.
+    fn index(&self) -> ingest::Index {
+        let c = &self.inner.config;
+        let now = self.now();
+        ingest::Index {
+            horizon: after(now, c.index_forward),
+            fallback: after(now, c.window_forward),
+            limit: c.index_row_limit,
+        }
+    }
+
     async fn enqueue(&self, spec: JobSpec) -> Result<(), EngineError> {
         let (lane, due) = (spec.lane, spec.due);
         self.ctl(move |c| c.enqueue(&spec).map(drop)).await?;
@@ -629,6 +804,18 @@ fn gone_ok(r: Result<(), EngineError>) -> Result<(), EngineError> {
     }
 }
 
+/// The account's discovery job, due at `due`; runs before its collections'.
+fn discover_job(tenant: TenantId, account: AccountId, due: Timestamp) -> JobSpec {
+    JobSpec {
+        tenant,
+        lane: Lane::Sync,
+        kind: JobKind::Discover { account },
+        priority: 10,
+        due,
+        dedup: Some(format!("discover:{account}")),
+    }
+}
+
 fn sync_dedup(collection: CollectionId) -> String {
     format!("sync:{collection}")
 }
@@ -681,9 +868,13 @@ mod tests {
                 }
             })
         };
-        let engine: Engine<SqliteStorage, CanonicalCodec> = Engine::new(
+        let codecs = Codecs {
+            event: Some(DecodeFn::of::<CanonicalCodec>()),
+            ..Codecs::default()
+        };
+        let engine: Engine<SqliteStorage> = Engine::new(
             storage.clone(),
-            Arc::new(FakeProvider::new()),
+            Providers::new().with(Arc::new(FakeProvider::new()), codecs),
             control,
             Arc::new(MemoryVault::default()),
             Arc::new(ManualClock::new(Timestamp::now())),

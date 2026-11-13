@@ -2,12 +2,14 @@
 //! state machine, push channels and the occurrence index horizon.
 
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use jiff::Timestamp;
+use musubi_model::capability::{DeltaSupport, PushSupport};
 use musubi_model::control::{
     AccountRecord, AccountState, AccountTokens, ChannelRecord, ChannelState, Credentials, Job,
     JobKind, JobSpec, Lane,
@@ -21,11 +23,31 @@ use musubi_model::store::{
     OccurrenceWrite, PageWrite, SeriesExtension,
 };
 use musubi_model::{
-    AccountId, ChangePage, Codec, CollectionId, Cursor, EntityKind, Event, ReadId, ReauthReason,
-    RemoteKey, Seq, Storage, SyncError, TenantId, TenantStore, TimeWindow,
+    AccountId, ChangePage, CollectionId, Cursor, Provider, ReadId, ReauthReason, RemoteKey,
+    RemoteObject, Seq, Storage, SyncError, TenantId, TenantStore, TimeWindow,
+};
+use secrecy::SecretString;
+use tokio::sync::Semaphore;
+
+use crate::{
+    AccountRt, Codecs, CollectionRt, Engine, EngineError, MISSING_SCOPE, after, blocking,
+    discover_job, gone_ok, ingest, sync_dedup,
 };
 
-use crate::{AccountRt, CollectionRt, Engine, EngineError, after, blocking, ingest, sync_dedup};
+/// An account's provider context: the adapter's [`AccountCx`] with the
+/// account's provider instance and its codecs.
+pub(crate) struct Cx {
+    cx: AccountCx,
+    pub(crate) provider: Arc<dyn Provider>,
+    codecs: Codecs,
+}
+
+impl Deref for Cx {
+    type Target = AccountCx;
+    fn deref(&self) -> &AccountCx {
+        &self.cx
+    }
+}
 
 /// What becomes of a job after it ran.
 pub(crate) enum Outcome {
@@ -55,13 +77,17 @@ const BACKOFF_CAP: Duration = Duration::from_secs(3600);
 const PUSH_RETRY: Duration = Duration::from_secs(86_400);
 /// How long a collection stays full-read-only before a delta is tried again.
 const DELTA_RETRY: Duration = Duration::from_secs(86_400);
+/// Refs per [`Provider::fetch`] call when the provider sets no `max_batch`.
+const FETCH_BATCH: u32 = 100;
+/// Prefix of the synthetic validator of a server without ETags (plan 3.3).
+const HASH_VALIDATOR: &str = "musubi:sha256:";
 
 /// `base` doubled `n` times, at most [`BACKOFF_CAP`].
 fn backoff(base: Duration, n: u32) -> Duration {
     base.saturating_mul(1 << n.min(12)).min(BACKOFF_CAP)
 }
 
-impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
+impl<S: Storage + 'static> Engine<S> {
     pub(crate) async fn run_job(&self, job: &Job) -> Outcome {
         let (account, work) = match &job.spec.kind {
             JobKind::Discover { account } => (*account, Work::Discover),
@@ -120,7 +146,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         if !runnable {
             return Outcome::Done;
         }
-        if let Some(until) = self.rt(account).blocked_until
+        if let Some(until) = self.rt(&rec).blocked_until
             && until > self.now()
         {
             return Outcome::Retry {
@@ -139,11 +165,34 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 count: false,
             };
         };
-        let res = match self.cx(account, false).await {
+        // `max_concurrency_per_account` (plan 7.4): over it, back in a second.
+        let running = match work {
+            Work::Renew(_) => None,
+            _ => self.rt(&rec).running,
+        };
+        let _slot = match running.map(Semaphore::try_acquire_owned) {
+            Some(Err(_)) => {
+                return Outcome::Retry {
+                    due: after(self.now(), BUSY_WAIT),
+                    count: false,
+                };
+            }
+            slot => slot,
+        };
+        let res = match self.cx(&rec, false).await {
             Ok(cx) => match self.work(&rec, &cx, job, &work).await {
+                // Without OAuth there is nothing to refresh.
+                Err(EngineError::Sync(SyncError::Unauthorized))
+                    if cx.provider.oauth().is_none() =>
+                {
+                    Err(SyncError::ReauthRequired {
+                        reason: ReauthReason::Rejected,
+                    }
+                    .into())
+                }
                 // The access token was revoked early: refresh once and run again.
                 Err(EngineError::Sync(SyncError::Unauthorized)) => {
-                    match self.cx(account, true).await {
+                    match self.cx(&rec, true).await {
                         Ok(cx) => self.work(&rec, &cx, job, &work).await,
                         Err(e) => Err(e),
                     }
@@ -154,7 +203,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         };
         match res {
             Ok(()) => {
-                self.with_rt(account, |rt| rt.unauthorized = false);
+                self.with_rt(&rec, |rt| rt.unauthorized = false);
                 Outcome::Done
             }
             Err(e) => self.failed(job, &rec, &work, e).await,
@@ -164,7 +213,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn work(
         &self,
         rec: &AccountRecord,
-        cx: &AccountCx,
+        cx: &Cx,
         job: &Job,
         work: &Work,
     ) -> Result<(), EngineError> {
@@ -184,14 +233,14 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             // `Unauthorized` right after a refresh may be a provider hiccup:
             // one counted retry before the user is asked to sign in again.
             EngineError::Sync(SyncError::Unauthorized)
-                if !self.with_rt(rec.id, |rt| std::mem::replace(&mut rt.unauthorized, true)) =>
+                if !self.with_rt(rec, |rt| std::mem::replace(&mut rt.unauthorized, true)) =>
             {
                 self.record_error(rec.tenant, col, e.to_string(), false)
                     .await;
                 self.retry(job, e)
             }
             EngineError::Sync(SyncError::ReauthRequired { .. } | SyncError::Unauthorized) => {
-                self.with_rt(rec.id, |rt| rt.unauthorized = false);
+                self.with_rt(rec, |rt| rt.unauthorized = false);
                 tracing::warn!(account = %rec.id, "account requires sign-in");
                 let id = rec.id;
                 match self
@@ -204,10 +253,36 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             }
             EngineError::Sync(SyncError::RateLimited { retry_after }) => {
                 let until = after(self.now(), retry_after.unwrap_or(RATE_LIMIT_WAIT));
-                self.with_rt(rec.id, |rt| rt.blocked_until = Some(until));
+                self.with_rt(rec, |rt| rt.blocked_until = Some(until));
                 Outcome::Retry {
                     due: until,
                     count: false,
+                }
+            }
+            // Not retried until a discovery finds the kind authorised again.
+            EngineError::Sync(SyncError::MissingScope { kind }) => {
+                tracing::warn!(collection = ?col, %kind, "missing permission; rediscovering");
+                self.record_error(rec.tenant, col, MISSING_SCOPE.into(), true)
+                    .await;
+                match self
+                    .enqueue(discover_job(rec.tenant, rec.id, self.now()))
+                    .await
+                {
+                    Ok(()) => Outcome::Done,
+                    Err(e) => self.retry(job, e),
+                }
+            }
+            // The collection's address changed: rediscover first (it runs
+            // first by its priority), then this job.
+            EngineError::Sync(SyncError::Rediscover) if !matches!(work, Work::Discover) => {
+                tracing::info!(collection = ?col, "collection moved; rediscovering");
+                let now = self.now();
+                match self.enqueue(discover_job(rec.tenant, rec.id, now)).await {
+                    Ok(()) => Outcome::Retry {
+                        due: after(now, BUSY_WAIT),
+                        count: false,
+                    },
+                    Err(e) => self.retry(job, e),
                 }
             }
             EngineError::Sync(SyncError::Permanent(err)) => {
@@ -268,14 +343,16 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         }
     }
 
-    /// The account's provider context. OAuth: refreshes the access token when
-    /// it is about to expire or `force` is set, if the provider has
-    /// [`musubi_model::Provider::oauth`]. Basic credentials are used as they are.
-    pub(crate) async fn cx(
-        &self,
-        account: AccountId,
-        force: bool,
-    ) -> Result<AccountCx, EngineError> {
+    /// The account's provider context with its stored endpoint. OAuth:
+    /// refreshes the access token when it is about to expire or `force` is
+    /// set, if the provider has [`musubi_model::Provider::oauth`]. Basic
+    /// credentials are used as they are.
+    pub(crate) async fn cx(&self, rec: &AccountRecord, force: bool) -> Result<Cx, EngineError> {
+        let Some((provider, codecs)) = self.inner.providers.get(&rec.provider).cloned() else {
+            let msg = format!("no provider `{}` registered", rec.provider.0);
+            return Err(SyncError::Permanent(msg.into()).into());
+        };
+        let account = rec.id;
         let vault = self.inner.vault.clone();
         let creds =
             blocking(move || Ok(vault.load(account)?))
@@ -285,28 +362,35 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 })?;
         let credential = match creds {
             Credentials::OAuth(tokens) => {
-                Credential::Bearer(self.access(account, tokens, force).await?)
+                Credential::Bearer(self.access(&*provider, account, tokens, force).await?)
             }
             Credentials::Basic { username, password } => Credential::Basic { username, password },
             _ => return Err(SyncError::Permanent("unsupported credentials".into()).into()),
         };
-        Ok(AccountCx::new(
+        let mut cx = AccountCx::new(
             account,
             credential,
-            self.rt(account).limiter,
+            self.rt(rec).limiter,
             self.inner.clock.clone(),
-        ))
+        );
+        cx.endpoint = self.ctl(move |c| c.endpoint(account)).await?;
+        Ok(Cx {
+            cx,
+            provider,
+            codecs,
+        })
     }
 
     /// A usable access token: `tokens.access`, or a refreshed one stored first.
     async fn access(
         &self,
+        provider: &dyn Provider,
         account: AccountId,
         tokens: AccountTokens,
         force: bool,
     ) -> Result<secrecy::SecretString, EngineError> {
         let now = self.now();
-        let Some(oauth) = self.inner.provider.oauth() else {
+        let Some(oauth) = provider.oauth() else {
             return Ok(tokens.access);
         };
         if !force && tokens.access_until > after(now, REFRESH_EARLY) {
@@ -324,8 +408,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         Ok(access)
     }
 
-    fn rt(&self, account: AccountId) -> AccountRt {
-        self.with_rt(account, |rt| rt.clone())
+    fn rt(&self, rec: &AccountRecord) -> AccountRt {
+        self.with_rt(rec, |rt| rt.clone())
     }
 
     fn with_col<R>(&self, id: CollectionId, f: impl FnOnce(&mut CollectionRt) -> R) -> R {
@@ -337,38 +421,77 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         f(map.entry(id).or_default())
     }
 
-    fn with_rt<R>(&self, account: AccountId, f: impl FnOnce(&mut AccountRt) -> R) -> R {
+    /// The account's in-memory state, made with its provider's limits.
+    fn with_rt<R>(&self, rec: &AccountRecord, f: impl FnOnce(&mut AccountRt) -> R) -> R {
         let mut map = self
             .inner
             .accounts
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let rt = map.entry(account).or_insert_with(|| AccountRt {
-            limiter: Arc::new(Pacer::new(
-                self.inner.provider.descriptor().limits.requests_per_minute,
-            )),
-            blocked_until: None,
-            unauthorized: false,
+        let rt = map.entry(rec.id).or_insert_with(|| {
+            let limits = self
+                .inner
+                .providers
+                .get(&rec.provider)
+                .map(|(p, _)| p.descriptor().limits);
+            let limit = |f: fn(&musubi_model::capability::Limits) -> Option<u32>| {
+                limits.as_ref().and_then(f)
+            };
+            AccountRt {
+                limiter: Arc::new(Pacer::new(limit(|l| l.requests_per_minute))),
+                running: limit(|l| l.max_concurrency_per_account)
+                    .map(|n| Arc::new(Semaphore::new(n.max(1) as usize))),
+                blocked_until: None,
+                unauthorized: false,
+            }
         });
         f(rt)
     }
 
-    async fn discover(&self, rec: &AccountRecord, cx: &AccountCx) -> Result<(), EngineError> {
+    async fn discover(&self, rec: &AccountRecord, cx: &Cx) -> Result<(), EngineError> {
         let (tenant, account) = (rec.tenant, rec.id);
-        let (collections, complete) = match self.inner.provider.discover(cx).await {
-            Ok(d) => (d.collections, true),
-            // A partial listing only adds and updates: a missing calendar is not gone.
-            Err(SyncError::PartialDiscovery { found, source }) => {
-                tracing::warn!(%account, error = %source, "partial discovery");
-                (found, false)
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let (mut collections, complete, unauthorized, endpoint) =
+            match cx.provider.discover(cx).await {
+                Ok(d) => (d.collections, true, d.unauthorized, d.endpoint),
+                // A partial listing only adds and updates: a missing calendar
+                // is not gone, and no missing permission is cleared.
+                Err(SyncError::PartialDiscovery { found, source }) => {
+                    tracing::warn!(%account, error = %source, "partial discovery");
+                    (
+                        found,
+                        false,
+                        self.ctl(move |c| c.missing(account)).await?,
+                        None,
+                    )
+                }
+                Err(e) => return Err(e.into()),
+            };
         // Under the account lock the state cannot become `Removing` meanwhile:
         // `remove_account` waits for it.
         let state = self.account(account).await?.map(|r| r.state);
         if !matches!(state, Some(AccountState::Active | AccountState::Connecting)) {
             return Ok(());
+        }
+        if let Some(e) = endpoint {
+            self.ctl(move |c| c.set_endpoint(account, &e)).await?;
+        }
+        let stored: Vec<_> = self
+            .collections(tenant)
+            .await?
+            .into_iter()
+            .filter(|c| c.account == account)
+            .collect();
+        if complete {
+            // Collections of a kind without permission are absent from the
+            // listing but not gone (plan 3.5).
+            for col in &stored {
+                if !col.gone
+                    && unauthorized.contains(&col.remote.kind)
+                    && !collections.iter().any(|c| c.remote == col.remote.remote)
+                {
+                    collections.push(col.remote.clone());
+                }
+            }
         }
         let d = DiscoveryWrite {
             account,
@@ -376,6 +499,10 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             complete,
         };
         self.write(tenant, move |s| s.apply_discovery(&d)).await?;
+        if complete {
+            let kinds = unauthorized.clone();
+            self.ctl(move |c| c.set_missing(account, &kinds)).await?;
+        }
         let cols: Vec<_> = self
             .collections(tenant)
             .await?
@@ -387,29 +514,35 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             let Ok(_lock) = self.lock(col.id).try_lock_owned() else {
                 continue;
             };
-            self.drop_collection(tenant, cx, col.id).await?;
+            self.drop_collection(tenant, cx, col).await?;
         }
         if state == Some(AccountState::Connecting) {
             self.ctl(move |c| c.set_account_state(account, AccountState::Active))
                 .await?;
         }
         let now = self.now();
-        for col in cols
-            .iter()
-            .filter(|c| !c.gone && c.remote.kind == EntityKind::Event)
-        {
+        for col in cols.iter().filter(|c| !c.gone) {
+            let scoped = col
+                .status
+                .error
+                .as_ref()
+                .is_some_and(|e| e.message == MISSING_SCOPE);
+            // Without permission, or not known to have it back: not retried.
+            if unauthorized.contains(&col.remote.kind) || (scoped && !complete) {
+                continue;
+            }
+            if scoped {
+                self.set_status(tenant, col.id, |s| s.error = None).await?;
+            }
             self.enqueue(sync_job(tenant, account, col.id, Lane::Sync, now))
                 .await?;
         }
         let c = &self.inner.config;
-        self.enqueue(JobSpec {
+        self.enqueue(discover_job(
             tenant,
-            lane: Lane::Sync,
-            kind: JobKind::Discover { account },
-            priority: 10,
-            due: after(now, c.rediscover_every),
-            dedup: Some(format!("discover:{account}")),
-        })
+            account,
+            after(now, c.rediscover_every),
+        ))
         .await?;
         self.enqueue(JobSpec {
             tenant,
@@ -425,11 +558,12 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn drop_collection(
         &self,
         tenant: TenantId,
-        cx: &AccountCx,
-        id: CollectionId,
+        cx: &Cx,
+        col: &CollectionState,
     ) -> Result<(), EngineError> {
+        let id = col.id;
         let channels = self.collection_channels(tenant, cx.account, id).await?;
-        self.drop_channels(cx, &channels).await?;
+        self.drop_channels(Some(cx), &channels, Some(col)).await?;
         self.write(tenant, move |s| s.purge_collection(id)).await?;
         Ok(())
     }
@@ -449,11 +583,14 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// Stops push channels at the provider (best effort) and forgets them.
     /// A pending one is stopped by its id with the resource of an open channel
     /// of its collection in `chs` (Google accepts any watch's resource id of
-    /// the calendar); without one it is only forgotten and expires there.
+    /// the calendar), else with `col`'s stored
+    /// [`CollectionState::push_resource`]; without either, or without `cx`
+    /// (an account that cannot sign in), it is only forgotten and expires there.
     pub(crate) async fn drop_channels(
         &self,
-        cx: &AccountCx,
+        cx: Option<&Cx>,
         chs: &[ChannelRecord],
+        col: Option<&CollectionState>,
     ) -> Result<(), EngineError> {
         // Pending rows first: they borrow an open row's resource, so a crash
         // between the two must not leave a pending row behind alone.
@@ -465,9 +602,21 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     .iter()
                     .filter(|o| o.collection == ch.collection)
                     .find_map(ChannelRecord::open)
-                    .map(|known| pending_sub(id, known)),
+                    .map(|known| pending_sub(id, known))
+                    .or_else(|| {
+                        let col = col.filter(|c| c.id == ch.collection)?;
+                        let resource = col.push_resource.clone()?;
+                        Some(Subscription::new(
+                            id.clone(),
+                            col.remote.remote.clone(),
+                            resource,
+                            SecretString::from(String::new()),
+                            self.now(),
+                        ))
+                    }),
             };
-            if let (Some(push), Some(sub)) = (self.inner.provider.push(), sub)
+            if let (Some(cx), Some(sub)) = (cx, sub)
+                && let Some(push) = cx.provider.push()
                 && let Err(e) = push.unsubscribe(cx, &sub).await
             {
                 tracing::warn!(channel = %sub.channel.0, error = %e, "unsubscribe failed");
@@ -483,7 +632,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// be stopped now stays for the next try.
     async fn stop_pending(
         &self,
-        cx: &AccountCx,
+        cx: &Cx,
         push: &dyn PushSource,
         chs: &[ChannelRecord],
         known: &Subscription,
@@ -514,7 +663,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// refusal the new row is removed. The caller stores the open channel.
     async fn open_channel(
         &self,
-        cx: &AccountCx,
+        cx: &Cx,
         push: &dyn PushSource,
         callback: &http::Uri,
         tenant: TenantId,
@@ -531,7 +680,17 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         self.ctl(move |c| c.put_channel(&pending)).await?;
         let res = push.subscribe(cx, &col.remote.remote, callback, &id).await;
         match &res {
-            Ok(sub) => self.stop_pending(cx, push, chs, sub).await?,
+            Ok(sub) => {
+                // Kept for stopping a lone pending channel later (plan ch. 10 item 3).
+                if col.push_resource.as_deref() != Some(sub.resource.as_str()) {
+                    let (cid, resource) = (col.id, sub.resource.clone());
+                    gone_ok(
+                        self.write(tenant, move |s| s.set_push_resource(cid, &resource))
+                            .await,
+                    )?;
+                }
+                self.stop_pending(cx, push, chs, sub).await?
+            }
             // Refused or not tried: no channel was made.
             Err(
                 SyncError::Permanent(_)
@@ -554,7 +713,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn sync(
         &self,
         rec: &AccountRecord,
-        cx: &AccountCx,
+        cx: &Cx,
         id: CollectionId,
         lane: Lane,
     ) -> Result<(), EngineError> {
@@ -562,13 +721,13 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         let Some(col) = self.collection(tenant, id).await? else {
             return Ok(());
         };
-        if col.gone || col.remote.kind != EntityKind::Event {
+        if col.gone {
             return Ok(());
         }
         let background = lane == Lane::Background;
         if let Some(r) = col.active_read {
             if col.read_complete {
-                return self.finish(rec, cx, &col, r).await;
+                return self.finish(rec, cx, &col, r, true).await;
             }
             if !background {
                 return self.ensure_full(tenant, rec.id, id).await;
@@ -580,14 +739,14 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 Err(EngineError::Sync(SyncError::CursorExpired)) => {
                     self.full_read(tenant, cx, &col).await?
                 }
-                res => res.map(|()| r)?,
+                res => res.map(|_| r)?,
             };
-            return self.finish(rec, cx, &col, r).await;
+            return self.finish(rec, cx, &col, r, true).await;
         }
         let wants_full = col.cursor.is_none() || col.status.coverage != Coverage::Full;
         if background && wants_full {
             let r = self.full_read(tenant, cx, &col).await?;
-            return self.finish(rec, cx, &col, r).await;
+            return self.finish(rec, cx, &col, r, true).await;
         }
         // A background job with no full read left is one whose finish
         // committed before a crash took its `synced`: the delta below
@@ -601,7 +760,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         // A full-read-only collection skips the delta its provider would
         // refuse, until `DELTA_RETRY` has passed and a delta is tried again.
         let now = self.now();
-        let full_only = |rt: &CollectionRt| rt.full_only_until.is_some_and(|t| t > now);
+        let no_delta = delta_support(&*cx.provider, &col) == Some(DeltaSupport::None);
+        let full_only = |rt: &CollectionRt| no_delta || rt.full_only_until.is_some_and(|t| t > now);
         let res = match self.with_col(id, |rt| full_only(rt)) {
             true => Err(EngineError::Sync(SyncError::CursorExpired)),
             false => {
@@ -635,12 +795,13 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                     }
                 }
                 let r = self.full_read(tenant, cx, &col).await?;
-                self.finish(rec, cx, &col, r).await
+                self.finish(rec, cx, &col, r, true).await
             }
-            res => {
-                res?;
-                self.synced(rec, cx, &col, false).await
-            }
+            // The delta listed the whole collection (`Pass::Full`, a ctag
+            // change): what it did not list is gone, as after a full read.
+            Ok(Some(r)) => self.finish(rec, cx, &col, r, false).await,
+            Ok(None) => self.synced(rec, cx, &col, false).await,
+            Err(e) => Err(e),
         }
     }
 
@@ -649,7 +810,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn window_read(
         &self,
         tenant: TenantId,
-        cx: &AccountCx,
+        cx: &Cx,
         col: &CollectionState,
     ) -> Result<(), EngineError> {
         let now = self.now();
@@ -668,7 +829,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn full_read(
         &self,
         tenant: TenantId,
-        cx: &AccountCx,
+        cx: &Cx,
         col: &CollectionState,
     ) -> Result<ReadId, EngineError> {
         let last = col.active_read.max(col.last_read).map_or(0, |r| r.0);
@@ -679,6 +840,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 
     /// Reads pages until the provider's last one; one transaction per page.
+    /// Returns the read the pages were part of: `read`, or a new one started
+    /// by a delta whose pages turned out a full listing (`Pass::Full`).
     ///
     /// shortcut: no pipelining, the next page is requested only after the
     /// previous one committed; overlap fetch and commit once full reads of
@@ -686,65 +849,91 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn read_pass(
         &self,
         tenant: TenantId,
-        cx: &AccountCx,
+        cx: &Cx,
         col: &CollectionState,
         cursor: Option<Cursor>,
         start: Start,
-        read: Option<ReadId>,
-    ) -> Result<(), EngineError> {
+        mut read: Option<ReadId>,
+    ) -> Result<Option<ReadId>, EngineError> {
         let mut hint = FetchHint::new(start);
         hint.page_size = self.inner.config.page_size;
-        let mut pages = self
-            .inner
-            .provider
-            .changes(cx, &col.remote.remote, cursor, hint);
+        let mut pages = cx.provider.changes(cx, &col.remote.remote, cursor, hint);
         while let Some(page) = pages.next().await {
             let page = page?;
+            if read.is_none() && page.pass == Pass::Full {
+                let last = col.active_read.max(col.last_read).map_or(0, |r| r.0);
+                read = Some(ReadId(last + 1));
+            }
             let last = page.last;
-            self.ingest(tenant, col.id, page, read).await?;
+            self.ingest(tenant, cx, col, page, read).await?;
             if last {
                 break;
             }
         }
-        Ok(())
+        Ok(read)
     }
 
-    /// Decodes and expands a page off the runtime, then commits it.
+    /// Fetches the page's changed stubs (plan 3.4), decodes and expands the
+    /// page off the runtime, then commits it with its cursor.
     async fn ingest(
         &self,
         tenant: TenantId,
-        id: CollectionId,
+        cx: &Cx,
+        col: &CollectionState,
         page: ChangePage,
         read: Option<ReadId>,
     ) -> Result<Seq, EngineError> {
         let ChangePage {
             pass,
-            upserts,
+            mut upserts,
             stubs,
             removals,
             cursor,
             last,
             ..
         } = page;
-        if !stubs.is_empty() {
-            // shortcut: no provider of phase 1 lists stubs; K5 fetches their bodies.
-            let msg = "pages with stubs are not supported yet";
-            return Err(SyncError::Permanent(msg.into()).into());
-        }
-        let c = &self.inner.config;
-        let now = self.now();
-        let index = ingest::Index {
-            horizon: after(now, c.index_forward),
-            fallback: after(now, c.window_forward),
-            limit: c.index_row_limit,
-        };
+        let id = col.id;
+        let hashed = upserts
+            .iter()
+            .map(|o| &o.validator)
+            .chain(stubs.iter().filter_map(|s| s.validator.as_ref()))
+            .any(|v| v.0.starts_with(HASH_VALIDATOR));
+        let index = self.index();
         let storage = self.inner.storage.clone();
-        let (upserts, unchanged) = blocking(move || {
-            let keys: Vec<RemoteKey> = upserts.iter().map(|o| o.key.clone()).collect();
-            let known = storage.open(tenant)?.items_by_remote(id, &keys)?;
-            Ok(ingest::prepare::<C>(upserts, known, index))
-        })
-        .await?;
+        let keys: Vec<RemoteKey> = upserts
+            .iter()
+            .map(|o| o.key.clone())
+            .chain(stubs.iter().map(|s| s.key.clone()))
+            .collect();
+        let known = blocking(move || Ok(storage.open(tenant)?.items_by_remote(id, &keys)?)).await?;
+        let mut unchanged = Vec::new();
+        let mut refs = Vec::new();
+        for stub in stubs {
+            // An equal validator is unchanged whatever its versions: a stale
+            // view is the re-decode's job, not a reason to download.
+            let same = known.iter().any(|v| {
+                v.key == stub.key && !v.tombstone && stub.validator.as_ref() == Some(&v.validator)
+            });
+            match same {
+                true => unchanged.push(stub.key),
+                false => refs.push(RemoteRef {
+                    collection: col.remote.remote.clone(),
+                    key: stub.key,
+                }),
+            }
+        }
+        // An object `fetch` does not return was deleted since the listing:
+        // absence removes it after a full read, the next delta otherwise.
+        upserts.extend(self.fetch(cx, refs).await?);
+        let codecs = cx.codecs;
+        let (upserts, more) =
+            blocking(move || Ok(ingest::prepare(upserts, known, &codecs, index))).await?;
+        unchanged.extend(more);
+        let changed = !upserts.is_empty() || !removals.is_empty();
+        self.with_col(id, |rt| {
+            rt.changed |= changed;
+            rt.hashed |= hashed;
+        });
         let w = PageWrite {
             collection: id,
             pass,
@@ -764,12 +953,16 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn finish(
         &self,
         rec: &AccountRecord,
-        cx: &AccountCx,
+        cx: &Cx,
         col: &CollectionState,
         r: ReadId,
+        full: bool,
     ) -> Result<(), EngineError> {
         let (tenant, id) = (rec.tenant, col.id);
         let missing = self.read(tenant, move |s| s.unseen_count(id, r)).await?;
+        if missing > 0 {
+            self.with_col(id, |rt| rt.changed = true);
+        }
         let batch = self.inner.config.guard_batch.max(1);
         if missing > self.inner.config.guard_threshold {
             tracing::info!(collection = %id, missing, "verifying missing items before deletion");
@@ -789,11 +982,11 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                         key,
                     })
                     .collect();
-                let found = self.inner.provider.fetch(cx, &refs).await?;
+                let found = self.fetch(cx, refs).await?;
                 if !found.is_empty() {
                     let mut page = ChangePage::new(Pass::Full, None, false);
                     page.upserts = found;
-                    self.ingest(tenant, id, page, Some(r)).await?;
+                    self.ingest(tenant, cx, col, page, Some(r)).await?;
                 }
                 if !more {
                     break;
@@ -803,7 +996,22 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         }
         self.write(tenant, move |s| s.finish_full_read(id, r))
             .await?;
-        self.synced(rec, cx, col, true).await
+        self.synced(rec, cx, col, full).await
+    }
+
+    /// [`Provider::fetch`] in calls of at most `limits.max_batch` refs.
+    async fn fetch(&self, cx: &Cx, refs: Vec<RemoteRef>) -> Result<Vec<RemoteObject>, EngineError> {
+        let batch = cx
+            .provider
+            .descriptor()
+            .limits
+            .max_batch
+            .unwrap_or(FETCH_BATCH);
+        let mut out = Vec::new();
+        for chunk in refs.chunks(batch.max(1) as usize) {
+            out.extend(cx.provider.fetch(cx, chunk).await?);
+        }
+        Ok(out)
     }
 
     /// Records a successful sync, makes sure a push channel exists and
@@ -811,21 +1019,27 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn synced(
         &self,
         rec: &AccountRecord,
-        cx: &AccountCx,
+        cx: &Cx,
         col: &CollectionState,
         full: bool,
     ) -> Result<(), EngineError> {
         let now = self.now();
         let c = &self.inner.config;
-        let (full_reads, full_only) = self.with_col(col.id, |rt| {
+        let no_delta = delta_support(&*cx.provider, col) == Some(DeltaSupport::None);
+        let (full_reads, full_only, quiet, hashed) = self.with_col(col.id, |rt| {
             rt.full_reads = if full { rt.full_reads + 1 } else { 0 };
             if !full {
                 // A delta worked: the cursor is usable again.
                 rt.full_only_until = None;
             }
+            rt.quiet = match std::mem::take(&mut rt.changed) {
+                true => 0,
+                false => rt.quiet.saturating_add(1),
+            };
             // Full-read-only until a delta works, also once the retry is due:
             // the read that ends past it is no reason to back off.
-            (rt.full_reads, rt.full_only_until.is_some())
+            let full_only = no_delta || rt.full_only_until.is_some();
+            (rt.full_reads, full_only, rt.quiet, rt.hashed)
         });
         // A third full read without a delta between, on a collection not
         // known to be full-read-only: a guard against a cursor that keeps
@@ -853,22 +1067,59 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
         })
         .await?;
         let push = self.ensure_channel(rec, cx, col).await?;
+        let adaptive = || self.adaptive(rec.tenant, quiet, hashed);
         let every = match push {
             _ if let Some(wait) = backed_off => wait,
             // No catch-up delta: each sync of such a collection is a full read.
             Push::Existing if full_only => c.poll_every_push,
-            _ if full_only => c.poll_every,
+            _ if full_only => adaptive(),
             // A full read ends at its own snapshot, and a sync job arriving
             // during it only deferred to it; a new channel missed what changed
             // before it existed. One delta now picks both up.
             _ if full => crate::COALESCE,
             Push::Opened => crate::COALESCE,
             Push::Existing => c.poll_every_push,
-            Push::None => c.poll_every,
+            Push::None => adaptive(),
         };
         let mut job = sync_job(rec.tenant, rec.id, col.id, Lane::Sync, now);
         job.due = after(now, every);
         self.enqueue(job).await
+    }
+
+    /// The adaptive poll interval of a collection without push (plan 7.2):
+    /// `min · 2^quiet` within the bounds of the tenant's interest, ±10 %.
+    fn adaptive(&self, tenant: TenantId, quiet: u32, hashed: bool) -> Duration {
+        let c = &self.inner.config;
+        let now = self.now();
+        let touched = self
+            .inner
+            .interest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&tenant)
+            .copied();
+        let bounds = match touched {
+            // Every read of such a collection downloads every body.
+            _ if hashed => c.poll_normal,
+            Some(t) if after(t, c.active_for) > now => c.poll_active,
+            // Interest before a restart is unknown: it counts from the start.
+            t => {
+                let since = t.map_or(self.inner.started, |t| t.max(self.inner.started));
+                match after(since, c.sleep_after) <= now {
+                    true => c.poll_sleeping,
+                    false => c.poll_normal,
+                }
+            }
+        };
+        let base = bounds
+            .min
+            .saturating_mul(1 << quiet.min(20))
+            .min(bounds.max)
+            .max(bounds.min);
+        use std::hash::BuildHasher;
+        let r = std::hash::RandomState::new().hash_one(());
+        let f = (r % 2001) as f64 / 1000.0 - 1.0;
+        base.mul_f64(1.0 + 0.1 * f)
     }
 
     async fn ensure_full(
@@ -887,14 +1138,15 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     async fn ensure_channel(
         &self,
         rec: &AccountRecord,
-        cx: &AccountCx,
+        cx: &Cx,
         col: &CollectionState,
     ) -> Result<Push, EngineError> {
-        let (Some(push), Some(callback)) =
-            (self.inner.provider.push(), &self.inner.config.callback)
-        else {
+        let (Some(push), Some(callback)) = (cx.provider.push(), &self.inner.config.callback) else {
             return Ok(Push::None);
         };
+        if push_support(&*cx.provider, col) == Some(PushSupport::None) {
+            return Ok(Push::None);
+        }
         let (tenant, account, id) = (rec.tenant, rec.id, col.id);
         let channels = self.collection_channels(tenant, account, id).await?;
         if let Some(open) = channels.iter().find_map(ChannelRecord::open) {
@@ -937,7 +1189,7 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     /// being opened).
     async fn put_channel(
         &self,
-        cx: &AccountCx,
+        cx: &Cx,
         tenant: TenantId,
         collection: CollectionId,
         sub: Subscription,
@@ -951,7 +1203,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             state: ChannelState::Open(sub.clone()),
         };
         if !matches!(state, Some(AccountState::Active | AccountState::Connecting)) {
-            self.drop_channels(cx, std::slice::from_ref(&ch)).await?;
+            self.drop_channels(Some(cx), std::slice::from_ref(&ch), None)
+                .await?;
             return Ok(false);
         }
         let now = self.now();
@@ -975,9 +1228,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 
     /// Replaces a channel before it expires, then stops the old one.
-    async fn renew(&self, cx: &AccountCx, old: &ChannelRecord) -> Result<(), EngineError> {
-        if let (Some(push), Some(callback)) =
-            (self.inner.provider.push(), &self.inner.config.callback)
+    async fn renew(&self, cx: &Cx, old: &ChannelRecord) -> Result<(), EngineError> {
+        if let (Some(push), Some(callback)) = (cx.provider.push(), &self.inner.config.callback)
             && let Some(col) = self.collection(old.tenant, old.collection).await?
             && !col.gone
         {
@@ -994,7 +1246,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
                 // long after Google's has expired.
                 Err(SyncError::Permanent(e)) => {
                     self.refuse_push(col.id, &e);
-                    self.drop_channels(cx, std::slice::from_ref(old)).await?;
+                    self.drop_channels(Some(cx), std::slice::from_ref(old), Some(&col))
+                        .await?;
                     let now = self.now();
                     return self
                         .enqueue(sync_job(old.tenant, old.account, col.id, Lane::Sync, now))
@@ -1005,7 +1258,8 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
             self.put_channel(cx, old.tenant, old.collection, sub)
                 .await?;
         }
-        self.drop_channels(cx, std::slice::from_ref(old)).await
+        self.drop_channels(Some(cx), std::slice::from_ref(old), None)
+            .await
     }
 
     /// Moves the occurrence index horizon of the tenant's series forward.
@@ -1125,6 +1379,28 @@ impl<S: Storage + 'static, C: Codec<Event> + 'static> Engine<S, C> {
     }
 }
 
+/// The collection's delta support: its own, else its kind's default.
+fn delta_support(provider: &dyn Provider, col: &CollectionState) -> Option<DeltaSupport> {
+    col.remote.delta.or_else(|| {
+        let d = provider.descriptor();
+        d.kinds
+            .iter()
+            .find(|k| k.kind == col.remote.kind)
+            .map(|k| k.delta)
+    })
+}
+
+/// The collection's push support: its own, else its kind's default.
+fn push_support(provider: &dyn Provider, col: &CollectionState) -> Option<PushSupport> {
+    col.remote.push.or_else(|| {
+        let d = provider.descriptor();
+        d.kinds
+            .iter()
+            .find(|k| k.kind == col.remote.kind)
+            .map(|k| k.push)
+    })
+}
+
 /// A collection's push channel after [`Engine::ensure_channel`].
 enum Push {
     /// None: the collection is polled.
@@ -1135,7 +1411,7 @@ enum Push {
     Opened,
 }
 
-fn sync_job(
+pub(crate) fn sync_job(
     tenant: TenantId,
     account: AccountId,
     collection: CollectionId,
