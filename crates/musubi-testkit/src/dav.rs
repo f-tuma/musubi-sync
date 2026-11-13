@@ -212,6 +212,8 @@ pub enum Fault {
     /// Every object a multiget names is deleted just before the answer
     /// (per-href `404`). Applies only to multiget reports.
     DeleteBeforeMultiget,
+    /// `207 Multi-Status` with a body that is not well-formed XML.
+    Garbage,
 }
 
 /// Which requests a [`Fault`] applies to.
@@ -781,6 +783,12 @@ async fn handle(AxState((inner, host)): AxState<(Arc<Inner>, Host)>, req: AxRequ
             r.headers_mut()
                 .insert(header::LOCATION, location.parse().expect("valid"));
             return r;
+        }
+        Some(Fault::Garbage) => {
+            return xml(
+                StatusCode::MULTI_STATUS,
+                "<D:multistatus xmlns:D=\"DAV:\"><D:resp".into(),
+            );
         }
         Some(Fault::Delay(d)) => tokio::time::sleep(d).await,
         Some(Fault::Truncate(n)) => truncate = Some(n),
