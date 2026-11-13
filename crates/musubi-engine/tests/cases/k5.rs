@@ -896,3 +896,139 @@ async fn rediscover_keeps_the_collection_poll_job_when_discovery_fails() {
     let wait = Duration::try_from(next - h.clock_now()).unwrap();
     assert!(wait <= Duration::from_secs(15 * 60), "{wait:?}");
 }
+
+/// The account writes of a reconnect (`POST /v1/accounts/dav` with
+/// `account`, the OAuth callback): new tokens, `active` again, an endpoint.
+fn reconnect(h: &H, token: &str, endpoint: Option<&musubi_model::provider::Endpoint>) {
+    let mut writes = h.engine.account_writes();
+    writes.reconnected(ACCOUNT);
+    let mut rec = h.control.account(ACCOUNT).unwrap().unwrap();
+    if rec.state == AccountState::ReauthRequired {
+        rec.state = AccountState::Active;
+    }
+    h.control.upsert_account(&rec).unwrap();
+    let tokens = AccountTokens {
+        refresh: SecretString::from(token),
+        access: SecretString::from(token),
+        access_until: h.clock_now() + SignedDuration::from_hours(1),
+    };
+    h.vault.store(ACCOUNT, &Credentials::OAuth(tokens)).unwrap();
+    if let Some(e) = endpoint {
+        h.control.set_endpoint(ACCOUNT, e).unwrap();
+    }
+}
+
+fn refresh_token(h: &H) -> String {
+    use secrecy::ExposeSecret;
+    match h.vault.load(ACCOUNT).unwrap() {
+        Some(Credentials::OAuth(t)) => t.refresh.expose_secret().to_owned(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn discovery_does_not_store_its_endpoint_over_a_reconnect() {
+    let h = H::new();
+    h.connect_and_sync().await;
+    settle(&h).await;
+    let origins = |o: &str| {
+        musubi_model::provider::Endpoint::new("https://fake.test", json!({ "allow_origins": [o] }))
+    };
+    h.fake.set_endpoint(Some(origins("https://old.test")));
+    let discover = h.fake.calls().discover;
+    h.fake.hold(Op::Discover);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().discover == discover + 1).await;
+
+    // The discovery waits on the provider while the account is reconnected.
+    let new = origins("https://new.test");
+    reconnect(&h, "new", Some(&new));
+    h.fake.release(Op::Discover);
+    run.await.unwrap().unwrap();
+    assert_eq!(h.control.endpoint(ACCOUNT).unwrap(), Some(new));
+}
+
+#[tokio::test]
+async fn read_stores_neither_tokens_nor_reauth_over_a_reconnect() {
+    let h = H::new();
+    h.connect_and_sync().await;
+    settle(&h).await;
+    // The access token expired: the next read refreshes it first, then finds
+    // the grant revoked.
+    let expired = AccountTokens {
+        refresh: SecretString::from("old"),
+        access: SecretString::from("old"),
+        access_until: h.clock_now(),
+    };
+    h.vault.store(ACCOUNT, &Credentials::OAuth(expired)).unwrap();
+    let refresh = h.fake.calls().refresh;
+    h.fake.hold(Op::Refresh);
+    h.fake.fail(
+        Op::Page,
+        SyncError::ReauthRequired {
+            reason: ReauthReason::Rejected,
+        },
+    );
+    h.advance(h.config.poll_every_push + Duration::from_secs(1));
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().refresh == refresh + 1).await;
+
+    // The refresh waits on the provider while the account is reconnected.
+    reconnect(&h, "new", None);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.fake.release(Op::Refresh);
+    run.await.unwrap().unwrap();
+    assert_eq!(refresh_token(&h), "new");
+    assert_eq!(
+        h.control.account(ACCOUNT).unwrap().unwrap().state,
+        AccountState::Active
+    );
+    assert!(h.collection("cal1").unwrap().status.error.is_none());
+    assert!(h.sync_due("cal1").is_some(), "still polled");
+}
+
+#[tokio::test]
+async fn reauth_keeps_the_missing_scope_guard_over_a_reconnect() {
+    // `changes` says the task scope is missing; discovery lists the kind.
+    let h = H::new();
+    h.fake.add_collection(task_list("tasks"));
+    put_task(&h, "tasks", "t1", "v1");
+    h.connect_and_sync().await;
+    settle(&h).await;
+    h.fake.fail(
+        Op::Page,
+        SyncError::MissingScope {
+            kind: EntityKind::Task,
+        },
+    );
+    h.engine.touch(TENANT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    let marker = |name| h.collection(name).unwrap().status.error.unwrap().message;
+    assert_eq!(marker("tasks"), musubi_engine::MISSING_SCOPE);
+
+    // A read of `cal1` finds the grant revoked.
+    h.fake.fail(
+        Op::Page,
+        SyncError::ReauthRequired {
+            reason: ReauthReason::Rejected,
+        },
+    );
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(
+        h.control.account(ACCOUNT).unwrap().unwrap().state,
+        AccountState::ReauthRequired
+    );
+    assert_eq!(marker("cal1"), "rejected");
+    assert_eq!(marker("tasks"), musubi_engine::MISSING_SCOPE);
+
+    // The rediscovery after the reconnect leaves the kind parked.
+    reconnect(&h, "new", None);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(marker("tasks"), musubi_engine::MISSING_SCOPE);
+    assert_eq!(h.sync_due("tasks"), None, "parked");
+}

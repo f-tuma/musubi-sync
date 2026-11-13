@@ -286,7 +286,7 @@ impl FakeProvider {
         }
     }
 
-    /// Calls of `op` (`Discover`, `Subscribe` or `Unsubscribe`) from now on are counted, then
+    /// Calls of `op` (`Discover`, `Refresh`, `Subscribe` or `Unsubscribe`) from now on are counted, then
     /// wait until [`FakeProvider::release`].
     pub fn hold(&self, op: Op) {
         self.lock()
@@ -845,6 +845,7 @@ impl Provider for FakeProvider {
 impl TokenRefresh for FakeProvider {
     async fn refresh(&self, _refresh_token: &SecretString) -> Result<AccessToken, SyncError> {
         self.enter(Op::Refresh)?;
+        self.gate(Op::Refresh).await;
         Ok(AccessToken::new(
             SecretString::from("fake-access-token"),
             std::time::Duration::from_secs(3600),
