@@ -199,6 +199,8 @@ pub fn recurrence_id(
 /// Expands `series` to the occurrences that overlap `window` (same overlap rule as
 /// `musubi_model::TimeWindow`: `start < window.end` and `end > window.start`, a zero-length
 /// occurrence counts when it starts inside the window). The result is sorted by start.
+/// The window is half-open, so an empty or reversed one contains no instant and gives an
+/// empty result, even when an occurrence spans it.
 ///
 /// For a floating or all-day series the window is read in the same convention as the keys
 /// (wall time as UTC). More than `limit` occurrences is an error, never a truncated result.
