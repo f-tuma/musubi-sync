@@ -23,8 +23,9 @@ use musubi_model::store::{
     OccurrenceWrite, PageWrite, SeriesExtension,
 };
 use musubi_model::{
-    AccountId, ChangePage, CollectionId, Cursor, Provider, ReadId, ReauthReason, RemoteKey,
-    RemoteObject, Seq, Storage, SyncError, TenantId, TenantStore, TimeWindow,
+    AccountId, ChangePage, CollectionId, ControlStore, Cursor, Provider, ReadId, ReauthReason,
+    RemoteKey, RemoteObject, Seq, Storage, StoreError, SyncError, TenantId, TenantStore,
+    TimeWindow, TokenVault,
 };
 use secrecy::SecretString;
 use tokio::sync::Semaphore;
@@ -40,6 +41,8 @@ pub(crate) struct Cx {
     cx: AccountCx,
     pub(crate) provider: Arc<dyn Provider>,
     codecs: Codecs,
+    /// The account's reconnect revision before its credentials were loaded.
+    rev: u64,
 }
 
 impl Deref for Cx {
@@ -133,6 +136,7 @@ impl<S: Storage + 'static> Engine<S> {
     /// a job finding its lock busy comes back shortly instead of holding a
     /// lane slot.
     async fn account_job(&self, job: &Job, account: AccountId, work: Work) -> Outcome {
+        let rev = self.revision(account);
         let rec = match self.account(account).await {
             Ok(Some(r)) => r,
             Ok(None) => return Outcome::Done,
@@ -186,7 +190,7 @@ impl<S: Storage + 'static> Engine<S> {
             }
             slot => slot,
         };
-        let res = match self.cx(&rec, false).await {
+        let res = match self.cx(&rec, rev, false).await {
             Ok(cx) => match self.work(&rec, &cx, job, &work).await {
                 // Without OAuth there is nothing to refresh.
                 Err(EngineError::Sync(SyncError::Unauthorized))
@@ -199,7 +203,7 @@ impl<S: Storage + 'static> Engine<S> {
                 }
                 // The access token was revoked early: refresh once and run again.
                 Err(EngineError::Sync(SyncError::Unauthorized)) => {
-                    match self.cx(&rec, true).await {
+                    match self.cx(&rec, rev, true).await {
                         Ok(cx) => self.work(&rec, &cx, job, &work).await,
                         Err(e) => Err(e),
                     }
@@ -216,7 +220,7 @@ impl<S: Storage + 'static> Engine<S> {
                 }
                 Outcome::Done
             }
-            Err(e) => self.failed(job, &rec, &work, e).await,
+            Err(e) => self.failed(job, &rec, &work, e, rev).await,
         }
     }
 
@@ -234,7 +238,14 @@ impl<S: Storage + 'static> Engine<S> {
         }
     }
 
-    async fn failed(&self, job: &Job, rec: &AccountRecord, work: &Work, e: EngineError) -> Outcome {
+    async fn failed(
+        &self,
+        job: &Job,
+        rec: &AccountRecord,
+        work: &Work,
+        e: EngineError,
+        rev: u64,
+    ) -> Outcome {
         let col = match work {
             Work::Sync(c) => Some(*c),
             _ => None,
@@ -251,6 +262,23 @@ impl<S: Storage + 'static> Engine<S> {
             }
             EngineError::Sync(SyncError::ReauthRequired { .. } | SyncError::Unauthorized) => {
                 self.with_rt(rec, |rt| rt.unauthorized = false);
+                // A reconnect since the job started wins (it queued a
+                // discovery); a running removal stays `Removing`.
+                let id = rec.id;
+                let marked = self
+                    .write_account(id, rev, move |c, _| {
+                        let state = c.account(id)?.map(|r| r.state);
+                        if matches!(state, Some(AccountState::Active | AccountState::Connecting)) {
+                            c.set_account_state(id, AccountState::ReauthRequired)?;
+                        }
+                        Ok(())
+                    })
+                    .await;
+                match marked {
+                    Ok(true) => {}
+                    Ok(false) => return Outcome::Done,
+                    Err(e) => return self.retry(job, e),
+                }
                 tracing::warn!(account = %rec.id, error = %e, "account requires sign-in");
                 // The reason's stable name (`endpoint_moved`, `rejected`) on every
                 // collection of the account, also when a discovery raised it.
@@ -263,19 +291,21 @@ impl<S: Storage + 'static> Engine<S> {
                     _ => None,
                 }
                 .unwrap_or_else(|| "rejected".into());
+                // A `missing_scope` marker stays: it keeps the collection's
+                // retry guard over the reconnect.
                 let cols = self.collections(rec.tenant).await.unwrap_or_default();
-                for c in cols.iter().filter(|c| c.account == rec.id && !c.gone) {
+                for c in cols.iter().filter(|c| {
+                    c.account == rec.id
+                        && !c.gone
+                        && c.status
+                            .error
+                            .as_ref()
+                            .is_none_or(|e| e.message != MISSING_SCOPE)
+                }) {
                     self.record_error(rec.tenant, Some(c.id), code.clone(), true)
                         .await;
                 }
-                let id = rec.id;
-                match self
-                    .ctl(move |c| c.set_account_state(id, AccountState::ReauthRequired))
-                    .await
-                {
-                    Ok(()) => Outcome::Done,
-                    Err(e) => self.retry(job, e),
-                }
+                Outcome::Done
             }
             EngineError::Sync(SyncError::RateLimited { retry_after }) => {
                 let until = after(self.now(), retry_after.unwrap_or(RATE_LIMIT_WAIT));
@@ -399,8 +429,14 @@ impl<S: Storage + 'static> Engine<S> {
     /// The account's provider context with its stored endpoint. OAuth:
     /// refreshes the access token when it is about to expire or `force` is
     /// set, if the provider has [`musubi_model::Provider::oauth`]. Basic
-    /// credentials are used as they are.
-    pub(crate) async fn cx(&self, rec: &AccountRecord, force: bool) -> Result<Cx, EngineError> {
+    /// credentials are used as they are. `rev`: the account's reconnect
+    /// revision, taken before (see [`Engine::account_writes`]).
+    pub(crate) async fn cx(
+        &self,
+        rec: &AccountRecord,
+        rev: u64,
+        force: bool,
+    ) -> Result<Cx, EngineError> {
         let Some((provider, codecs)) = self.inner.providers.get(&rec.provider).cloned() else {
             let msg = format!("no provider `{}` registered", rec.provider.0);
             return Err(SyncError::Permanent(msg.into()).into());
@@ -415,7 +451,7 @@ impl<S: Storage + 'static> Engine<S> {
                 })?;
         let credential = match creds {
             Credentials::OAuth(tokens) => {
-                Credential::Bearer(self.access(&*provider, account, tokens, force).await?)
+                Credential::Bearer(self.access(&*provider, account, tokens, force, rev).await?)
             }
             Credentials::Basic { username, password } => Credential::Basic { username, password },
             _ => return Err(SyncError::Permanent("unsupported credentials".into()).into()),
@@ -431,16 +467,19 @@ impl<S: Storage + 'static> Engine<S> {
             cx,
             provider,
             codecs,
+            rev,
         })
     }
 
-    /// A usable access token: `tokens.access`, or a refreshed one stored first.
+    /// A usable access token: `tokens.access`, or a refreshed one stored first
+    /// unless a reconnect stored newer tokens meanwhile.
     async fn access(
         &self,
         provider: &dyn Provider,
         account: AccountId,
         tokens: AccountTokens,
         force: bool,
+        rev: u64,
     ) -> Result<secrecy::SecretString, EngineError> {
         let now = self.now();
         let Some(oauth) = provider.oauth() else {
@@ -456,9 +495,46 @@ impl<S: Storage + 'static> Engine<S> {
             access_until: after(now, t.expires_in),
         };
         let access = fresh.access.clone();
-        let vault = self.inner.vault.clone();
-        blocking(move || Ok(vault.store(account, &Credentials::OAuth(fresh))?)).await?;
+        self.write_account(account, rev, move |_, v| {
+            v.store(account, &Credentials::OAuth(fresh))
+        })
+        .await?;
         Ok(access)
+    }
+
+    /// The account's reconnect revision (see [`Engine::account_writes`]).
+    pub(crate) fn revision(&self, account: AccountId) -> u64 {
+        let map = self
+            .inner
+            .reconnects
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        map.get(&account).copied().unwrap_or(0)
+    }
+
+    /// Runs `f`, a write of account fields by a job that started at
+    /// revision `rev`, under [`Engine::account_writes`]; `false` without
+    /// running it if the account was reconnected since.
+    async fn write_account(
+        &self,
+        account: AccountId,
+        rev: u64,
+        f: impl FnOnce(&dyn ControlStore, &dyn TokenVault) -> Result<(), StoreError> + Send + 'static,
+    ) -> Result<bool, EngineError> {
+        let (reconnects, control, vault) = (
+            self.inner.reconnects.clone(),
+            self.inner.control.clone(),
+            self.inner.vault.clone(),
+        );
+        blocking(move || {
+            let map = reconnects.lock().unwrap_or_else(|e| e.into_inner());
+            if map.get(&account).copied().unwrap_or(0) != rev {
+                return Ok(false);
+            }
+            f(&*control, &*vault)?;
+            Ok(true)
+        })
+        .await
     }
 
     fn rt(&self, rec: &AccountRecord) -> AccountRt {
@@ -549,7 +625,8 @@ impl<S: Storage + 'static> Engine<S> {
             return Ok(());
         }
         if let Some(e) = endpoint {
-            self.ctl(move |c| c.set_endpoint(account, &e)).await?;
+            self.write_account(account, cx.rev, move |c, _| c.set_endpoint(account, &e))
+                .await?;
         }
         let stored: Vec<_> = self
             .collections(tenant)

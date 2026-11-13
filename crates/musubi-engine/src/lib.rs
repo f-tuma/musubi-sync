@@ -257,6 +257,9 @@ struct Inner<S: Storage> {
     // Same shortcut: held by discovery, and by removal while it marks the account.
     account_locks: Mutex<HashMap<AccountId, Arc<tokio::sync::Mutex<()>>>>,
     accounts: Mutex<HashMap<AccountId, AccountRt>>,
+    /// Reconnects per account (see [`Engine::account_writes`]); in-process
+    /// like the jobs it guards against.
+    reconnects: Arc<Mutex<HashMap<AccountId, u64>>>,
     // Same shortcut, and lost on restart: one extra full read or watch request per restart.
     collections: Mutex<HashMap<CollectionId, CollectionRt>>,
     /// The last [`Engine::touch`] of each tenant. Lost on restart by design
@@ -301,6 +304,17 @@ struct CollectionRt {
     rediscovered: Option<(Timestamp, u64)>,
 }
 
+/// The guard of [`Engine::account_writes`].
+pub struct AccountWrites<'a>(std::sync::MutexGuard<'a, HashMap<AccountId, u64>>);
+
+impl AccountWrites<'_> {
+    /// Marks `account` as reconnected: its running jobs store no account
+    /// field from now on.
+    pub fn reconnected(&mut self, account: AccountId) {
+        *self.0.entry(account).or_default() += 1;
+    }
+}
+
 /// Background scheduler started by [`Engine::start`]; stops when dropped.
 pub struct Running {
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -341,6 +355,7 @@ impl<S: Storage + 'static> Engine<S> {
                 locks: Default::default(),
                 account_locks: Default::default(),
                 accounts: Default::default(),
+                reconnects: Default::default(),
                 collections: Default::default(),
                 interest: Default::default(),
             }),
@@ -353,6 +368,20 @@ impl<S: Storage + 'static> Engine<S> {
         let rec = self.account(account).await?.ok_or(StoreError::NotFound)?;
         self.enqueue(discover_job(rec.tenant, account, self.now()))
             .await
+    }
+
+    /// The lock over account writes, held by a reconnect (`POST
+    /// /v1/accounts/dav` with `account`, the OAuth callback) while it stores
+    /// the account's tokens, endpoint or state, after
+    /// [`AccountWrites::reconnected`]. A job of the account that started
+    /// before then stores none of them over the reconnect's.
+    pub fn account_writes(&self) -> AccountWrites<'_> {
+        AccountWrites(
+            self.inner
+                .reconnects
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        )
     }
 
     /// Records that the tenant's user is looking at its data (`POST
@@ -495,7 +524,7 @@ impl<S: Storage + 'static> Engine<S> {
             return Ok(());
         }
         if cx.is_none() {
-            *cx = Some(match self.cx(rec, false).await {
+            *cx = Some(match self.cx(rec, self.revision(rec.id), false).await {
                 Ok(cx) => Some(cx),
                 Err(EngineError::Sync(
                     e @ (SyncError::ReauthRequired { .. } | SyncError::Permanent(_)),

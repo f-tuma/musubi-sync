@@ -242,6 +242,9 @@ pub(crate) async fn callback(
                     state: AccountState::Connecting,
                 },
             };
+            // A running job of the account stores no account field over these.
+            let mut writes = a.engine.account_writes();
+            writes.reconnected(rec.id);
             a.control.upsert_account(&rec)?;
             a.control
                 .write_tokens(rec.id, &a.sealer.seal(rec.tenant, rec.id, &tokens))?;
