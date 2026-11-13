@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use musubi_engine::{Config, Engine};
+use musubi_engine::{Codecs, Config, DecodeFn, Engine, PollBounds, Providers};
 use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider};
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{AccountRecord, AccountState, AccountTokens, Credentials};
@@ -32,7 +32,7 @@ struct H {
     g: FakeGoogle,
     clock: ManualClock,
     storage: Arc<SqliteStorage>,
-    engine: Engine<SqliteStorage, GoogleCodec>,
+    engine: Engine<SqliteStorage>,
     control: Arc<SqliteControl>,
     _dir: tempfile::TempDir,
 }
@@ -107,7 +107,13 @@ impl H {
         .expect("provider");
         let engine = Engine::new(
             storage.clone(),
-            Arc::new(provider),
+            Providers::new().with(
+                Arc::new(provider),
+                Codecs {
+                    event: Some(DecodeFn::of::<GoogleCodec>()),
+                    ..Codecs::default()
+                },
+            ),
             control.clone(),
             vault,
             Arc::new(clock.clone()),
@@ -119,6 +125,12 @@ impl H {
                         .parse()
                         .expect("uri"),
                 ),
+                // The adaptive poll (plan 7.2) pinned at five minutes, so
+                // the counts below do not depend on how quiet a calendar was.
+                poll_normal: PollBounds {
+                    min: Duration::from_secs(300),
+                    max: Duration::from_secs(300),
+                },
                 ..Config::default()
             },
         );

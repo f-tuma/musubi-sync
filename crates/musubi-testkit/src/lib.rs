@@ -5,8 +5,11 @@
 //! ([`FakeProvider::fail`]), gates holding full reads
 //! ([`FakeProvider::hold_full_reads`]) and other calls ([`FakeProvider::hold`]), notifications and call counters
 //! ([`FakeProvider::calls`]). Engine tests also drive it with
-//! [`FakeProvider::unlist_collection`], [`FakeProvider::hide_from_reads`] and
-//! [`FakeProvider::expire_cursors`], and use [`ManualClock`],
+//! [`FakeProvider::unlist_collection`], [`FakeProvider::hide_from_reads`],
+//! [`FakeProvider::hide_from_fetch`], [`FakeProvider::expire_cursors`],
+//! [`FakeProvider::full_on_next_delta`], [`FakeProvider::set_unauthorized`],
+//! [`FakeProvider::set_endpoint`] and [`FakeProvider::without_oauth`], read
+//! [`FakeProvider::unsubscribed`], and use [`ManualClock`],
 //! [`MemoryVault`], [`CanonicalCodec`] and [`event_object`].
 //!
 //! [`google`] is the in-process fake Google Calendar HTTP server (K3) that
@@ -43,8 +46,8 @@ use musubi_model::control::Credentials;
 use musubi_model::provider::ChannelId;
 use musubi_model::provider::Decoded;
 use musubi_model::provider::{
-    AccessToken, BoxStream, Clock, Credential, Discovery, FetchHint, Limiter, Pass, PushHint,
-    RemoteCollection, Start, Stub, Subscription, TokenRefresh,
+    AccessToken, BoxStream, Clock, Credential, Discovery, Endpoint, FetchHint, Limiter, Pass,
+    PushHint, RemoteCollection, Start, Stub, Subscription, TokenRefresh,
 };
 use musubi_model::remote::MediaType;
 use musubi_model::remote::RemoteRef;
@@ -79,6 +82,8 @@ struct FakeCollection {
     log: BTreeMap<RemoteKey, u64>,
     /// Keys left out of every page but still returned by `fetch`.
     hidden: BTreeSet<RemoteKey>,
+    /// Keys still listed (stubs) but missing from `fetch`.
+    unfetchable: BTreeSet<RemoteKey>,
 }
 
 /// A provider call that [`FakeProvider::fail`] can make fail.
@@ -141,15 +146,23 @@ struct State {
     lost_subscribe: VecDeque<SyncError>,
     /// `changes` streams not yet dropped, per collection.
     open_reads: BTreeMap<CollectionRef, u32>,
+    /// Kinds `discover` reports as unauthorised.
+    unauthorized: Vec<EntityKind>,
+    /// Endpoint update `discover` returns.
+    endpoint: Option<Endpoint>,
+    /// The next delta request is answered with a full listing.
+    full_on_delta: bool,
+    /// Every `unsubscribe` call: channel and resource id.
+    unsubscribed: Vec<(ChannelId, String)>,
 }
 
 /// In-memory provider. Cheap to clone; clones share state.
 ///
 /// The delta mechanism of a collection is its [`RemoteCollection::delta`], or
 /// else its kind's [`KindCapabilities::delta`] in the descriptor. A collection
-/// with [`DeltaSupport::CtagEtag`] lists the objects of a full read as
-/// [`ChangePage::stubs`] (key and validator, no body), as a DAV server does;
-/// `fetch` returns the bodies. Every other collection sends bodies in
+/// with [`DeltaSupport::CtagEtag`] lists the objects of a full read and of
+/// a delta as [`ChangePage::stubs`] (key and validator, no body), as a DAV
+/// server does; `fetch` returns the bodies. Every other collection sends bodies in
 /// `upserts`.
 #[derive(Debug, Clone)]
 pub struct FakeProvider {
@@ -157,6 +170,7 @@ pub struct FakeProvider {
     page_size: u32,
     empty_page_after_first: bool,
     descriptor: Option<Arc<ProviderDescriptor>>,
+    oauth: bool,
 }
 
 impl Default for FakeProvider {
@@ -173,6 +187,7 @@ impl FakeProvider {
             page_size: 2,
             empty_page_after_first: false,
             descriptor: None,
+            oauth: true,
         }
     }
 
@@ -194,6 +209,13 @@ impl FakeProvider {
     /// Google does with an empty page that still has `nextPageToken`.
     pub fn with_empty_page_after_first(mut self) -> Self {
         self.empty_page_after_first = true;
+        self
+    }
+
+    /// No [`TokenRefresh`]: `oauth()` returns `None`, as for a DAV account
+    /// with a password.
+    pub fn without_oauth(mut self) -> Self {
+        self.oauth = false;
         self
     }
 
@@ -299,6 +321,40 @@ impl FakeProvider {
             .or_default()
             .hidden
             .insert(key.clone());
+    }
+
+    /// `fetch` leaves `key` out from now on, while pages still list it: an
+    /// object deleted between the listing and the fetch.
+    pub fn hide_from_fetch(&self, col: &CollectionRef, key: &RemoteKey) {
+        let mut s = self.lock();
+        s.collections
+            .entry(col.clone())
+            .or_default()
+            .unfetchable
+            .insert(key.clone());
+    }
+
+    /// `discover` reports these kinds as unauthorised from now on (and leaves
+    /// their collections out of the listing).
+    pub fn set_unauthorized(&self, kinds: Vec<EntityKind>) {
+        self.lock().unauthorized = kinds;
+    }
+
+    /// `discover` returns this endpoint update from now on.
+    pub fn set_endpoint(&self, endpoint: Option<Endpoint>) {
+        self.lock().endpoint = endpoint;
+    }
+
+    /// The next delta request (a `changes` call with a delta cursor) is
+    /// answered with a full listing (`Pass::Full` pages), as a server does
+    /// when it no longer knows the sync token.
+    pub fn full_on_next_delta(&self) {
+        self.lock().full_on_delta = true;
+    }
+
+    /// Channel and resource id of every `unsubscribe` call so far.
+    pub fn unsubscribed(&self) -> Vec<(ChannelId, String)> {
+        self.lock().unsubscribed.clone()
     }
 
     /// Open watch channels.
@@ -460,7 +516,14 @@ impl FakeProvider {
                     }
                 };
                 let mut page = ChangePage::new(Pass::Delta, Some(pos.encode()), last);
-                page.upserts = upserts;
+                if self.delta_of(c) == Some(DeltaSupport::CtagEtag) {
+                    page.stubs = upserts
+                        .into_iter()
+                        .map(|o| Stub::new(o.key, Some(o.validator)))
+                        .collect();
+                } else {
+                    page.upserts = upserts;
+                }
                 page.removals = removals;
                 Ok((page, pos))
             }
@@ -666,12 +729,16 @@ impl Provider for FakeProvider {
         self.enter(Op::Discover)?;
         self.gate(Op::Discover).await;
         let s = self.lock();
-        Ok(Discovery::new(
+        let mut d = Discovery::new(
             s.collections
                 .values()
                 .filter_map(|c| c.meta.clone())
+                .filter(|m| !s.unauthorized.contains(&m.kind))
                 .collect(),
-        ))
+        );
+        d.unauthorized = s.unauthorized.clone();
+        d.endpoint = s.endpoint.clone();
+        Ok(d)
     }
 
     fn changes<'a>(
@@ -683,7 +750,16 @@ impl Provider for FakeProvider {
     ) -> BoxStream<'a, Result<ChangePage, SyncError>> {
         let mut s = self.lock();
         let snapshot = s.version;
+        let restarted = cursor.is_some() && s.full_on_delta;
         let pos = match (&cursor, hint.start) {
+            (Some(c), _) if restarted => {
+                s.full_on_delta = false;
+                s.calls.deltas += 1;
+                Pos::decode(c).map_err(Some).map(|_| Pos::Full {
+                    snapshot,
+                    after: None,
+                })
+            }
             (Some(c), _) => Pos::decode(c).map_err(Some),
             (None, Start::Full) => Ok(Pos::Full {
                 snapshot,
@@ -696,6 +772,7 @@ impl Provider for FakeProvider {
             (None, _) => Err(Some(SyncError::Permanent("unsupported start".into()))),
         };
         match &pos {
+            _ if restarted => {}
             Ok(Pos::Full { after: None, .. }) => s.calls.full_reads += 1,
             Ok(Pos::Window { .. }) => s.calls.window_reads += 1,
             Ok(Pos::Delta { after: None, .. }) | Err(_) => s.calls.deltas += 1,
@@ -727,13 +804,18 @@ impl Provider for FakeProvider {
         let s = self.lock();
         Ok(refs
             .iter()
-            .filter_map(|r| s.collections.get(&r.collection)?.objects.get(&r.key))
+            .filter_map(|r| {
+                let c = s.collections.get(&r.collection)?;
+                c.objects
+                    .get(&r.key)
+                    .filter(|_| !c.unfetchable.contains(&r.key))
+            })
             .map(|o| o.object.clone())
             .collect())
     }
 
     fn oauth(&self) -> Option<&dyn TokenRefresh> {
-        Some(self)
+        self.oauth.then_some(self as &dyn TokenRefresh)
     }
 
     fn push(&self) -> Option<&dyn PushSource> {
@@ -783,6 +865,8 @@ impl PushSource for FakeProvider {
         self.enter(Op::Unsubscribe)?;
         self.gate(Op::Unsubscribe).await;
         let mut s = self.lock();
+        s.unsubscribed
+            .push((sub.channel.clone(), sub.resource.clone()));
         if s.channels.get(&sub.channel).map(fake_resource) == Some(sub.resource.clone()) {
             s.channels.remove(&sub.channel);
         }
