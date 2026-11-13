@@ -65,7 +65,7 @@ mod people;
 mod tasks;
 
 pub use people::MAX_CONNECTIONS_PAGE;
-pub use tasks::MAX_TASKS_PAGE;
+pub use tasks::{MAX_TASK_LISTS_PAGE, MAX_TASKS_PAGE};
 
 /// Google's hard cap on `maxResults` for `events.list`.
 pub const MAX_EVENTS_PAGE: u32 = 2500;
@@ -252,6 +252,19 @@ impl Fault {
             message: "Forbidden",
             retry_after: None,
             rpc_status: None,
+        }
+    }
+
+    /// `403 PERMISSION_DENIED` with `SERVICE_DISABLED`: the OAuth client's
+    /// Cloud project has not enabled the API.
+    pub fn api_disabled() -> Self {
+        Self {
+            status: 403,
+            domain: "googleapis.com",
+            reason: "SERVICE_DISABLED",
+            message: "People API has not been used in project 0 before or it is disabled.",
+            retry_after: None,
+            rpc_status: Some("PERMISSION_DENIED"),
         }
     }
 
@@ -589,6 +602,15 @@ impl FakeGoogle {
     /// Revokes a refresh token: `/token` answers `invalid_grant`.
     pub fn revoke_refresh_token(&self, token: &str) {
         self.inner.lock().refresh_tokens.remove(token);
+    }
+
+    /// Moves the logical clock forward: later writes get an `updated` that
+    /// much later (the clock is `Config::epoch` plus one millisecond per write).
+    pub fn advance(&self, by: Duration) {
+        let mut s = self.inner.lock();
+        s.version = s
+            .version
+            .saturating_add(u64::try_from(by.as_millis()).unwrap_or(u64::MAX));
     }
 
     /// Invalidates every issued access token: API calls answer `401`.

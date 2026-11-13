@@ -46,6 +46,10 @@ pub struct Config {
 }
 
 /// Google OAuth client. Endpoints default to Google's production ones.
+///
+/// Deployment: enable Google Calendar API, Tasks API and People API in the
+/// client's Cloud project. A disabled Tasks or People API leaves that kind
+/// unauthorised, not an error.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleSettings {

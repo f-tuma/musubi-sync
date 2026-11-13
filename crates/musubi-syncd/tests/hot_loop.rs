@@ -100,6 +100,7 @@ impl H {
                 token_url: g.token_url().parse().expect("url"),
                 tasks_base: g.tasks_api().parse().expect("url"),
                 people_base: g.people_api().parse().expect("url"),
+                discover_tasks_people: false,
             },
             Arc::new(clock.clone()),
         )

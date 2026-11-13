@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::provider::{
-    GoogleProvider, body, error_for, excerpt, has_reason, join, pages, permanent, raw_object,
+    GoogleProvider, body, error_for, excerpt, join, pages, permanent, raw_object,
 };
 
 /// The contacts collection: there is exactly one per account.
@@ -46,6 +46,10 @@ enum PeopleCursor {
     Full {
         page: Option<String>,
         fields: String,
+        /// `pageSize` of the pass while `page` is set: Google binds a page
+        /// token to the parameters that issued it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
     },
     /// A delta from `token`; `page` while the delta spans several pages.
     Sync {
@@ -53,6 +57,9 @@ enum PeopleCursor {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         page: Option<String>,
         fields: String,
+        /// As in `Full`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
     },
 }
 
@@ -62,6 +69,8 @@ struct Query {
     /// The sync token of a delta.
     token: Option<String>,
     page: Option<String>,
+    /// `pageSize`, the same on every page of a pass.
+    size: u32,
 }
 
 impl Query {
@@ -74,27 +83,37 @@ impl Query {
     }
 
     /// Contacts have no window: every start without a cursor is a full read.
-    fn start(cursor: Option<Cursor>) -> Result<Self, SyncError> {
+    /// `size` is the hint's page size; a pass resumed mid-way keeps its own.
+    fn start(cursor: Option<Cursor>, size: u32) -> Result<Self, SyncError> {
         let parsed = match cursor {
             None => {
                 return Ok(Query {
                     token: None,
                     page: None,
+                    size,
                 });
             }
             Some(c) => serde_json::from_slice(&c.0),
         };
         match parsed {
-            Ok(PeopleCursor::Full { page, fields }) if fields == PERSON_FIELDS => {
-                Ok(Query { token: None, page })
-            }
+            Ok(PeopleCursor::Full {
+                page,
+                fields,
+                size: stored,
+            }) if fields == PERSON_FIELDS => Ok(Query {
+                token: None,
+                page,
+                size: stored.unwrap_or(size),
+            }),
             Ok(PeopleCursor::Sync {
                 token,
                 page,
                 fields,
+                size: stored,
             }) if fields == PERSON_FIELDS => Ok(Query {
                 token: Some(token),
                 page,
+                size: stored.unwrap_or(size),
             }),
             Ok(_) => {
                 tracing::info!("contacts cursor is for other personFields; full read");
@@ -107,15 +126,17 @@ impl Query {
         }
     }
 
-    fn cursor(&self, page: Option<String>) -> PeopleCursor {
-        let fields = PERSON_FIELDS.to_owned();
+    /// The cursor of a pass that continues at `page`.
+    fn cursor(&self, page: String) -> PeopleCursor {
+        let (page, fields, size) = (Some(page), PERSON_FIELDS.to_owned(), Some(self.size));
         match &self.token {
             Some(token) => PeopleCursor::Sync {
                 token: token.clone(),
                 page,
                 fields,
+                size,
             },
-            None => PeopleCursor::Full { page, fields },
+            None => PeopleCursor::Full { page, fields, size },
         }
     }
 }
@@ -179,7 +200,7 @@ fn build_page(q: &Query, body: &[u8]) -> Result<(ChangePage, Option<Query>), Syn
     removals.reverse();
     let (cursor, next) = match resp.next_page_token {
         Some(page) => (
-            q.cursor(Some(page.clone())),
+            q.cursor(page.clone()),
             Some(Query {
                 page: Some(page),
                 ..q.clone()
@@ -191,6 +212,7 @@ fn build_page(q: &Query, body: &[u8]) -> Result<(ChangePage, Option<Query>), Syn
                     token,
                     page: None,
                     fields: PERSON_FIELDS.to_owned(),
+                    size: None,
                 },
                 None => {
                     tracing::warn!(
@@ -200,6 +222,7 @@ fn build_page(q: &Query, body: &[u8]) -> Result<(ChangePage, Option<Query>), Syn
                     PeopleCursor::Full {
                         page: None,
                         fields: PERSON_FIELDS.to_owned(),
+                        size: None,
                     }
                 }
             };
@@ -248,7 +271,7 @@ impl GoogleProvider {
         hint: FetchHint,
     ) -> BoxStream<'a, Result<ChangePage, SyncError>> {
         let size = hint.page_size.map_or(MAX_PAGE, |n| n.get().min(MAX_PAGE));
-        pages(Query::start(cursor), move |q| self.people_page(cx, q, size))
+        pages(Query::start(cursor, size), move |q| self.people_page(cx, q))
     }
 
     /// One `connections.list` request.
@@ -256,14 +279,13 @@ impl GoogleProvider {
         &self,
         cx: &AccountCx,
         q: Query,
-        size: u32,
     ) -> Result<(ChangePage, Option<Query>), SyncError> {
         let mut url = self.connections_url();
         {
             // Every page repeats every parameter of the first request.
             let mut p = url.query_pairs_mut();
             p.append_pair("personFields", PERSON_FIELDS);
-            p.append_pair("pageSize", &size.to_string());
+            p.append_pair("pageSize", &q.size.to_string());
             p.append_pair("requestSyncToken", "true");
             if let Some(token) = &q.token {
                 p.append_pair("syncToken", token);
@@ -277,11 +299,10 @@ impl GoogleProvider {
         if matches!(status, StatusCode::BAD_REQUEST | StatusCode::GONE) {
             let body = resp.bytes().await.unwrap_or_default();
             // Assumed (T10): an expired token is `EXPIRED_SYNC_TOKEN`, as 400
-            // or 410; a rejected page token is a plain 400.
-            if has_reason(&body, &["EXPIRED_SYNC_TOKEN"])
-                || (status == StatusCode::GONE && q.token.is_some())
-                || q.page.is_some()
-            {
+            // or 410; a rejected page token is a plain 400. Whatever Google
+            // says about a token or page token, the pass restarts as a full
+            // read, which carries neither, so this cannot loop.
+            if q.token.is_some() || q.page.is_some() {
                 tracing::info!(body = %excerpt(&body), pass = ?q.pass(), "contacts token rejected; full read");
                 return Err(SyncError::CursorExpired);
             }
@@ -651,7 +672,7 @@ mod tests {
 
     #[test]
     fn full_read_ends_in_a_sync_cursor_and_skips_deleted() {
-        let full = Query::start(None).unwrap();
+        let full = Query::start(None, 7).unwrap();
         let body = br#"{"connections":[
             {"resourceName":"people/c1","etag":"%E1"},
             {"resourceName":"people/c2","metadata":{"deleted":true}}
@@ -662,19 +683,21 @@ mod tests {
             (Pass::Full, false, 1)
         );
         assert!(page.removals.is_empty());
+        // A resumed pass keeps its page size whatever the new hint says.
         assert_eq!(
-            Query::start(page.cursor.clone()).unwrap(),
+            Query::start(page.cursor.clone(), 50).unwrap(),
             next.clone().unwrap()
         );
         let (page, next) =
             build_page(&next.unwrap(), br#"{"nextSyncToken":"s1","totalPeople":1}"#).unwrap();
         assert!(page.last && next.is_none());
-        let delta = Query::start(page.cursor).unwrap();
+        let delta = Query::start(page.cursor, 50).unwrap();
         assert_eq!(
             delta,
             Query {
                 token: Some("s1".into()),
-                page: None
+                page: None,
+                size: 50,
             }
         );
         let body = br#"{"connections":[{"resourceName":"people/c2","metadata":{"deleted":true}}],
@@ -691,10 +714,11 @@ mod tests {
             token: "s".into(),
             page: None,
             fields: "names".into(),
+            size: None,
         };
         let c = Cursor(serde_json::to_vec(&c).unwrap());
         assert!(matches!(
-            Query::start(Some(c)),
+            Query::start(Some(c), 100),
             Err(SyncError::CursorExpired)
         ));
     }

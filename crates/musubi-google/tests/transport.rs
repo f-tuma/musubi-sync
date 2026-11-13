@@ -15,8 +15,8 @@ use musubi_model::provider::{
 };
 use musubi_model::remote::RemoteRef;
 use musubi_model::{
-    AccountCx, AccountId, ChangePage, CollectionRef, Cursor, EntityKind, Provider, PushRejected,
-    RemoteKey, SyncError, TimeWindow,
+    AccountCx, AccountId, ChangePage, CollectionRef, Cursor, Provider, PushRejected, RemoteKey,
+    SyncError, TimeWindow,
 };
 use musubi_testkit::account_cx;
 use musubi_testkit::google::{Change, Config, Endpoint, FakeGoogle, Fault, Quirk, Seed};
@@ -45,8 +45,6 @@ async fn env(config: Config) -> Env {
     let g = FakeGoogle::start(config).await.unwrap();
     let mut google = GoogleConfig::new("client", SecretString::from("secret"));
     google.api_base = g.calendar_api().parse().unwrap();
-    google.tasks_base = g.tasks_api().parse().unwrap();
-    google.people_base = g.people_api().parse().unwrap();
     google.token_url = g.token_url().parse().unwrap();
     let p = GoogleProvider::new(google, Arc::new(WallClock)).unwrap();
     let mut cx = account_cx(AccountId::from_u128(1), Timestamp::now());
@@ -145,12 +143,7 @@ async fn discover_lists_every_calendar() {
             .all(|r| !r.contains("calendarList") || r.contains("showHidden=true"))
     );
     assert!(d.collections.iter().any(|c| c.remote.0 == hidden));
-    let ids: Vec<_> = d
-        .collections
-        .iter()
-        .filter(|c| c.kind == EntityKind::Event)
-        .map(|c| c.remote.0.clone())
-        .collect();
+    let ids: Vec<_> = d.collections.iter().map(|c| c.remote.0.clone()).collect();
     assert_eq!(ids, e.g.calendars());
     let primary = &d.collections[0];
     assert!(primary.primary && primary.access == Access::Owner);

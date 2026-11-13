@@ -105,7 +105,7 @@ impl FakeGoogle {
                 self.put_contact(json!({
                     "names": [{ "displayName": format!("Contact {i}"), "givenName": "Contact", "familyName": format!("{i}") }],
                     "emailAddresses": [{ "value": format!("contact{i}@example.com"), "type": "home" }],
-                    "phoneNumbers": [{ "value": format!("+420 600 {:03} {:03}", i / 1000, i % 1000), "type": "mobile" }],
+                    "phoneNumbers": [{ "value": format!("+1 202-555-01{:02}", i % 100), "type": "mobile" }],
                 }))
             })
             .collect()

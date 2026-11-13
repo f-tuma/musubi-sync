@@ -57,6 +57,9 @@ pub struct GoogleConfig {
     pub people_base: Url,
     /// OAuth token endpoint.
     pub token_url: Url,
+    /// Discovery also lists task lists and the contacts collection (plan 6.1).
+    /// Off until the engine syncs those kinds (K8); off, discovery is phase 1's.
+    pub discover_tasks_people: bool,
 }
 
 impl GoogleConfig {
@@ -69,6 +72,7 @@ impl GoogleConfig {
             tasks_base: Url::parse("https://tasks.googleapis.com/tasks/v1").expect("constant URL"),
             people_base: Url::parse("https://people.googleapis.com/v1").expect("constant URL"),
             token_url: Url::parse("https://oauth2.googleapis.com/token").expect("constant URL"),
+            discover_tasks_people: false,
         }
     }
 }
@@ -257,7 +261,10 @@ pub(crate) async fn error_for(
         (401, _) => SyncError::Unauthorized,
         (429, _) => SyncError::RateLimited { retry_after },
         (403, _) if is_rate_limit(&body) => SyncError::RateLimited { retry_after },
-        (403, Some(kind)) if is_missing_scope(&body) => SyncError::MissingScope { kind },
+        // A disabled API needs the same outside fix as a missing grant.
+        (403, Some(kind)) if is_missing_scope(&body) || is_api_disabled(&body) => {
+            SyncError::MissingScope { kind }
+        }
         _ => {
             let err = HttpStatus {
                 status,
@@ -287,6 +294,12 @@ pub(crate) fn excerpt(body: &[u8]) -> String {
         }
     }
     out
+}
+
+/// `403` for an API the OAuth client's Cloud project has not enabled, in the
+/// classic and the AIP-193 shape.
+fn is_api_disabled(body: &[u8]) -> bool {
+    has_reason(body, &["accessNotConfigured", "SERVICE_DISABLED"])
 }
 
 /// `403` with a quota reason is throttling, not a permission error.
@@ -736,9 +749,16 @@ impl Provider for GoogleProvider {
                 None => break,
             }
         }
-        // Tasks and People: a scope the user did not grant is an unauthorised
-        // kind, not an error (plan 6.1). Any other failure leaves the listing
-        // incomplete, so nothing may count as deleted.
+        if !self.config.discover_tasks_people {
+            return Ok(Discovery::new(found));
+        }
+        // Tasks and People: a scope the user did not grant, or an API the
+        // Cloud project has not enabled, is an unauthorised kind, not an error
+        // (plan 6.1). Throttling, server errors and a refused token fail the
+        // whole discovery, which the engine retries: a temporary failure must
+        // neither hide a kind nor stop deleted calendars from being dropped.
+        // Anything else leaves the listing incomplete, so nothing may count as
+        // deleted.
         let mut unauthorized = Vec::new();
         let mut scoped = |r: Result<(), SyncError>| match r {
             Err(SyncError::MissingScope { kind }) => {
@@ -751,11 +771,19 @@ impl Provider for GoogleProvider {
             Ok(()) => scoped(self.people_probe(cx, &mut found).await),
             e => e,
         };
-        if let Err(e) = listed {
-            return Err(SyncError::PartialDiscovery {
-                found,
-                source: e.into(),
-            });
+        match listed {
+            Ok(()) => {}
+            Err(
+                e @ (SyncError::RateLimited { .. }
+                | SyncError::Transient(_)
+                | SyncError::Unauthorized),
+            ) => return Err(e),
+            Err(e) => {
+                return Err(SyncError::PartialDiscovery {
+                    found,
+                    source: e.into(),
+                });
+            }
         }
         let mut d = Discovery::new(found);
         d.unauthorized = unauthorized;

@@ -265,9 +265,10 @@ recordings check them. Every assumption is listed below.
 
 - **Read endpoints only.** Data changes go through the Rust API:
   `put_task_list`, `put_task`, `delete_task`, `put_contact`,
-  `seed_contacts`, `delete_contact`, `expire_people_sync_tokens`.
-- `tasklists.list`: `maxResults` defaults to 20 and is capped at 100. The page
-  token is an index into the lists.
+  `seed_contacts`, `delete_contact`, `expire_people_sync_tokens`, and
+  `advance`, which moves the logical clock so that `updatedMin` filters.
+- `tasklists.list`: `maxResults` defaults to 1000, which is also the cap. The
+  page token is an index into the lists.
 - `tasks.list`:
   - Defaults: `showCompleted=true`, `showDeleted=false`, `showHidden=false`.
   - `maxResults` is capped at 100.
@@ -279,6 +280,9 @@ recordings check them. Every assumption is listed below.
     *Undocumented*: Google's answer to a stale or foreign Tasks page token.
   - `completedMin/Max`, `dueMin/Max` and `showAssigned` are rejected with
     `400`.
+- *Open (T10)*: Google leaves tasks assigned from Docs or Chat out of
+  `tasks.list` unless `showAssigned=true`. The adapter does not send it, so it
+  does not see them; the fake has no assigned tasks.
 - `tasks.get` returns a deleted task too, with `deleted: true` (*undocumented*).
 - Task fields set by the fake: `kind`, `etag`, `updated` (the logical clock),
   `selfLink`, `position`, `status`, `links`. A deletion sets `deleted: true`
@@ -307,7 +311,10 @@ recordings check them. Every assumption is listed below.
   `403 insufficientPermissions`; `Fault::scope_insufficient()` is the
   AIP-193 `403 PERMISSION_DENIED` with `ErrorInfo.reason:
   ACCESS_TOKEN_SCOPE_INSUFFICIENT`. Google sends the second (People, Tasks)
-  or both; which one each API sends is *undocumented* (T10). Without a
+  or both; which one each API sends is *undocumented* (T10).
+  `Fault::api_disabled()` is the AIP-193 `403 SERVICE_DISABLED` that Google
+  sends when the Cloud project has not enabled the API (the classic shape is
+  `accessNotConfigured`). The adapter treats it like a missing scope. Without a
   scripted fault every scope is granted: the token endpoint reports
   `calendar.readonly`, `tasks.readonly` and `contacts.readonly`.
 

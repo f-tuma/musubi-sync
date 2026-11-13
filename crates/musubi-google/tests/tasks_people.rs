@@ -42,6 +42,7 @@ async fn env() -> Env {
     google.tasks_base = g.tasks_api().parse().unwrap();
     google.people_base = g.people_api().parse().unwrap();
     google.token_url = g.token_url().parse().unwrap();
+    google.discover_tasks_people = true;
     let p = GoogleProvider::new(google, Arc::new(WallClock)).unwrap();
     let mut cx = account_cx(AccountId::from_u128(1), Timestamp::now());
     cx.credential = Credential::Bearer(g.access_token().into());
@@ -189,6 +190,75 @@ async fn missing_scope_at_discovery_is_unauthorized_in_either_shape() {
 }
 
 #[tokio::test]
+async fn disabled_api_at_discovery_is_unauthorized_and_missing_scope_in_changes() {
+    let classic = Fault {
+        domain: "usageLimits",
+        reason: "accessNotConfigured",
+        rpc_status: None,
+        ..Fault::api_disabled()
+    };
+    for (tasks_fault, people_fault) in [
+        (classic.clone(), Fault::api_disabled()),
+        (Fault::api_disabled(), classic.clone()),
+    ] {
+        let e = env().await;
+        let list = e.g.put_task_list("Inbox");
+        e.g.fail(Endpoint::TaskLists, tasks_fault.clone(), 1);
+        e.g.fail(Endpoint::PeopleConnections, people_fault.clone(), 1);
+        let d = e.p.discover(&e.cx).await.unwrap();
+        assert_eq!(d.unauthorized, [EntityKind::Task, EntityKind::Contact]);
+        assert_eq!(d.collections.len(), 1, "calendars stay complete");
+        e.g.fail(Endpoint::TasksList, tasks_fault, 1);
+        let err = e.first_error(&tasks(&list), None).await;
+        assert!(
+            matches!(
+                err,
+                SyncError::MissingScope {
+                    kind: EntityKind::Task
+                }
+            ),
+            "{err:?}"
+        );
+    }
+}
+
+/// A throttled or failing probe fails the whole discovery (retried by the
+/// engine) rather than degrading the calendar listing.
+#[tokio::test]
+async fn throttled_or_failing_probe_fails_the_whole_discovery() {
+    for endpoint in [Endpoint::TaskLists, Endpoint::PeopleConnections] {
+        let e = env().await;
+        e.g.fail(endpoint, Fault::rate_limited(Some(7)), 1);
+        let err = e.p.discover(&e.cx).await.unwrap_err();
+        assert!(matches!(err, SyncError::RateLimited { .. }), "{err:?}");
+        e.g.fail(endpoint, Fault::backend_error(), 1);
+        let err = e.p.discover(&e.cx).await.unwrap_err();
+        assert!(matches!(err, SyncError::Transient(_)), "{err:?}");
+    }
+}
+
+#[tokio::test]
+async fn discovery_without_the_flag_is_phase_1() {
+    let e = env().await;
+    e.g.put_task_list("Inbox");
+    let mut google = GoogleConfig::new("client", SecretString::from("secret"));
+    google.api_base = e.g.calendar_api().parse().unwrap();
+    google.tasks_base = e.g.tasks_api().parse().unwrap();
+    google.people_base = e.g.people_api().parse().unwrap();
+    google.token_url = e.g.token_url().parse().unwrap();
+    let p = GoogleProvider::new(google, Arc::new(WallClock)).unwrap();
+    let d = p.discover(&e.cx).await.unwrap();
+    assert!(d.collections.iter().all(|c| c.kind == EntityKind::Event));
+    assert!(d.unauthorized.is_empty());
+    let reqs = e.g.requests();
+    assert!(
+        reqs.iter()
+            .all(|r| !r.contains("/tasks/v1") && !r.contains("/people/v1")),
+        "{reqs:?}"
+    );
+}
+
+#[tokio::test]
 async fn other_403_at_discovery_is_a_permanent_partial_discovery() {
     let e = env().await;
     e.g.fail(Endpoint::PeopleConnections, Fault::forbidden(), 1);
@@ -235,6 +305,9 @@ async fn tasks_full_read_then_overlapping_delta_without_duplicates() {
     let e = env().await;
     let list = e.g.put_task_list("Inbox");
     let col = tasks(&list);
+    let old = e.g.put_task(&list, json!({ "title": "old" }));
+    // Two minutes on: `old` falls before the delta's 60 s overlap.
+    e.g.advance(Duration::from_secs(120));
     let a = e.g.put_task(
         &list,
         json!({ "title": "a", "due": "2026-11-20T00:00:00.000Z" }),
@@ -256,7 +329,7 @@ async fn tasks_full_read_then_overlapping_delta_without_duplicates() {
     assert!(!full.repeated);
     assert_eq!(
         full.upserts.keys().cloned().collect::<BTreeSet<_>>(),
-        BTreeSet::from([a.clone(), b.clone(), hidden.clone()])
+        BTreeSet::from([old.clone(), a.clone(), b.clone(), hidden.clone()])
     );
     assert_eq!(
         full.upserts[&hidden].1["hidden"],
@@ -281,13 +354,27 @@ async fn tasks_full_read_then_overlapping_delta_without_duplicates() {
     assert!(quiet.iter().all(|p| p.pass == Pass::Delta));
     let again = pass(&quiet);
     assert!(!again.repeated && again.removals.is_empty());
+    assert_eq!(
+        again.upserts.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from([a.clone(), b.clone(), hidden.clone()]),
+        "updatedMin filters out `old`"
+    );
     for (k, (validator, _)) in &again.upserts {
         assert_eq!(validator, &full.upserts[k].0);
     }
     let last = e.g.requests().pop().unwrap();
-    assert!(
-        last.contains("updatedMin=") && last.contains("showDeleted=true"),
-        "{last}"
+    assert!(last.contains("showDeleted=true"), "{last}");
+    let url = reqwest::Url::parse(&format!("http://x{}", last.split(' ').nth(1).unwrap())).unwrap();
+    let (_, min) = url.query_pairs().find(|(k, _)| k == "updatedMin").unwrap();
+    let newest = full
+        .upserts
+        .values()
+        .map(|(_, t)| t["updated"].as_str().unwrap().parse::<Timestamp>().unwrap())
+        .max()
+        .unwrap();
+    assert_eq!(
+        min.parse::<Timestamp>().unwrap(),
+        newest - jiff::SignedDuration::from_secs(60)
     );
 
     e.g.put_task(
@@ -309,6 +396,28 @@ async fn tasks_full_read_then_overlapping_delta_without_duplicates() {
     let after = e.read_ok(&col, cursor(&delta), hint(100)).await;
     assert_eq!(pass(&after).removals, [b], "still inside the 60 s overlap");
     assert_eq!(cursor(&after), cursor(&delta));
+    // A write two minutes later moves the watermark past the deletion.
+    e.g.advance(Duration::from_secs(120));
+    let d = e.g.put_task(&list, json!({ "title": "d" }));
+    let moved = e.read_ok(&col, cursor(&after), hint(100)).await;
+    let later = pass(&e.read_ok(&col, cursor(&moved), hint(100)).await);
+    assert!(later.removals.is_empty(), "{:?}", later.removals);
+    assert_eq!(later.upserts.keys().collect::<Vec<_>>(), [&d]);
+}
+
+#[tokio::test]
+async fn forbidden_rate_limit_in_task_changes_is_rate_limited() {
+    let e = env().await;
+    let list = e.g.put_task_list("Inbox");
+    let user = Fault {
+        reason: "userRateLimitExceeded",
+        ..Fault::forbidden_rate_limited(None)
+    };
+    for fault in [Fault::forbidden_rate_limited(Some(5)), user] {
+        e.g.fail(Endpoint::TasksList, fault, 1);
+        let err = e.first_error(&tasks(&list), None).await;
+        assert!(matches!(err, SyncError::RateLimited { .. }), "{err:?}");
+    }
 }
 
 #[tokio::test]
@@ -450,6 +559,31 @@ async fn people_expired_sync_token_is_cursor_expired() {
         matches!(err, SyncError::CursorExpired),
         "rejected page token: {err:?}"
     );
+}
+
+/// Plan 6.3: Google's exact error for a stale token is unverified (T10), so
+/// any 400 on a request with a sync token restarts the pass; without one it
+/// is a real error.
+#[tokio::test]
+async fn any_400_with_a_sync_token_is_cursor_expired() {
+    let e = env().await;
+    let col = contacts();
+    e.g.seed_contacts(1);
+    let token = cursor(&e.read_ok(&col, None, hint(100)).await);
+    let bad = Fault {
+        status: 400,
+        domain: "global",
+        reason: "badRequest",
+        message: "Bad Request",
+        retry_after: None,
+        rpc_status: None,
+    };
+    e.g.fail(Endpoint::PeopleConnections, bad.clone(), 1);
+    let err = e.first_error(&col, token).await;
+    assert!(matches!(err, SyncError::CursorExpired), "{err:?}");
+    e.g.fail(Endpoint::PeopleConnections, bad, 1);
+    let err = e.first_error(&col, None).await;
+    assert!(matches!(err, SyncError::Permanent(_)), "{err:?}");
 }
 
 #[tokio::test]

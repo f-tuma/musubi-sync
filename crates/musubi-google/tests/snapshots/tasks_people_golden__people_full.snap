@@ -35,7 +35,7 @@ expression: "decode :: < Contact, PeopleCodec >\n(\"people\", & stringify! (peop
   ],
   "organizations": [
     {
-      "name": "Spilberk s.r.o.",
+      "name": "Example Corp",
       "units": [
         "Vývoj"
       ]
@@ -61,14 +61,14 @@ expression: "decode :: < Contact, PeopleCodec >\n(\"people\", & stringify! (peop
   ],
   "phones": [
     {
-      "number": "+420 601 234 567",
+      "number": "+1 202-555-0100",
       "features": [
         "cell"
       ],
       "pref": 1
     },
     {
-      "number": "+420 541 000 000",
+      "number": "+1 202-555-0101",
       "features": [
         "fax"
       ],
@@ -77,16 +77,16 @@ expression: "decode :: < Contact, PeopleCodec >\n(\"people\", & stringify! (peop
       ]
     },
     {
-      "number": "+420 777 000 000",
+      "number": "+1 202-555-0102",
       "label": "chata"
     }
   ],
   "addresses": [
     {
-      "full": "Údolní 53\nBrno 602 00\nCZ",
-      "street": "Údolní 53",
-      "locality": "Brno",
-      "postcode": "602 00",
+      "full": "Example Street 1\nExampleville 123 45\nCZ",
+      "street": "Example Street 1",
+      "locality": "Exampleville",
+      "postcode": "123 45",
       "country": "Czechia",
       "contexts": [
         "private"

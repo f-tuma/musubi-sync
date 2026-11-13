@@ -22,26 +22,26 @@
   ],
   "nicknames": [ { "metadata": { "primary": true }, "value": "Janča" } ],
   "organizations": [
-    { "metadata": { "primary": true }, "name": "Spilberk s.r.o.", "department": "Vývoj", "title": "Vedoucí týmu" }
+    { "metadata": { "primary": true }, "name": "Example Corp", "department": "Vývoj", "title": "Vedoucí týmu" }
   ],
   "emailAddresses": [
     { "metadata": { "primary": true }, "value": "jana@example.cz", "type": "home", "formattedType": "Home" },
     { "metadata": {}, "value": "jana.novakova@example.com", "type": "work", "formattedType": "Work" }
   ],
   "phoneNumbers": [
-    { "metadata": { "primary": true }, "value": "+420 601 234 567", "canonicalForm": "+420601234567", "type": "mobile", "formattedType": "Mobile" },
-    { "metadata": {}, "value": "+420 541 000 000", "type": "workFax", "formattedType": "Work Fax" },
-    { "metadata": {}, "value": "+420 777 000 000", "type": "chata", "formattedType": "chata" }
+    { "metadata": { "primary": true }, "value": "+1 202-555-0100", "canonicalForm": "+12025550100", "type": "mobile", "formattedType": "Mobile" },
+    { "metadata": {}, "value": "+1 202-555-0101", "type": "workFax", "formattedType": "Work Fax" },
+    { "metadata": {}, "value": "+1 202-555-0102", "type": "chata", "formattedType": "chata" }
   ],
   "addresses": [
     {
       "metadata": { "primary": true },
-      "formattedValue": "Údolní 53\nBrno 602 00\nCZ",
+      "formattedValue": "Example Street 1\nExampleville 123 45\nCZ",
       "type": "home",
       "formattedType": "Home",
-      "streetAddress": "Údolní 53",
-      "city": "Brno",
-      "postalCode": "602 00",
+      "streetAddress": "Example Street 1",
+      "city": "Exampleville",
+      "postalCode": "123 45",
       "country": "Czechia",
       "countryCode": "CZ"
     }

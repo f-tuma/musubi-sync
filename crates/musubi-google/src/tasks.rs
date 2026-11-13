@@ -43,6 +43,10 @@ enum TasksCursor {
         page: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<Timestamp>,
+        /// `maxResults` of the pass while `page` is set: a page token belongs
+        /// to the parameters that issued it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
     },
     /// Delta from `ts`, the largest `updated` seen (`None`: the list had no
     /// task yet, the delta lists everything). `page` and `max` while a delta
@@ -53,6 +57,9 @@ enum TasksCursor {
         page: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<Timestamp>,
+        /// As in `Full`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
     },
 }
 
@@ -65,32 +72,47 @@ struct Query {
     page: Option<String>,
     /// Largest `updated` seen in this pass so far.
     max: Option<Timestamp>,
+    /// `maxResults`, the same on every page of a pass.
+    size: u32,
 }
 
 impl Query {
     /// Tasks have no window (plan, open question 5): every start without a
-    /// cursor is a full read.
-    fn start(cursor: Option<Cursor>) -> Result<Self, SyncError> {
+    /// cursor is a full read. `size` is the hint's page size; a pass resumed
+    /// mid-way keeps its own.
+    fn start(cursor: Option<Cursor>, size: u32) -> Result<Self, SyncError> {
         let Some(c) = cursor else {
             return Ok(Query {
                 pass: Pass::Full,
                 ts: None,
                 page: None,
                 max: None,
+                size,
             });
         };
         match serde_json::from_slice(&c.0) {
-            Ok(TasksCursor::Full { page, max }) => Ok(Query {
+            Ok(TasksCursor::Full {
+                page,
+                max,
+                size: stored,
+            }) => Ok(Query {
                 pass: Pass::Full,
                 ts: None,
                 page: Some(page),
                 max,
+                size: stored.unwrap_or(size),
             }),
-            Ok(TasksCursor::UpdatedMin { ts, page, max }) => Ok(Query {
+            Ok(TasksCursor::UpdatedMin {
+                ts,
+                page,
+                max,
+                size: stored,
+            }) => Ok(Query {
                 pass: Pass::Delta,
                 ts,
                 page,
                 max,
+                size: stored.unwrap_or(size),
             }),
             Err(e) => {
                 tracing::warn!(error = %e, "unreadable task list cursor; full read");
@@ -155,10 +177,12 @@ fn build_page(q: &Query, body: &[u8]) -> Result<(ChangePage, Option<Query>), Syn
                     ts: q.ts,
                     page: Some(page.clone()),
                     max,
+                    size: Some(q.size),
                 },
                 _ => TasksCursor::Full {
                     page: page.clone(),
                     max,
+                    size: Some(q.size),
                 },
             };
             let next = Query {
@@ -174,6 +198,7 @@ fn build_page(q: &Query, body: &[u8]) -> Result<(ChangePage, Option<Query>), Syn
                 ts: max.max(q.ts),
                 page: None,
                 max: None,
+                size: None,
             },
             None,
         ),
@@ -214,7 +239,7 @@ impl GoogleProvider {
         let mut page: Option<String> = None;
         loop {
             let mut url = self.tasks_url(&["users", "@me", "lists"]);
-            url.query_pairs_mut().append_pair("maxResults", "100");
+            url.query_pairs_mut().append_pair("maxResults", "1000");
             if let Some(p) = &page {
                 url.query_pairs_mut().append_pair("pageToken", p);
             }
@@ -246,8 +271,8 @@ impl GoogleProvider {
         hint: FetchHint,
     ) -> BoxStream<'a, Result<ChangePage, SyncError>> {
         let size = hint.page_size.map_or(MAX_PAGE, |n| n.get().min(MAX_PAGE));
-        pages(Query::start(cursor), move |q| {
-            self.tasks_page(cx, list, q, size)
+        pages(Query::start(cursor, size), move |q| {
+            self.tasks_page(cx, list, q)
         })
     }
 
@@ -257,13 +282,12 @@ impl GoogleProvider {
         cx: &AccountCx,
         list: &str,
         q: Query,
-        size: u32,
     ) -> Result<(ChangePage, Option<Query>), SyncError> {
         let mut url = self.tasks_url(&["lists", list, "tasks"]);
         {
             // A page request repeats every parameter of the first one.
             let mut p = url.query_pairs_mut();
-            p.append_pair("maxResults", &size.to_string());
+            p.append_pair("maxResults", &q.size.to_string());
             p.append_pair("showCompleted", "true");
             p.append_pair("showHidden", "true");
             let delta = q.pass == Pass::Delta;
@@ -390,6 +414,7 @@ mod tests {
             ts: ts.map(|t| t.parse().unwrap()),
             page: None,
             max: None,
+            size: 2,
         }
     }
 
@@ -405,7 +430,8 @@ mod tests {
         ],"nextPageToken":"p2"}"#;
         let (page, next) = build_page(&query(Pass::Full, None), p1).unwrap();
         assert!(!page.last && page.upserts.len() == 2);
-        let resumed = Query::start(page.cursor.clone()).unwrap();
+        // A resumed pass keeps its page size whatever the new hint says.
+        let resumed = Query::start(page.cursor.clone(), 50).unwrap();
         assert_eq!(Some(resumed.clone()), next);
         let p2 = br#"{"items":[{"id":"c","updated":"2026-11-11T11:00:00.000Z"}]}"#;
         let (page, next) = build_page(&resumed, p2).unwrap();
@@ -417,13 +443,14 @@ mod tests {
             TasksCursor::UpdatedMin {
                 ts: Some(ts),
                 page: None,
-                max: None
+                max: None,
+                size: None,
             }
         );
-        let delta = Query::start(page.cursor).unwrap();
+        let delta = Query::start(page.cursor, 50).unwrap();
         assert_eq!(delta.pass, Pass::Delta);
         let (page, _) = build_page(&delta, br#"{"kind":"tasks#tasks"}"#).unwrap();
-        assert_eq!(Query::start(page.cursor).unwrap().ts, Some(ts));
+        assert_eq!(Query::start(page.cursor, 50).unwrap().ts, Some(ts));
     }
 
     #[test]
@@ -445,7 +472,7 @@ mod tests {
     #[test]
     fn unreadable_cursor_is_expired() {
         assert!(matches!(
-            Query::start(Some(Cursor(b"{\"sync\":1}".to_vec()))),
+            Query::start(Some(Cursor(b"{\"sync\":1}".to_vec())), 100),
             Err(SyncError::CursorExpired)
         ));
     }

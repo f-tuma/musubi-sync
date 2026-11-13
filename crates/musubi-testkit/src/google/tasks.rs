@@ -18,6 +18,8 @@ use super::{
 
 /// Google's cap on `maxResults` for `tasks.list` and `tasklists.list`.
 pub const MAX_TASKS_PAGE: u32 = 100;
+/// Google's default and cap for `maxResults` of `tasklists.list`.
+pub const MAX_TASK_LISTS_PAGE: u32 = 1000;
 
 pub(super) struct TaskList {
     title: String,
@@ -148,7 +150,7 @@ pub(super) async fn task_lists(
         Ok(p) => p,
         Err(r) => return r,
     };
-    let size = match max_results(&p, 20, MAX_TASKS_PAGE) {
+    let size = match max_results(&p, MAX_TASK_LISTS_PAGE, MAX_TASK_LISTS_PAGE) {
         Ok(n) => n,
         Err(r) => return r,
     };
