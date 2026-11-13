@@ -10,13 +10,13 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use musubi_model::control::ApiKeyHash;
-use musubi_model::control::Scope;
+use musubi_model::control::{AccountRecord, ApiKeyHash, Scope};
 use musubi_model::store::{
     CollectionState, Coverage, EntityView, Include, ItemView, RangeCursor, RangeQuery,
 };
 use musubi_model::{
-    AccountId, CollectionId, ControlStore, EntityId, ItemId, Seq, Storage, TenantStore, TimeWindow,
+    AccountId, CollectionId, ControlStore, EntityId, EntityKind, ItemId, Seq, Storage, TenantId,
+    TenantStore, TimeWindow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -44,14 +44,46 @@ pub(crate) async fn account(
     Path(id): Path<AccountId>,
 ) -> Out {
     let tenant = caller.tenant(Scope::Read)?;
-    let a = app
-        .run(move |a| Ok(a.control.account(id)?))
-        .await?
-        .filter(|a| a.tenant == tenant)
-        .ok_or_else(ApiError::not_found)?;
-    Ok(Json(json!({
-        "id": a.id, "provider": a.provider, "subject": a.subject, "state": a.state,
-    })))
+    let view = app
+        .run(move |a| {
+            let rec = a
+                .control
+                .account(id)?
+                .filter(|r| r.tenant == tenant)
+                .ok_or_else(ApiError::not_found)?;
+            account_view(a, &rec)
+        })
+        .await?;
+    Ok(Json(view))
+}
+
+/// The account as the API shows it: `missing` kinds with the `reconsent`
+/// request that grants them, and for DAV the profile, entries, allowed
+/// origins and user name. Never the password.
+pub(crate) fn account_view(a: &App, rec: &AccountRecord) -> Result<Value, ApiError> {
+    let mut v = json!({
+        "id": rec.id, "provider": rec.provider, "subject": rec.subject, "state": rec.state,
+        "missing": a.control.missing(rec.id)?,
+    });
+    if v["missing"] != json!([]) {
+        // Plan 6.1: the way to grant the missing kinds.
+        v["reconsent"] = json!({
+            "method": "POST", "path": "/v1/accounts",
+            "body": { "provider": rec.provider, "account": rec.id },
+        });
+    }
+    if let Some(e) = a.control.endpoint(rec.id)? {
+        for k in ["profile", "caldav_url", "carddav_url", "origins"] {
+            v[k] = e.state.get(k).cloned().unwrap_or(Value::Null);
+        }
+    }
+    if let Some(sealed) = a.control.read_tokens(rec.id)?
+        && matches!(rec.provider.0.as_str(), "dav" | "icloud")
+    {
+        let (username, _password) = a.sealer.open_basic(rec.tenant, rec.id, &sealed)?;
+        v["username"] = json!(username);
+    }
+    Ok(v)
 }
 
 /// `GET /v1/collections`.
@@ -87,8 +119,11 @@ fn collection_json(c: &CollectionState) -> Value {
 
 #[derive(Deserialize)]
 pub(crate) struct RangeParams {
-    from: Timestamp,
-    to: Timestamp,
+    /// `task`, `contact` or `contact_group`: a listing of that kind instead
+    /// of the event range (`from`, `to`, `zone`, `ids_only`, `expand` unused).
+    kind: Option<EntityKind>,
+    from: Option<Timestamp>,
+    to: Option<Timestamp>,
     /// IANA zone floating times are read in; default UTC.
     zone: Option<String>,
     /// Comma-separated collection ids; default all.
@@ -110,22 +145,14 @@ struct After {
     r: Option<Timestamp>,
 }
 
-/// `GET /v1/entities?from&to`: occurrences in a window, paged.
+/// `GET /v1/entities?from&to`: occurrences in a window, paged; with `kind`,
+/// the entities of a kind without occurrences.
 pub(crate) async fn entities(
     State(app): State<Arc<App>>,
     caller: Caller,
     Query(p): Query<RangeParams>,
 ) -> Out {
     let tenant = caller.tenant(Scope::Read)?;
-    let window = TimeWindow::new(p.from, p.to)
-        .ok_or_else(|| ApiError::bad_request("from must be before to"))?;
-    if p.expand.as_deref().is_some_and(|e| e != "occurrences") {
-        return Err(ApiError::bad_request("expand supports only occurrences"));
-    }
-    let zone = match p.zone.as_deref() {
-        None => TimeZone::UTC,
-        Some(z) => TimeZone::get(z).map_err(|_| ApiError::bad_request("unknown zone"))?,
-    };
     let collections = p
         .collection
         .as_deref()
@@ -136,6 +163,29 @@ pub(crate) async fn entities(
         })
         .transpose()
         .map_err(|_| ApiError::bad_request("collection must be comma-separated collection ids"))?;
+    let limit = p.limit.unwrap_or(RANGE_LIMIT);
+    if !(1..=RANGE_LIMIT_MAX).contains(&limit) {
+        return Err(ApiError::bad_request(format!(
+            "limit must be 1..={RANGE_LIMIT_MAX}"
+        )));
+    }
+    if let Some(kind) = p.kind {
+        return list(&app, tenant, kind, collections, p.after, limit).await;
+    }
+    let (Some(from), Some(to)) = (p.from, p.to) else {
+        return Err(ApiError::bad_request(
+            "from and to are required without kind",
+        ));
+    };
+    let window =
+        TimeWindow::new(from, to).ok_or_else(|| ApiError::bad_request("from must be before to"))?;
+    if p.expand.as_deref().is_some_and(|e| e != "occurrences") {
+        return Err(ApiError::bad_request("expand supports only occurrences"));
+    }
+    let zone = match p.zone.as_deref() {
+        None => TimeZone::UTC,
+        Some(z) => TimeZone::get(z).map_err(|_| ApiError::bad_request("unknown zone"))?,
+    };
     let after = p
         .after
         .as_deref()
@@ -150,12 +200,6 @@ pub(crate) async fn entities(
                 .ok_or_else(|| ApiError::bad_request("bad after cursor"))
         })
         .transpose()?;
-    let limit = p.limit.unwrap_or(RANGE_LIMIT);
-    if !(1..=RANGE_LIMIT_MAX).contains(&limit) {
-        return Err(ApiError::bad_request(format!(
-            "limit must be 1..={RANGE_LIMIT_MAX}"
-        )));
-    }
     let q = RangeQuery {
         window,
         collections,
@@ -199,6 +243,40 @@ pub(crate) async fn entities(
     Ok(Json(
         json!({ "occurrences": occurrences, "next": next, "unindexed": unindexed }),
     ))
+}
+
+/// `GET /v1/entities?kind`: live entities of `kind` in `collections` (default
+/// all), in id order; `next` is the last id of a full page.
+async fn list(
+    app: &Arc<App>,
+    tenant: TenantId,
+    kind: EntityKind,
+    collections: Option<Vec<CollectionId>>,
+    after: Option<String>,
+    limit: u32,
+) -> Out {
+    if kind == EntityKind::Event {
+        return Err(ApiError::bad_request("events are read by range (from, to)"));
+    }
+    let after = after
+        .map(|a| a.parse::<EntityId>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("bad after cursor"))?;
+    let page = app
+        .run(move |a| {
+            let t = a.storage.open(tenant)?;
+            let cols = match collections {
+                Some(c) => c,
+                None => t.collections()?.into_iter().map(|c| c.id).collect(),
+            };
+            Ok(t.list_entities(kind, &cols, after, limit, Include::default())?)
+        })
+        .await?;
+    let next = (page.len() == limit as usize)
+        .then(|| page.last().map(|e| e.id.to_string()))
+        .flatten();
+    let entities: Vec<Value> = page.iter().map(|e| entity_json(e, false)).collect();
+    Ok(Json(json!({ "entities": entities, "next": next })))
 }
 
 #[derive(Deserialize)]

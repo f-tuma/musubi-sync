@@ -3,8 +3,9 @@ info:
   title: musubi-sync
   version: 0.1.0
   description: |
-    Phase 1 API of musubi-syncd (docs/plan/phase1.md, K6). Read-only access to
-    a tenant's synchronised calendars, its change journal and a change stream.
+    API of musubi-syncd (docs/plan/phase1.md K6, phase2.md K8). Read-only
+    access to a tenant's synchronised calendars, tasks and contacts, its
+    change journal and a change stream.
 
     Authentication: `Authorization: Bearer <credential>`.
     - Tenant API key (`mk_…`), created by the instance admin; stored only as
@@ -61,6 +62,64 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /v1/accounts/dav:
+    post:
+      summary: Connect a DAV account (admin scope)
+      description: |
+        CalDAV/CardDAV with a user name and password (plan 5.5). Discovery runs
+        inside the request (at most 20 s); only when it succeeds are the
+        credentials sealed and the account stored. Any failure stores nothing
+        and answers `400` with `error`:
+        `unauthorized` (credentials rejected), `not_dav` (no principal found),
+        `blocked_address` (a private address without `dav.allow_private`, or
+        `http` off loopback), `cross_origin_redirect` (the message names the
+        target; nothing was sent there; add it to `allow_origins` to accept),
+        `subject_mismatch` (a reconnect found another principal), `timeout`.
+        Reconnect (with `account`, or a connect that finds the same principal)
+        must find every principal the account has, else `subject_mismatch` and
+        the account stays as it was. The password is never returned or logged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile, username, password]
+              additionalProperties: false
+              properties:
+                profile: { type: string, enum: [generic], description: "`icloud` arrives with K7" }
+                server_url: { type: string, format: uri, description: Entry for both CalDAV and CardDAV }
+                caldav_url: { type: string, format: uri }
+                carddav_url: { type: string, format: uri }
+                allow_origins:
+                  type: array
+                  items: { type: string, format: uri }
+                  description: Further origins the server may redirect to or keep data on.
+                username: { type: string, description: "Non-empty, without `:`" }
+                password: { type: string, format: password }
+                account: { $ref: "#/components/schemas/Id" }
+      responses:
+        "200":
+          description: The account (`connecting` while the first discovery runs).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Account" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /v1/interest:
+    post:
+      summary: The user is looking at the tenant's data
+      description: |
+        Raises the tenant's polling to the active level (every 15 to 60 s) for
+        120 s and polls at once (plan 7.3). Call it while the data is on
+        screen, at most once a minute. Nothing else raises it: neither an open
+        `/v1/stream` nor reads.
+      responses:
+        "204": { description: Noted. }
+        "401": { $ref: "#/components/responses/Error" }
   /v1/accounts/{id}:
     get:
       summary: One account
@@ -76,7 +135,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /v1/collections:
     get:
-      summary: Collections (calendars) of the tenant's accounts
+      summary: Collections (calendars, task lists, address books) of the tenant's accounts
       responses:
         "200":
           description: All collections.
@@ -91,15 +150,23 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /v1/entities:
     get:
-      summary: Occurrences in a time window, paged
+      summary: Occurrences in a time window, or entities of one kind, paged
       description: |
-        One row per occurrence overlapping `[from, to)`, ordered by start. Pass
-        `next` back as `after` for the following page. Series whose stored
-        occurrence index ends inside the window are listed in `unindexed`
-        (their later occurrences are not in this page).
+        Without `kind`: one row per occurrence overlapping `[from, to)`
+        (both required), ordered by start. Pass `next` back as `after` for the
+        following page. Series whose stored occurrence index ends inside the
+        window are listed in `unindexed` (their later occurrences are not in
+        this page).
+
+        With `kind` (`task`, `contact`, `contact_group`): the live entities of
+        that kind in `collection` (default all), ordered by id, as
+        `{"entities": [{id, kind, rev, seq, tombstone, canonical}], "next"}`;
+        `from`, `to`, `zone`, `ids_only` and `expand` do not apply. Events are
+        read by range (`kind=event` answers `400`).
       parameters:
-        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
-        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: kind, in: query, schema: { type: string, enum: [task, contact, contact_group] } }
+        - { name: from, in: query, description: Required without kind, schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: Required without kind, schema: { type: string, format: date-time } }
         - { name: zone, in: query, description: "IANA zone for floating times; default UTC", schema: { type: string } }
         - { name: collection, in: query, description: Comma-separated collection ids, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
@@ -125,6 +192,10 @@ paths:
                         end: { type: string, format: date-time }
                         floating: { type: boolean }
                         canonical: { description: Canonical event JSON, or null with ids_only }
+                  entities:
+                    type: array
+                    description: With kind.
+                    items: { type: object }
                   next: { type: [string, "null"] }
                   unindexed:
                     type: array
@@ -289,6 +360,29 @@ paths:
                 properties:
                   account: { $ref: "#/components/schemas/Id" }
                   state: { $ref: "#/components/schemas/AccountState" }
+        missing:
+          type: array
+          items: { type: string, enum: [event, task, contact, contact_group] }
+          description: |
+            Kinds the account's grant does not cover (a Google account from
+            phase 1 without the Tasks and People scopes). Its other kinds keep
+            syncing; reconnect with `POST /v1/accounts` and `account` to grant
+            them.
+        reconsent:
+          type: object
+          description: With `missing`; the request that grants the missing kinds.
+          properties:
+            method: { type: string, enum: [POST] }
+            path: { type: string, enum: [/v1/accounts] }
+            body: { type: object, properties: { provider: { type: string }, account: { $ref: "#/components/schemas/Id" } } }
+        profile: { type: string, description: DAV only }
+        caldav_url: { type: [string, "null"], description: DAV only }
+        carddav_url: { type: [string, "null"], description: DAV only }
+        origins:
+          type: array
+          items: { type: string }
+          description: DAV only; the origins the account may reach.
+        username: { type: string, description: DAV only; never the password }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }

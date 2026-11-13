@@ -5,6 +5,8 @@
 //! musubi-syncd backup  --config <file> --to <dir>     (node running)
 //! musubi-syncd restore --config <file> --from <dir>   (node stopped)
 //! ```
+//!
+//! `MUSUBI_LOG` sets the log level (`error` … `trace`, default `info`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,8 +23,13 @@ const USAGE: &str = "usage: musubi-syncd serve --config <file>
 const GRACE: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
+    let level = std::env::var("MUSUBI_LOG")
+        .ok()
+        .and_then(|l| l.parse::<tracing_subscriber::filter::LevelFilter>().ok())
+        .unwrap_or(tracing_subscriber::filter::LevelFilter::INFO);
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_max_level(level)
         .init();
     match run() {
         Ok(()) => ExitCode::SUCCESS,

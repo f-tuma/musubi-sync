@@ -74,9 +74,11 @@ pub enum SyncError {
         /// The kind the account may not read.
         kind: EntityKind,
     },
-    /// Discovery listed some collections but could not finish. The engine uses
-    /// `found` to add and update collections but must not treat a collection
-    /// missing from it as deleted.
+    /// Discovery listed some collections but could not finish, and no kind is
+    /// known complete. The engine uses `found` to add and update collections
+    /// but must not treat a collection missing from it as deleted, and keeps
+    /// the stored missing kinds. A listing that failed for some kinds only is
+    /// an `Ok` [`crate::provider::Discovery`] with those kinds in `incomplete`.
     #[error("discovery incomplete ({} collections found)", found.len())]
     PartialDiscovery {
         /// Collections that were listed before the failure.

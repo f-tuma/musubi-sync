@@ -42,6 +42,7 @@ jobs:
       # `--all-targets` skips the conformance runner (`test = false`).
       - run: cargo clippy -p musubi-testkit --test conformance --locked -- -D warnings
       - run: cargo clippy -p musubi-dav --test radicale --locked -- -D warnings
+      - run: cargo clippy -p musubi-syncd --test radicale --locked -- -D warnings
 
   test:
     if: github.event_name != 'schedule'
@@ -79,6 +80,8 @@ jobs:
       - run: MUSUBI_RADICALE="$RUNNER_TEMP/radicale" cargo test -p musubi-testkit --test conformance --locked -- --nocapture
       # K4: the DAV adapter on its own against the same Radicale.
       - run: MUSUBI_RADICALE="$RUNNER_TEMP/radicale" cargo test -p musubi-dav --test radicale --locked
+      # K8: the whole binary with a DAV account on the same Radicale.
+      - run: MUSUBI_RADICALE="$RUNNER_TEMP/radicale" cargo test -p musubi-syncd --test radicale --locked -- --nocapture
 
   deny:
     runs-on: ubuntu-24.04

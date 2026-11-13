@@ -1062,12 +1062,15 @@ dependencies = [
 name = "musubi-syncd"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64",
  "futures-util",
  "jiff",
+ "musubi-dav",
  "musubi-engine",
  "musubi-google",
+ "musubi-ical",
  "musubi-model",
  "musubi-recurrence",
  "musubi-store-sqlite",

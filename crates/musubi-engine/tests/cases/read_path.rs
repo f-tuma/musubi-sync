@@ -362,12 +362,35 @@ async fn reauth_required_marks_the_account_and_stops_polling() {
         h.control.account(ACCOUNT).unwrap().unwrap().state,
         AccountState::ReauthRequired
     );
+    let error = h.collection("cal1").unwrap().status.error.unwrap();
+    assert_eq!(error.message, "rejected");
 
     let calls = h.fake.calls();
     h.advance(h.config.rediscover_every * 2);
     h.engine.run_until_idle().await.unwrap();
     let after = h.fake.calls();
     assert_eq!((after.pages, after.discover), (calls.pages, calls.discover));
+}
+
+#[tokio::test]
+async fn reauth_raised_by_a_discovery_is_recorded_with_its_reason() {
+    let h = H::new();
+    h.put_at("a", 1);
+    h.connect_and_sync().await;
+    h.fake.fail(
+        Op::Discover,
+        SyncError::ReauthRequired {
+            reason: ReauthReason::EndpointMoved,
+        },
+    );
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(
+        h.control.account(ACCOUNT).unwrap().unwrap().state,
+        AccountState::ReauthRequired
+    );
+    let error = h.collection("cal1").unwrap().status.error.unwrap();
+    assert_eq!((error.message.as_str(), error.permanent), ("endpoint_moved", true));
 }
 
 #[tokio::test]
