@@ -2,13 +2,17 @@
 //! the raw body stays byte-for-byte as received, and re-serializing an
 //! `ICalendar` or `VCard` through calcard would normalize it. A grep over the
 //! sources, because calcard writes objects through `Display`/`to_string` and
-//! `write_to`.
+//! `write_to`; `format!` of the object by name is caught too.
 
 const BANNED: &[&str] = &[
     "to_string(",
     ".write_to(",
     "impl Display for",
     "impl fmt::Display",
+    // `format!` of a parsed object goes through the same `Display`.
+    "{cal",
+    "{card",
+    "{vcard",
 ];
 
 fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

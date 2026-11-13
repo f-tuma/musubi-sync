@@ -1,0 +1,17 @@
+---
+source: crates/musubi-ical/tests/codec_golden.rs
+expression: event (stringify! (dst_crossing))
+---
+{
+  "uid": "night-shift-1@example.com",
+  "title": "Night shift",
+  "start": "2026-10-24T20:00:00",
+  "timeZone": "Europe/Prague",
+  "duration": "PT13H",
+  "showWithoutTime": false,
+  "status": "confirmed",
+  "freeBusyStatus": "busy",
+  "privacy": "public",
+  "useDefaultAlerts": false,
+  "sequence": 0
+}

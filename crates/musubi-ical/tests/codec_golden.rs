@@ -56,6 +56,7 @@ mod events {
         timed,
         utc,
         all_day,
+        dst_crossing,
         floating,
         series,
         exceptions_only,
@@ -128,9 +129,10 @@ fn master_with_two_exceptions_is_one_item() {
     let moved = at("2026-11-16T09:00:00");
     assert_eq!(moved["start"], "2026-11-16T10:00:00");
     assert_eq!(moved["title"], "Standup (moved)");
+    // A cancelled exception removes its occurrence, as an EXDATE does.
     let cancelled = at("2026-11-30T09:00:00");
-    assert_eq!(cancelled["status"], "cancelled");
-    assert!(!cancelled.contains_key("start"), "starts at its key");
+    assert_eq!(cancelled["excluded"], true);
+    assert_eq!(cancelled.len(), 1);
     // EXDATE and RDATE share the map (JSCalendar), next to the two exceptions.
     assert_eq!(at("2026-11-23T09:00:00")["excluded"], true);
     assert!(at("2026-11-25T09:00:00").is_empty());
@@ -174,4 +176,94 @@ fn wrong_kind_is_unsupported() {
     assert!(unsupported(<VCardCodec as Codec<Contact>>::decode(
         &vcard_as_calendar
     )));
+}
+
+fn decode_str<K: Kind, C: Codec<K>>(body: String) -> Decoded<K::Canonical> {
+    C::decode(&Raw {
+        media_type: if body.starts_with("BEGIN:VCARD") {
+            MediaType::VCard
+        } else {
+            MediaType::Calendar
+        },
+        body: body.into_bytes(),
+    })
+}
+
+/// The duration counts real hours: the night of the autumn change has 13.
+#[test]
+fn duration_spans_a_dst_change_in_real_time() {
+    let e = event("dst_crossing");
+    assert_eq!(e.duration.0.get_hours(), 13, "{:?}", e.duration.0);
+}
+
+#[test]
+fn this_and_future_is_unsupported() {
+    match <IcalCodec as Codec<Event>>::decode(&raw("events/this_and_future.ics")) {
+        Decoded::Unsupported { reason } => {
+            assert_eq!(reason, "RECURRENCE-ID;RANGE=THISANDFUTURE")
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A cancelled earliest exception does not become the base: the item would
+/// then be cancelled and show no occurrence at all.
+#[test]
+fn exceptions_only_base_skips_a_cancelled_exception() {
+    let body = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/events/exceptions_only.ics",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+    .replace("SUMMARY:Sync\n", "SUMMARY:Sync\nSTATUS:CANCELLED\n");
+    let Decoded::Canonical(e) = decode_str::<Event, IcalCodec>(body) else {
+        panic!("decodes");
+    };
+    assert_eq!(e.title, "Sync (later)");
+    assert_ne!(e.status, musubi_model::event::EventStatus::Cancelled);
+    assert_eq!(e.start, "2026-12-10T16:00:00".parse().unwrap());
+    let early = &e.recurrence_overrides[&"2026-12-03T15:00:00".parse().unwrap()];
+    assert_eq!(early["excluded"], true);
+}
+
+#[test]
+fn exception_in_an_unresolved_zone_is_unsupported() {
+    let body = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/events/series.ics",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+    .replacen(
+        "RECURRENCE-ID;TZID=\"W. Europe Standard Time\"",
+        "RECURRENCE-ID;TZID=Nowhere/Special",
+        1,
+    );
+    assert!(body.contains("Nowhere/Special"), "fixture changed");
+    assert!(unsupported(decode_str::<Event, IcalCodec>(body)));
+}
+
+/// Mixed KIND entries: any group entry makes a group, as in `kind_of`.
+#[test]
+fn any_group_kind_makes_a_group() {
+    let body = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/contacts/group_apple.vcf",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+    .replace(
+        "X-ADDRESSBOOKSERVER-KIND",
+        "KIND:individual\nX-ADDRESSBOOKSERVER-KIND",
+    );
+    assert_eq!(
+        musubi_ical::kind_of(&Raw {
+            media_type: MediaType::VCard,
+            body: body.clone().into_bytes()
+        }),
+        Some(musubi_model::EntityKind::ContactGroup)
+    );
+    assert!(matches!(
+        decode_str::<ContactGroup, VCardCodec>(body.clone()),
+        Decoded::Canonical(_)
+    ));
+    assert!(unsupported(decode_str::<Contact, VCardCodec>(body)));
 }

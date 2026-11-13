@@ -129,7 +129,11 @@ fn posix(cal: &ICalendar, vtimezone: &ICalendarComponent) -> Option<String> {
     }
     let std = standard?;
     let Some(dst) = daylight else {
-        // A fixed offset: whatever the rule, the zone stays at TZOFFSETTO.
+        // A fixed offset, unless a recurring STANDARD changes the offset each
+        // year (TZOFFSETFROM differs), which no fixed offset can carry.
+        if std.recurring && std.from != std.to {
+            return None;
+        }
         return Some(format!("{}{}", name(&std), offset(std.to)));
     };
     if dst.from != std.to || std.from != dst.to {
@@ -153,6 +157,8 @@ struct Observance {
     to: i32,
     /// `Mm.w.d/time`, `None` without a convertible RRULE.
     rule: Option<String>,
+    /// Has an RRULE, convertible or not.
+    recurring: bool,
 }
 
 impl Observance {
@@ -172,7 +178,8 @@ impl Observance {
         let at = i32::from(start.hour.unwrap_or(0)) * 3600
             + i32::from(start.minute.unwrap_or(0)) * 60
             + i32::from(start.second.unwrap_or(0));
-        let rule = match c.properties(&ICalendarProperty::Rrule).count() {
+        let rrules = c.properties(&ICalendarProperty::Rrule).count();
+        let rule = match rrules {
             0 => None,
             1 => match value(ICalendarProperty::Rrule)? {
                 ICalendarValue::RecurrenceRule(r) => yearly(r).map(|m| format!("{m}/{}", hms(at))),
@@ -191,6 +198,7 @@ impl Observance {
             from: utc_offset(ICalendarProperty::Tzoffsetfrom)?,
             to: utc_offset(ICalendarProperty::Tzoffsetto)?,
             rule,
+            recurring: rrules > 0,
         })
     }
 }
@@ -346,7 +354,17 @@ mod tests {
         let fifth = EU_RULES.replace("BYDAY=-1SU\r\nEND:STANDARD", "BYDAY=5SU\r\nEND:STANDARD");
         let daylight_only = "BEGIN:DAYLIGHT\r\nDTSTART:19700329T020000\r\nTZOFFSETFROM:+0100\r\n\
             TZOFFSETTO:+0200\r\nEND:DAYLIGHT\r\n";
-        for inner in [&until, &two_standards, &monthday, &fifth, daylight_only, ""] {
+        // A yearly change with no DAYLIGHT to change back: no fixed offset fits.
+        let standard_only = &EU_RULES[..EU_RULES.find("BEGIN:DAYLIGHT").unwrap()];
+        for inner in [
+            &until,
+            &two_standards,
+            &monthday,
+            &fifth,
+            daylight_only,
+            standard_only,
+            "",
+        ] {
             let z = zone(&vtimezone("Odd", inner), "Odd");
             assert_eq!(z.id, "/Odd", "{inner}");
             assert!(z.posix.is_none() && z.tz.is_none(), "{inner}");

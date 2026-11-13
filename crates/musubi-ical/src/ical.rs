@@ -105,6 +105,12 @@ fn decode<T: Item>(raw: &Raw) -> Res<T> {
         .iter()
         .filter(|c| c.component_type == T::TYPE)
     {
+        // JSCalendar has no form for it, and the engine expands each override alone.
+        if c.property(&ICalendarProperty::RecurrenceId)
+            .is_some_and(|e| e.parameter(&ICalendarParameterName::Range).is_some())
+        {
+            return Err("RECURRENCE-ID;RANGE=THISANDFUTURE".into());
+        }
         parts.push(T::read(&mut cx, c)?);
     }
     if parts.is_empty() {
@@ -122,28 +128,47 @@ fn decode<T: Item>(raw: &Raw) -> Res<T> {
     let base = parts.swap_remove(base);
     let mut item = base.item;
     let base_json = json(&item)?;
+    let resolved = |z: Option<&Zone>| z.is_some_and(|z| z.tz.is_some());
+    let unresolved = |z: Option<&Zone>| z.is_some_and(|z| z.tz.is_none());
     for p in parts {
         let rid = p.rid.as_ref().ok_or("exception without RECURRENCE-ID")?;
-        let key = local_in(rid, base.zone.as_ref())?;
-        let mut exception = p.item;
-        exception.rebase(p.zone.as_ref(), base.zone.as_ref(), &item)?;
-        // An override starts at its key unless the patch says otherwise (JSCalendar).
-        let mut at_key = base_json.clone();
-        if at_key.contains_key("start") {
-            at_key.insert("start".into(), serde_json::to_value(key).map_err(err)?);
+        // Its key and times could not be placed in the base's zone.
+        if resolved(base.zone.as_ref())
+            && (unresolved(p.zone.as_ref()) || unresolved(rid.item_zone().as_ref()))
+        {
+            return Err("exception in an unresolved time zone".into());
         }
-        let patch = diff(&at_key, &json(&exception)?);
-        item.overrides().insert(key, patch);
+        let key = local_in(rid, base.zone.as_ref())?;
+        let patch = if p.item.cancelled() {
+            // A cancelled occurrence is removed, not shown with a status.
+            let mut patch = PatchObject::new();
+            patch.insert("excluded".into(), true.into());
+            patch
+        } else {
+            let mut exception = p.item;
+            exception.rebase(p.zone.as_ref(), base.zone.as_ref(), &item)?;
+            // An override starts at its key unless the patch says otherwise (JSCalendar).
+            let mut at_key = base_json.clone();
+            if at_key.contains_key("start") {
+                at_key.insert("start".into(), serde_json::to_value(key).map_err(err)?);
+            }
+            diff(&at_key, &json(&exception)?)
+        };
+        if item.overrides().insert(key, patch).is_some() {
+            return Err("two components with the same RECURRENCE-ID".into());
+        }
     }
     Ok(item)
 }
 
-/// Index of the exception with the earliest `RECURRENCE-ID` (by instant when
-/// the zone is known, else its wall time read as UTC).
-fn earliest<T>(parts: &[Part<T>]) -> usize {
+/// Index of the live exception with the earliest `RECURRENCE-ID` (by instant
+/// when the zone is known, else its wall time read as UTC). When every
+/// exception is cancelled, the earliest one: the item is then cancelled and
+/// shows no occurrence.
+fn earliest<T: Item>(parts: &[Part<T>]) -> usize {
     let at = |p: &Part<T>| p.rid.as_ref().map(Moment::instant_or_utc);
     (0..parts.len())
-        .min_by_key(|&i| (at(&parts[i]), i))
+        .min_by_key(|&i| (parts[i].item.cancelled(), at(&parts[i]), i))
         .unwrap_or(0)
 }
 
@@ -191,6 +216,8 @@ trait Item: Serialize + Sized {
     /// Moves the times of an exception from its own zone into the base's,
     /// so the patch holds only real changes.
     fn rebase(&mut self, from: Option<&Zone>, to: Option<&Zone>, base: &Self) -> Res<()>;
+    /// `STATUS:CANCELLED`.
+    fn cancelled(&self) -> bool;
 }
 
 /// Per-decode state: the object and the zones resolved so far.
@@ -343,9 +370,12 @@ fn shift(at: DateTime, from: Option<&Zone>, to: Option<&Zone>) -> Res<DateTime> 
     )
 }
 
-fn time_zones(zone: Option<&Zone>) -> BTreeMap<String, String> {
-    zone.and_then(|z| Some((z.id.clone(), z.posix.clone()?)))
+/// The POSIX entries of the custom zones among `zones`.
+fn time_zones<'a>(zones: impl IntoIterator<Item = Option<&'a Zone>>) -> BTreeMap<String, String> {
+    zones
         .into_iter()
+        .flatten()
+        .filter_map(|z| Some((z.id.clone(), z.posix.clone()?)))
         .collect()
 }
 
@@ -435,6 +465,9 @@ fn dates(
                     _ => return Err(format!("bad {} value", prop.as_str())),
                 };
                 let m = cx.read_moment(e, d)?;
+                // shortcut: a DATE value on a timed series stands for DTSTART's time of
+                // day only, so a rule with several times a day (BYHOUR=9,15) keeps the
+                // others; the canonical keys are date-times. Upgrade if a provider sends it.
                 let at = if m.date {
                     m.local.date().to_datetime(start.time())
                 } else {
@@ -485,6 +518,10 @@ fn between(start: &Moment, end: &Moment) -> Res<Span> {
                 .map_err(err)?
                 .get_days(),
         )
+    } else if let (false, false, Some(a), Some(b)) =
+        (start.date, end.date, start.instant(), end.instant())
+    {
+        a?.until((Unit::Hour, b?)).map_err(err)?
     } else {
         let finish = local_in(end, start.zone.as_ref())?;
         start.local.until((Unit::Hour, finish)).map_err(err)?
@@ -638,7 +675,8 @@ impl Item for CalendarEvent {
             .to_owned();
         ev.locations = locations(c);
         ev.time_zone = start.zone_id();
-        ev.time_zones = time_zones(zone.as_ref());
+        let rid_zone = rid.as_ref().and_then(Moment::item_zone);
+        ev.time_zones = time_zones([zone.as_ref(), rid_zone.as_ref()]);
         ev.duration = Duration(duration);
         ev.show_without_time = start.date;
         let status = text(c, &ICalendarProperty::Status);
@@ -690,6 +728,10 @@ impl Item for CalendarEvent {
         }
         Ok(())
     }
+
+    fn cancelled(&self) -> bool {
+        self.status == EventStatus::Cancelled
+    }
 }
 
 impl Item for CalendarTask {
@@ -699,8 +741,12 @@ impl Item for CalendarTask {
         let uid = uid(c)?;
         let start = cx.moment(c, ICalendarProperty::Dtstart)?;
         let due = cx.moment(c, ICalendarProperty::Due)?;
-        // The task's zone is DTSTART's, else DUE's; DUE is shown in it.
-        let anchor = start.as_ref().or(due.as_ref());
+        // The task's zone is DTSTART's, else DUE's; DUE is shown in it. A
+        // date-time wins over a date (RFC 5545 wants both of one type).
+        let anchor = [start.as_ref(), due.as_ref()]
+            .into_iter()
+            .flatten()
+            .min_by_key(|m| m.date);
         let zone = anchor.and_then(Moment::item_zone);
         let rid = cx.moment(c, ICalendarProperty::RecurrenceId)?;
 
@@ -721,13 +767,16 @@ impl Item for CalendarTask {
             .map(|m| local_in(m, zone.as_ref()))
             .transpose()?;
         t.time_zone = anchor.and_then(Moment::zone_id);
-        t.time_zones = time_zones(zone.as_ref());
+        t.time_zones = time_zones([zone.as_ref()]);
         t.show_without_time = anchor.is_some_and(|m| m.date);
         t.estimated_duration = match c
             .property(&ICalendarProperty::Duration)
             .and_then(|e| e.values.first())
         {
-            Some(ICalendarValue::Duration(d)) => Some(Duration(span(d)?)),
+            Some(ICalendarValue::Duration(d)) => {
+                let s = span(d)?;
+                Some(Duration(if s.is_negative() { Span::new() } else { s }))
+            }
             _ => None,
         };
         let status = text(c, &ICalendarProperty::Status);
@@ -795,5 +844,8 @@ impl Item for CalendarTask {
         self.due = self.due.map(|d| shift(d, from, to)).transpose()?;
         self.time_zone.clone_from(&base.time_zone);
         Ok(())
+    }
+    fn cancelled(&self) -> bool {
+        self.progress == TaskProgress::Cancelled
     }
 }

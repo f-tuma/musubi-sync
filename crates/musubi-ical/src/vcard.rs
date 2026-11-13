@@ -121,8 +121,11 @@ fn kind(c: &VCard) -> Option<&str> {
     first_text(c, &["KIND", "X-ADDRESSBOOKSERVER-KIND"])
 }
 
+/// Any `KIND` entry says group, as in `kind_of`.
 fn is_group(c: &VCard) -> bool {
-    kind(c).is_some_and(|k| k.eq_ignore_ascii_case("group"))
+    entries(c, &["KIND", "X-ADDRESSBOOKSERVER-KIND"])
+        .flat_map(texts)
+        .any(|k| k.trim().eq_ignore_ascii_case("group"))
 }
 
 fn group(c: &VCard) -> Res<ContactGroupCard> {
