@@ -850,6 +850,44 @@ async fn redirector(location: &'static str) -> String {
     url
 }
 
+/// After a `303` the next request is a `GET` without a body.
+#[tokio::test]
+async fn see_other_is_followed_by_a_get() {
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/a/", l.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            let mut buf = vec![0u8; 65536];
+            let n = s.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let r = if req.starts_with("PROPFIND /a/ ") {
+                "HTTP/1.1 303 See Other\r\nLocation: /b/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            } else {
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            };
+            log.lock().unwrap().push(req);
+            let _ = s.write_all(r.as_bytes()).await;
+        }
+    });
+    let _ = provider().connect(&cx(&setup(url), PASSWORD)).await;
+    let seen = seen.lock().unwrap();
+    let i = seen
+        .iter()
+        .position(|r| r.starts_with("PROPFIND /a/ "))
+        .expect("PROPFIND sent");
+    let next = seen[i + 1].to_ascii_lowercase();
+    assert!(next.starts_with("get /b/ "), "{next}");
+    assert!(
+        !next.contains("content-type") && !next.contains("depth:"),
+        "{next}"
+    );
+    assert!(next.ends_with("\r\n\r\n"), "body sent: {next}");
+}
+
 #[tokio::test]
 async fn address_guard() {
     let dav = fake().await;

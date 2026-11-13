@@ -9,7 +9,7 @@ use musubi_model::{
 };
 use reqwest::Url;
 
-use crate::net::{Mode, NetError, Reply, Session, origin};
+use crate::net::{Mode, NetError, Reply, Session, allowed, origin, scrub};
 use crate::state::{Col, Level, Principals, State, normalise};
 use crate::xml::{self, CALDAV, CARDDAV, CS, DAV, Multistatus, pct_decode};
 use crate::{ConnectError, DavProvider};
@@ -120,10 +120,10 @@ fn inside(s: &Session<'_>, base: &Url, href: &str) -> Result<Url, ConnectError> 
     let url = base
         .join(href)
         .map_err(|e| ConnectError::NotDav(format!("bad href {href}: {e}")))?;
-    if s.origins.contains(&origin(&url)) {
+    if allowed(&url, s.origins) {
         Ok(url)
     } else {
-        Err(ConnectError::CrossOriginRedirect(url.to_string()))
+        Err(ConnectError::CrossOriginRedirect(scrub(url).to_string()))
     }
 }
 
@@ -212,7 +212,8 @@ async fn collections(
         if same_path(&key, &home_key) {
             continue;
         }
-        if !s.origins.contains(&origin(&url)) {
+        if !allowed(&url, s.origins) {
+            let url = scrub(url);
             tracing::warn!(%url, "DAV collection outside the allowed origins; skipped");
             continue;
         }

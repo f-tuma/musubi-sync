@@ -162,15 +162,18 @@ fn multistatus(s: &Session<'_>, r: &Reply) -> Result<Multistatus, SyncError> {
         .map_err(|e| SyncError::Permanent(format!("{}: unreadable XML: {e}", r.url).into()))
 }
 
-/// Decoded key of an href on the collection's origin; another origin is
-/// refused (plan, chapter 5.4).
+/// Decoded key of an href: the collection itself or a member under its
+/// path, on its origin; anything else is refused (plan, chapter 5.4).
 fn object_key(t: &Target, base: &Url, href: &str) -> Option<String> {
     let url = base.join(href).ok()?;
-    if origin(&url) != t.col.origin {
-        tracing::warn!(collection = %t.key, %url, "DAV object on another origin; skipped");
+    let key = pct_decode(url.path());
+    let dir = format!("{}/", t.key.trim_end_matches('/'));
+    if origin(&url) != t.col.origin || !(same_path(&key, &t.key) || key.starts_with(&dir)) {
+        let url = url.path();
+        tracing::warn!(collection = %t.key, %url, "DAV href outside the collection; skipped");
         return None;
     }
-    Some(pct_decode(url.path()))
+    Some(key)
 }
 
 fn same_path(a: &str, b: &str) -> bool {
@@ -482,6 +485,7 @@ pub(crate) async fn fetch(
             (CALDAV, "calendar-data", MediaType::Calendar)
         };
         for chunk in objects.chunks(MAX_BATCH as usize) {
+            let wanted: HashSet<&str> = chunk.iter().copied().collect();
             let r = send(&s, "REPORT", &t.url, None, xml::multiget(card, chunk)).await?;
             let ms = multistatus(&s, &r)?;
             for resp in &ms.responses {
@@ -489,7 +493,9 @@ pub(crate) async fn fetch(
                 if resp.status.is_some_and(|c| !(200..300).contains(&c)) {
                     continue;
                 }
-                let Some(okey) = object_key(&t, &r.url, &resp.href) else {
+                let Some(okey) =
+                    object_key(&t, &r.url, &resp.href).filter(|k| wanted.contains(k.as_str()))
+                else {
                     continue;
                 };
                 if let Some(o) = resp
@@ -502,4 +508,38 @@ pub(crate) async fn fetch(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_keys_stay_inside_the_collection() {
+        let col = Col {
+            origin: "https://h".into(),
+            kind: EntityKind::Event,
+            delta: Level::None,
+        };
+        let t = Target {
+            key: "/cal/".into(),
+            url: col.url("/cal/").unwrap(),
+            col,
+            origins: Vec::new(),
+        };
+        let key = |href: &str| object_key(&t, &t.url, href);
+        assert_eq!(key("a%20b.ics").as_deref(), Some("/cal/a b.ics"));
+        assert_eq!(key("https://h/cal/x.ics").as_deref(), Some("/cal/x.ics"));
+        assert_eq!(key("/cal").as_deref(), Some("/cal"));
+        for out in [
+            "/other/x.ics",
+            "/calx/y.ics",
+            "../x.ics",
+            "/",
+            "https://evil/cal/x.ics",
+            "http://h/cal/x.ics",
+        ] {
+            assert_eq!(key(out), None, "{out}");
+        }
+    }
 }

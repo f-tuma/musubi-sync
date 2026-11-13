@@ -59,6 +59,9 @@ impl El {
     }
 }
 
+/// Deepest element nesting [`parse`] accepts.
+const MAX_DEPTH: usize = 64;
+
 /// Parses an XML document into its root element.
 pub(crate) fn parse(xml: &[u8]) -> Result<El, String> {
     let xml = std::str::from_utf8(xml).map_err(|e| e.to_string())?;
@@ -71,6 +74,10 @@ pub(crate) fn parse(xml: &[u8]) -> Result<El, String> {
             _ => String::new(),
         };
         let top = stack.len() - 1;
+        // Drop, clone and `has` recurse per level: a deep tree overflows the stack.
+        if matches!(ev, Event::Start(_) | Event::Empty(_)) && stack.len() > MAX_DEPTH {
+            return Err("XML nested too deeply".into());
+        }
         match ev {
             Event::Start(e) => stack.push(open(ns, &e)?),
             Event::Empty(e) => {
@@ -298,6 +305,16 @@ mod tests {
         let xxe = br#"<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><x>&e;</x>"#;
         assert!(parse(xxe).unwrap_err().contains("DTD"));
         assert!(parse(b"<x>&e;</x>").is_err());
+    }
+
+    #[test]
+    fn rejects_deep_nesting() {
+        let deep = format!("{}{}", "<a>".repeat(100), "</a>".repeat(100));
+        assert_eq!(parse(deep.as_bytes()).unwrap_err(), "XML nested too deeply");
+        let empty = format!("{}<b/>{}", "<a>".repeat(64), "</a>".repeat(64));
+        assert!(parse(empty.as_bytes()).is_err());
+        let ok = format!("{}{}", "<a>".repeat(64), "</a>".repeat(64));
+        assert!(parse(ok.as_bytes()).is_ok());
     }
 
     #[test]

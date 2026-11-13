@@ -11,7 +11,7 @@
 //! - No proxy from the environment: it would connect on our behalf and skip
 //!   the address check.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use musubi_model::{AccountCx, Credential, SyncError};
@@ -80,7 +80,29 @@ pub(crate) fn origin(url: &Url) -> String {
     url.origin().ascii_serialization()
 }
 
-/// Loopback, private, link-local, CGNAT, multicast, broadcast or unspecified.
+/// Whether `url` may carry the password: inside the allowed origins and
+/// without userinfo (which reqwest would send as a second `Authorization`).
+pub(crate) fn allowed(url: &Url, origins: &[String]) -> bool {
+    url.username().is_empty() && url.password().is_none() && origins.contains(&origin(url))
+}
+
+/// Whether a redirect from `from` to `to` may be followed: allowed, and never
+/// from `https` down to anything else.
+pub(crate) fn redirect_allowed(from: &Url, to: &Url, origins: &[String]) -> bool {
+    (from.scheme() != "https" || to.scheme() == "https") && allowed(to, origins)
+}
+
+/// `url` without userinfo, for errors and logs.
+pub(crate) fn scrub(mut url: Url) -> Url {
+    // Err only for URLs that cannot have userinfo, which then have none.
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url
+}
+
+/// Loopback, private, link-local, CGNAT, multicast, broadcast or unspecified,
+/// also when embedded in IPv6 (IPv4-mapped, -compatible, NAT64; 6to4 and
+/// site-local count as private outright).
 pub(crate) fn is_private(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(a) => {
@@ -95,7 +117,13 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                 || (o0 == 100 && (o1 & 0xc0) == 64)
         }
         IpAddr::V6(a) => {
-            a.is_loopback()
+            let s = a.segments();
+            if matches!(s, [0, 0, 0, 0, 0, 0, ..] | [0x64, 0xff9b, 0, 0, 0, 0, ..]) {
+                return is_private(IpAddr::V4(Ipv4Addr::from_bits(a.to_bits() as u32)));
+            }
+            s[0] == 0x2002
+                || (s[0] & 0xffc0) == 0xfec0
+                || a.is_loopback()
                 || a.is_unspecified()
                 || a.is_multicast()
                 || a.is_unique_local()
@@ -163,8 +191,8 @@ impl Net {
 
     /// The client for `url`, if its scheme, origin and IP literal pass.
     fn client_for(&self, url: &Url, origins: &[String]) -> Result<&reqwest::Client, NetError> {
-        if !origins.contains(&origin(url)) {
-            return Err(NetError::CrossOrigin(url.clone()));
+        if !allowed(url, origins) {
+            return Err(NetError::CrossOrigin(scrub(url.clone())));
         }
         let host = url.host_str().unwrap_or_default().to_owned();
         let (client, ok): (_, fn(IpAddr) -> bool) = match url.scheme() {
@@ -217,16 +245,19 @@ impl<'a> Session<'a> {
         depth: Option<&str>,
         body: String,
     ) -> Result<Reply, NetError> {
-        let method = Method::from_bytes(method.as_bytes()).expect("valid method");
-        let mut url = url.clone();
+        let mut method = Method::from_bytes(method.as_bytes()).expect("valid method");
+        let (mut url, mut depth, mut body) = (url.clone(), depth, body);
         for _ in 0..=MAX_REDIRECTS {
             let client = self.net.client_for(&url, self.origins)?;
             self.cx.limiter.acquire().await;
             let mut req = client
                 .request(method.clone(), url.clone())
-                .basic_auth(self.user, Some(self.password.expose_secret()))
-                .header(CONTENT_TYPE, "application/xml; charset=utf-8")
-                .body(body.clone());
+                .basic_auth(self.user, Some(self.password.expose_secret()));
+            if !body.is_empty() {
+                req = req
+                    .header(CONTENT_TYPE, "application/xml; charset=utf-8")
+                    .body(body.clone());
+            }
             if let Some(d) = depth {
                 req = req.header("Depth", d);
             }
@@ -240,16 +271,18 @@ impl<'a> Session<'a> {
                     .and_then(|l| url.join(l).ok());
                 // A redirect without a usable Location is just an answer.
                 if let Some(next) = next {
-                    if url.scheme() == "https" && next.scheme() != "https"
-                        || !self.origins.contains(&origin(&next))
-                    {
-                        return Err(NetError::CrossOrigin(next));
+                    if !redirect_allowed(&url, &next, self.origins) {
+                        return Err(NetError::CrossOrigin(scrub(next)));
                     }
                     if self.mode == Mode::Run && matches!(status, 301 | 308) {
                         return Err(NetError::Moved);
                     }
                     tracing::debug!(%url, %next, status, "DAV redirect");
                     url = next;
+                    if status == 303 {
+                        // See Other: fetch the answer, do not repeat the request.
+                        (method, depth, body) = (Method::GET, None, String::new());
+                    }
                     continue;
                 }
             }
@@ -359,6 +392,13 @@ mod tests {
             "ff02::1",
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
+            "::127.0.0.1",
+            "::10.0.0.1",
+            "64:ff9b::127.0.0.1",
+            "64:ff9b::a00:1",
+            "2002:808:808::1",
+            "fec0::1",
+            "feff::1",
         ] {
             assert!(is_private(ip.parse().unwrap()), "{ip}");
         }
@@ -368,9 +408,44 @@ mod tests {
             "192.0.2.1",
             "2001:db8::1",
             "::ffff:8.8.8.8",
+            "::8.8.8.8",
+            "64:ff9b::8.8.8.8",
+            "2003::1",
         ] {
             assert!(!is_private(ip.parse().unwrap()), "{ip}");
         }
+    }
+
+    #[test]
+    fn retry_after_seconds_and_dates() {
+        let now: jiff::Timestamp = "2026-11-13T12:00:00Z".parse().unwrap();
+        let reply = |v: &str| Reply {
+            status: 503,
+            headers: HeaderMap::from_iter([(RETRY_AFTER, v.parse().unwrap())]),
+            body: Vec::new(),
+            url: Url::parse("https://h/").unwrap(),
+        };
+        let after = |v: &str| reply(v).retry_after(now);
+        assert_eq!(after("120"), Some(Duration::from_secs(120)));
+        assert_eq!(
+            after("Fri, 13 Nov 2026 12:01:30 GMT"),
+            Some(Duration::from_secs(90))
+        );
+        assert_eq!(after("Thu, 01 Jan 2026 00:00:00 GMT"), Some(Duration::ZERO));
+        assert_eq!(after("soon"), None);
+    }
+
+    #[test]
+    fn redirects_stay_inside_and_never_downgrade() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        let origins = vec!["https://h".to_string(), "http://h".to_string()];
+        let ok = |from: &str, to: &str| redirect_allowed(&u(from), &u(to), &origins);
+        assert!(ok("https://h/a", "https://h/b"));
+        assert!(ok("http://h/a", "https://h/b"));
+        assert!(!ok("https://h/a", "http://h/b"), "https to http");
+        assert!(!ok("https://h/a", "https://h:8443/b"), "port change");
+        assert!(!ok("https://h/a", "https://u:p@h/b"), "userinfo");
+        assert!(!ok("https://h/a", "https://evil/b"));
     }
 
     #[test]
@@ -418,6 +493,11 @@ mod tests {
         assert!(check(&lax, "http://127.0.0.1:8080/").is_ok());
         assert!(check(&lax, "http://localhost:8080/").is_ok());
         assert!(blocked(check(&lax, "http://192.0.2.1/")));
+        // Userinfo would add a second Authorization: refused, and not echoed.
+        match check(&lax, "https://u:secret@192.0.2.1/") {
+            Err(NetError::CrossOrigin(u)) => assert!(!u.as_str().contains("secret")),
+            _ => panic!("userinfo accepted"),
+        }
         // Outside the allowed origins: nothing is sent, whatever the address.
         assert!(matches!(
             check(&lax, "https://evil.example/"),
