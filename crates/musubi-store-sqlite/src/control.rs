@@ -1,4 +1,5 @@
-//! [`ControlStore`] over `control.db` (`synchronous=FULL`: a returned write is durable).
+//! [`ControlStore`] over `control.db` (`synchronous=FULL`: a returned write is durable;
+//! `lease_due` alone commits with `NORMAL`, see there).
 //!
 //! Job scoping:
 //! - `jobs.account` is derived from the kind on enqueue (see [`crate::schema::CONTROL`]);
@@ -114,13 +115,67 @@ impl SqliteControl {
     }
 
     fn write<T>(&self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T, StoreError> {
-        let mut c = lock(&self.writer);
-        let tx = c
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+        commit(&mut lock(&self.writer), f)
+    }
+
+    /// [`Self::write`] committed with `synchronous=NORMAL`: it survives a crash
+    /// of the process, not a power loss, until the next `FULL` commit syncs the
+    /// WAL. The connection is back on `FULL` on every path out.
+    fn write_normal<T>(
+        &self,
+        f: impl FnOnce(&Transaction<'_>) -> Result<T>,
+    ) -> Result<T, StoreError> {
+        let mut c = Normal::new(lock(&self.writer))?;
+        commit(&mut c, f)
+    }
+}
+
+fn commit<T>(
+    c: &mut Connection,
+    f: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T, StoreError> {
+    let tx = c
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(crate::Error::from)?;
+    let r = f(&tx)?;
+    tx.commit().map_err(crate::Error::from)?;
+    Ok(r)
+}
+
+/// The writer connection on `synchronous=NORMAL` until dropped, then `FULL`
+/// again (also after an error or a panic: the transaction is dropped first).
+struct Normal<'a>(MutexGuard<'a, Connection>);
+
+impl<'a> Normal<'a> {
+    fn new(c: MutexGuard<'a, Connection>) -> Result<Self, StoreError> {
+        c.pragma_update(None, "synchronous", "NORMAL")
             .map_err(crate::Error::from)?;
-        let r = f(&tx)?;
-        tx.commit().map_err(crate::Error::from)?;
-        Ok(r)
+        Ok(Self(c))
+    }
+}
+
+impl std::ops::Deref for Normal<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Normal<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.0
+    }
+}
+
+impl Drop for Normal<'_> {
+    fn drop(&mut self) {
+        // Setting the flag does no I/O. Should it fail anyway, no later write
+        // may commit with less than FULL; a panic would leave the connection
+        // to the next caller (the mutex ignores poisoning), so stop instead.
+        if let Err(e) = self.0.pragma_update(None, "synchronous", "FULL") {
+            tracing::error!(error = %e, "restoring synchronous=FULL on control.db failed");
+            std::process::abort();
+        }
     }
 }
 
@@ -532,7 +587,12 @@ impl ControlStore for SqliteControl {
         lease_for: Duration,
     ) -> Result<Vec<Job>, StoreError> {
         let until = after(now, lease_for)?;
-        self.write(|c| {
+        // The one write on the path from a push to its sync: a FULL fsync here
+        // stalled B5 for up to 160 ms on CI disks. A lease lost to a power
+        // loss is one whose holder died with it, the same as an expired lease:
+        // the job runs again. The lease counter may roll back with it; no
+        // lease handed out before the loss outlives its holder.
+        self.write_normal(|c| {
             let ids: Vec<i64> = c
                 .prepare_cached(
                     "SELECT id FROM jobs
@@ -725,5 +785,58 @@ fn held(n: usize) -> Result<()> {
         Err(StoreError::LeaseLost.into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use musubi_model::control::{JobKind, JobSpec, Lane};
+
+    use super::*;
+
+    fn synchronous(c: &SqliteControl) -> i64 {
+        lock(&c.writer)
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Only the lease commits with NORMAL: the writer is back on FULL (2) after
+    /// `lease_due`, also after one that fails inside its transaction.
+    #[test]
+    fn lease_due_leaves_writer_on_full() {
+        let d = tempfile::tempdir().unwrap();
+        let c = SqliteControl::open(&d.path().join("control.db")).unwrap();
+        let tenant = TenantId::from_u128(1);
+        c.insert_tenant(tenant).unwrap();
+        let now = Timestamp::from_second(1_000).unwrap();
+        let job = JobSpec {
+            tenant,
+            lane: Lane::Sync,
+            kind: JobKind::Maintain,
+            priority: 0,
+            due: now,
+            dedup: None,
+        };
+        assert_eq!(synchronous(&c), 2);
+        c.enqueue(&job).unwrap();
+        let lease = Duration::from_secs(60);
+        assert_eq!(c.lease_due(Lane::Sync, now, 10, lease).unwrap().len(), 1);
+        assert_eq!(synchronous(&c), 2);
+
+        // A kind that does not parse fails the lease after the first update.
+        let bad = c.enqueue(&job).unwrap();
+        lock(&c.writer)
+            .execute("UPDATE jobs SET kind = 'x' WHERE id = ?1", [bad.0 as i64])
+            .unwrap();
+        assert!(c.lease_due(Lane::Sync, now, 10, lease).is_err());
+        assert_eq!(synchronous(&c), 2);
+        let leased: i64 = lock(&c.writer)
+            .query_row(
+                "SELECT count(*) FROM jobs WHERE lease IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leased, 1, "the failed lease rolled back");
     }
 }

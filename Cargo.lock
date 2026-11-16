@@ -1055,6 +1055,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 
