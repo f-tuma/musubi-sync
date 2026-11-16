@@ -10,7 +10,7 @@ use common::Node;
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{AccountRecord, AccountState, AccountTokens};
 use musubi_model::{AccountId, ControlStore, Credentials, TenantId, TokenVault};
-use musubi_testkit::dav::{Config as DavConfig, FakeDav, Fault, Host, Kind, Req};
+use musubi_testkit::dav::{Config as DavConfig, FakeDav, Fault, Host, Kind, Profile, Req};
 use musubi_testkit::google::{Endpoint, Fault as GFault};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -717,21 +717,36 @@ async fn a_read_held_over_a_reconnect_stores_no_reauth_over_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn passwords_reach_no_response_and_no_trace_log() {
+    passwords_stay_secret(Profile::Generic).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn icloud_passwords_reach_no_response_and_no_trace_log() {
+    passwords_stay_secret(Profile::Icloud).await;
+}
+
+async fn passwords_stay_secret(profile: Profile) {
     use base64::Engine as _;
     use musubi_testkit::google::FakeGoogle;
     use musubi_testkit::harness::{self, Api, Daemon};
 
     let (first, wrong, second) = ("first-Pa55word", "wrong-Pa55word", "second-Pa55word");
-    let d = dav(DavConfig {
+    let config = DavConfig {
         password: first.into(),
         ..DavConfig::default()
-    })
-    .await;
+    };
+    let d = match profile {
+        Profile::Generic => dav(config).await,
+        Profile::Icloud => apple(config).await,
+    };
     let g = FakeGoogle::start(Default::default()).await.expect("google");
     let dir = tempfile::tempdir().expect("tempdir");
     let listen = harness::free_addr();
     let mut config = harness::config(listen, &dir.path().join("data"), &g);
-    config["dav"] = json!({ "allow_private": true });
+    config["dav"] = match profile {
+        Profile::Generic => json!({ "allow_private": true }),
+        Profile::Icloud => fake_icloud(&d),
+    };
     let path = dir.path().join("config.json");
     std::fs::write(&path, config.to_string()).expect("config");
     let daemon = Daemon::serve(
@@ -752,10 +767,12 @@ async fn passwords_reach_no_response_and_no_trace_log() {
         (s, v)
     };
     let body = |password: &str, account: Option<&str>| {
-        json!({
-            "profile": "generic", "server_url": d.server_url(),
-            "username": "alice", "password": password, "account": account,
-        })
+        let mut b = match profile {
+            Profile::Generic => generic(&d, password),
+            Profile::Icloud => icloud(password),
+        };
+        b["account"] = json!(account);
+        b
     };
 
     let (s, v) = call("POST", "/v1/accounts/dav", &admin, Some(body(wrong, None))).await;
@@ -827,4 +844,321 @@ fn an_explicit_default_port_is_the_same_origin() {
     assert_eq!(endpoint("https://DAV.example:443/remote/"), plain);
     assert_eq!(plain.state["origins"], json!(["https://dav.example"]));
     assert_ne!(endpoint("https://dav.example:8443/remote/"), plain);
+}
+
+// Profile `icloud` (plan 5.4) against the fake DAV in its `icloud` mode. The
+// fake listens on `http://127.0.0.1`, so the node points profile `icloud` at
+// it through the test-only `dav.icloud_test_entries`, with the fake's
+// partition hosts as allowed origins (as musubi-dav's K7 tests do).
+
+const EVENT: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//test//EN\r\nBEGIN:VEVENT\r\nUID:event-1\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:20261113T100000Z\r\nDTEND:20261113T110000Z\r\nSUMMARY:standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+const CARD3: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:card-1\r\nFN:Bob Builder\r\nN:Builder;Bob;;;\r\nEND:VCARD\r\n";
+/// An Apple contact group: vCard 3.0 with `X-ADDRESSBOOKSERVER-KIND:group`.
+const GROUP3: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:group-1\r\nFN:Family\r\nN:Family;;;;\r\nX-ADDRESSBOOKSERVER-KIND:group\r\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:card-1\r\nEND:VCARD\r\n";
+const RANGE: &str = "/v1/entities?from=2026-11-01T00:00:00Z&to=2026-12-01T00:00:00Z";
+
+/// A fake iCloud: an event calendar, a reminders list (VTODO only, not
+/// synced) and an address book with a contact and a group.
+async fn apple(config: DavConfig) -> FakeDav {
+    let d = FakeDav::start(DavConfig {
+        profile: Profile::Icloud,
+        ..config
+    })
+    .await
+    .expect("fake dav");
+    let cal = d.add_collection(Kind::Calendar(&["VEVENT"]), "home", "Home");
+    d.put(&cal, "event-1.ics", EVENT);
+    let reminders = d.add_collection(Kind::Calendar(&["VTODO"]), "tasks", "Reminders");
+    d.put(&reminders, "todo-1.ics", TODO);
+    let book = d.add_collection(Kind::AddressBook, "card", "Contacts");
+    d.put(&book, "card-1.vcf", CARD3);
+    d.put(&book, "group-1.vcf", GROUP3);
+    d
+}
+
+/// The node's `dav` settings pointing profile `icloud` at `d`.
+fn fake_icloud(d: &FakeDav) -> Value {
+    json!({
+        "allow_private": true,
+        "icloud_test_entries": {
+            "caldav": d.server_url(), "carddav": d.carddav_url(),
+            "allow_origins": [d.url(Host::CaldavPartition), d.url(Host::CarddavPartition)],
+        },
+    })
+}
+
+async fn icloud_node(d: &FakeDav) -> Node {
+    Node::start_with(|c| c["dav"] = fake_icloud(d)).await
+}
+
+/// The Apple ID and the app-specific password: all profile `icloud` takes.
+fn icloud(password: &str) -> Value {
+    json!({ "profile": "icloud", "username": "alice", "password": password })
+}
+
+async fn first_item(n: &Node, t: &Tenant, entity: &str) -> Value {
+    let (s, v) = n
+        .get(
+            &format!("/v1/entities/{entity}?include=placements"),
+            &t.read,
+        )
+        .await;
+    assert_eq!(s, 200, "{v}");
+    let item = v["placements"][0]["item"]
+        .as_str()
+        .expect("item")
+        .to_owned();
+    let (s, v) = n.get(&format!("/v1/items/{item}"), &t.read).await;
+    assert_eq!(s, 200, "{v}");
+    v
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_icloud_account_connects_with_only_the_apple_id_and_reads_its_data() {
+    let d = apple(DavConfig::default()).await;
+    let n = icloud_node(&d).await;
+    let _engine = n.app.engine().start();
+    let t = tenant(&n).await;
+
+    let (s, v) = connect(&n, &t, icloud("secret")).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(
+        (&v["provider"], &v["profile"]),
+        (&json!("icloud"), &json!("icloud")),
+        "{v}"
+    );
+    assert_eq!(v["username"], "alice", "{v}");
+    // The entries and the confirmed partition hosts.
+    let mut origins = [
+        Host::Caldav,
+        Host::Carddav,
+        Host::CaldavPartition,
+        Host::CarddavPartition,
+    ]
+    .map(|h| d.url(h));
+    origins.sort();
+    assert_eq!(v["origins"], json!(origins), "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
+    assert!(!v.to_string().contains("secret"), "{v}");
+    let id = v["id"].as_str().expect("id").to_owned();
+
+    let (events, cards, groups) = until("the event, the contact and the group", async || {
+        let (s, events) = n.get(RANGE, &t.read).await;
+        assert_eq!(s, 200, "{events}");
+        let events = events["occurrences"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let cards = listed(&n, &t, "contact").await;
+        let groups = listed(&n, &t, "contact_group").await;
+        (events.len() == 1 && cards.len() == 1 && groups.len() == 1)
+            .then_some((events, cards, groups))
+    })
+    .await;
+    assert!(
+        events[0]["canonical"].to_string().contains("standup"),
+        "{events:?}"
+    );
+    assert!(cards[0].to_string().contains("Bob Builder"), "{cards:?}");
+    assert_eq!(groups[0]["name"], "Family", "{groups:?}");
+    // iCloud's reminders are not in v1: no task collection, no tasks.
+    assert!(listed(&n, &t, "task").await.is_empty());
+    assert_eq!(collections(&n, &t).await.len(), 2);
+
+    let entity = |v: &Value| v["entity"].as_str().expect("entity").to_owned();
+    let item = first_item(&n, &t, &entity(&events[0])).await;
+    assert_eq!(item["kind"], "event", "{item}");
+    let (s, v) = n.get("/v1/entities?kind=contact", &t.read).await;
+    assert_eq!(s, 200, "{v}");
+    let card = v["entities"][0]["id"].as_str().expect("id").to_owned();
+    let item = first_item(&n, &t, &card).await;
+    assert_eq!(item["kind"], "contact", "{item}");
+    let (s, v) = n.get("/v1/entities?kind=contact_group", &t.read).await;
+    assert_eq!(s, 200, "{v}");
+    let group = v["entities"][0]["id"].as_str().expect("id").to_owned();
+    let item = first_item(&n, &t, &group).await;
+    assert_eq!(item["kind"], "contact_group", "{item}");
+
+    // The stored account is the `icloud` instance's.
+    let rec = n
+        .app
+        .control()
+        .account(id.parse().expect("account id"))
+        .expect("read")
+        .expect("account");
+    assert_eq!(rec.provider, ProviderId("icloud".into()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_icloud_connect_refuses_addresses_and_wrong_passwords_and_stores_nothing() {
+    let d = apple(DavConfig::default()).await;
+    let n = icloud_node(&d).await;
+    let t = tenant(&n).await;
+    d.clear_requests();
+
+    for (field, value) in [
+        ("server_url", json!(d.server_url())),
+        ("caldav_url", json!(d.server_url())),
+        ("carddav_url", json!(d.carddav_url())),
+        ("allow_origins", json!([d.url(Host::Outside)])),
+    ] {
+        let mut body = icloud("secret");
+        body[field] = value;
+        let (s, v) = connect(&n, &t, body).await;
+        assert_eq!(
+            (s, &v["error"]),
+            (400, &json!("bad_request")),
+            "{field}: {v}"
+        );
+    }
+    assert!(d.requests().is_empty(), "{:?}", d.requests());
+
+    let (s, v) = connect(&n, &t, icloud("wrong")).await;
+    assert_eq!((s, &v["error"]), (400, &json!("unauthorized")), "{v}");
+    let hint = musubi_dav::Profile::Icloud.reauth_hint().expect("hint");
+    assert_eq!(v["hint"], hint, "{v}");
+    assert!(!v.to_string().contains("wrong"), "{v}");
+    assert!(collections(&n, &t).await.is_empty());
+    let subject = format!("{}{}", d.url(Host::Caldav), d.principal());
+    let acc = n
+        .app
+        .control()
+        .account_by_subject(t.id, &ProviderId("icloud".into()), &subject)
+        .expect("read");
+    assert!(acc.is_none(), "{acc:?}");
+
+    // A generic account answers `unauthorized` without iCloud's hint.
+    let g = dav(DavConfig::default()).await;
+    let (s, v) = connect(&n, &t, generic(&g, "wrong")).await;
+    assert_eq!((s, &v["error"]), (400, &json!("unauthorized")), "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rejected_icloud_password_asks_for_a_new_app_specific_password() {
+    let d = apple(DavConfig::default()).await;
+    let n = icloud_node(&d).await;
+    let _engine = n.app.engine().start();
+    let t = tenant(&n).await;
+    let (s, v) = connect(&n, &t, icloud("secret")).await;
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().expect("id").to_owned();
+    until("the contact", async || {
+        (listed(&n, &t, "contact").await.len() == 1).then_some(())
+    })
+    .await;
+
+    // The user changed the Apple ID password: every app-specific one is void.
+    d.set_password("changed");
+    let (s, v) = n.call("POST", "/v1/interest", Some(&t.read), None).await;
+    assert_eq!(s, 204, "{v}");
+    let v = until("reauth_required", async || {
+        let v = account(&n, &t, &id).await;
+        (v["state"] == "reauth_required").then_some(v)
+    })
+    .await;
+    let hint = musubi_dav::Profile::Icloud.reauth_hint().expect("hint");
+    assert_eq!(v["hint"], hint, "{v}");
+
+    // A new app-specific password: active again, no hint.
+    let mut body = icloud("changed");
+    body["account"] = json!(id);
+    let (s, v) = connect(&n, &t, body).await;
+    assert_eq!((s, &v["state"]), (200, &json!("active")), "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
+
+    // A redirect off iCloud is not about the password: no hint.
+    d.fail(
+        Req::Any,
+        Fault::Redirect {
+            status: 307,
+            to: Host::Outside,
+        },
+        1,
+    );
+    let (s, v) = n.call("POST", "/v1/interest", Some(&t.read), None).await;
+    assert_eq!(s, 204, "{v}");
+    // The engine marks the account before the collections.
+    let v = until("endpoint_moved", async || {
+        let moved = collections(&n, &t)
+            .await
+            .iter()
+            .any(|c| c["error"]["message"] == "endpoint_moved");
+        let v = account(&n, &t, &id).await;
+        (moved && v["state"] == "reauth_required").then_some(v)
+    })
+    .await;
+    assert!(v.get("hint").is_none(), "{v}");
+}
+
+/// Another DSID: the node is restarted with its iCloud entries at another
+/// fake account (another server, so the principal differs in its origin
+/// too), and the reconnect is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_icloud_reconnect_to_another_dsid_is_refused_and_changes_nothing() {
+    use musubi_testkit::google::FakeGoogle;
+    use musubi_testkit::harness::{self, Api, Daemon};
+
+    let a = apple(DavConfig::default()).await;
+    let b = apple(DavConfig::default()).await;
+    let g = FakeGoogle::start(Default::default()).await.expect("google");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let listen = harness::free_addr();
+    let path = dir.path().join("config.json");
+    let serve = |d: &FakeDav| {
+        let mut config = harness::config(listen, &dir.path().join("data"), &g);
+        config["dav"] = fake_icloud(d);
+        std::fs::write(&path, config.to_string()).expect("config");
+        let daemon = Daemon::serve(env!("CARGO_BIN_EXE_musubi-syncd").as_ref(), &path, &[]);
+        assert!(
+            daemon
+                .wait_line("dav.icloud_test_entries is set", Duration::from_secs(5))
+                .is_some(),
+            "no startup warning:\n{}",
+            daemon.tail(40)
+        );
+        daemon
+    };
+    let api = Api::new(listen);
+    let call = async |method: &str, path: &str, key: &str, body: Option<Value>| {
+        api.call(method, path, Some(key), body).await.expect("call")
+    };
+
+    let mut daemon = serve(&a);
+    let tenant = api.tenant().await;
+    let (admin, read) = (
+        api.key(&tenant, "admin").await,
+        api.key(&tenant, "read").await,
+    );
+    let (s, v) = call("POST", "/v1/accounts/dav", &admin, Some(icloud("secret"))).await;
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().expect("id").to_owned();
+    let account = format!("/v1/accounts/{id}");
+    let before = until("active", async || {
+        let (_, v) = call("GET", &account, &read, None).await;
+        (v["state"] == "active").then_some(v)
+    })
+    .await;
+    daemon.kill();
+
+    let _daemon = serve(&b);
+    let mut body = icloud("secret");
+    body["account"] = json!(id);
+    let (s, v) = call("POST", "/v1/accounts/dav", &admin, Some(body)).await;
+    assert_eq!((s, &v["error"]), (400, &json!("subject_mismatch")), "{v}");
+    let (_, after) = call("GET", &account, &read, None).await;
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn icloud_test_entries_need_allow_private() {
+    let g = musubi_testkit::google::FakeGoogle::start(Default::default())
+        .await
+        .expect("google");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut c = common::config_json("127.0.0.1:1", &dir.path().join("data"), &g);
+    c["dav"] = json!({ "icloud_test_entries": { "caldav": "http://127.0.0.1:1/", "carddav": "http://127.0.0.1:2/" } });
+    let config: musubi_syncd::config::Config = serde_json::from_value(c).expect("config");
+    let e = musubi_syncd::App::open(&config).err().expect("refused");
+    assert!(e.contains("dav.allow_private"), "{e}");
 }

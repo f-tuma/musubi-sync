@@ -10,7 +10,8 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use musubi_model::control::{AccountRecord, ApiKeyHash, Scope};
+use musubi_dav::Profile;
+use musubi_model::control::{AccountRecord, AccountState, ApiKeyHash, Scope};
 use musubi_model::store::{
     CollectionState, Coverage, EntityView, Include, ItemView, RangeCursor, RangeQuery,
 };
@@ -71,6 +72,20 @@ pub(crate) fn account_view(a: &App, rec: &AccountRecord) -> Result<Value, ApiErr
             "method": "POST", "path": "/v1/accounts",
             "body": { "provider": rec.provider, "account": rec.id },
         });
+    }
+    // Plan 5.4: iCloud's `401` asks for a new app-specific password, not a
+    // retry. A redirect off iCloud (`endpoint_moved`) is not about the password.
+    if rec.state == AccountState::ReauthRequired
+        && rec.provider.0 == "icloud"
+        && !a.storage.open(rec.tenant)?.collections()?.iter().any(|c| {
+            c.account == rec.id
+                && c.status
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.message == "endpoint_moved")
+        })
+    {
+        v["hint"] = json!(Profile::Icloud.reauth_hint());
     }
     if let Some(e) = a.control.endpoint(rec.id)? {
         for k in ["profile", "caldav_url", "carddav_url", "origins"] {

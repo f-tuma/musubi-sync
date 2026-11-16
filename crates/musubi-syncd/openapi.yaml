@@ -78,6 +78,9 @@ paths:
         Reconnect (with `account`, or a connect that finds the same principal)
         must find every principal the account has, else `subject_mismatch` and
         the account stays as it was. The password is never returned or logged.
+        Profile `icloud` takes only `username` (the Apple ID) and `password`
+        (an app-specific password) and connects to iCloud's fixed entries; any
+        address field is `400 bad_request`. Its `unauthorized` carries `hint`.
       requestBody:
         required: true
         content:
@@ -87,8 +90,8 @@ paths:
               required: [profile, username, password]
               additionalProperties: false
               properties:
-                profile: { type: string, enum: [generic], description: "`icloud` arrives with K7" }
-                server_url: { type: string, format: uri, description: Entry for both CalDAV and CardDAV }
+                profile: { type: string, enum: [generic, icloud] }
+                server_url: { type: string, format: uri, description: "Entry for both CalDAV and CardDAV (`generic` only, as all address fields)" }
                 caldav_url: { type: string, format: uri }
                 carddav_url: { type: string, format: uri }
                 allow_origins:
@@ -553,6 +556,7 @@ components:
         provider: { type: string }
         subject: { type: string }
         state: { $ref: "#/components/schemas/AccountState" }
+        hint: { type: string, description: "`icloud` in `reauth_required` after a rejected password: create a new app-specific password" }
     Collection:
       type: object
       properties:
@@ -582,6 +586,7 @@ components:
         error: { type: string }
         message: { type: string }
         oldest: { type: integer, description: "cursor_too_old: the oldest cursor the journal still reaches; cursor_ahead: the head" }
+        hint: { type: string, description: "unauthorized from POST /v1/accounts/dav with profile icloud: what the user should do" }
   responses:
     Error:
       description: Error.
