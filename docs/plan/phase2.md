@@ -379,6 +379,8 @@ Profil je data v `musubi-dav::profile`, ne větvení kódu:
 
 Heslo pro aplikace: iCloud přijme Basic jen s heslem pro aplikace (účet s 2FA). Změna hesla Apple ID všechna hesla pro aplikace zneplatní (I6). `401` proto znamená výzvu uživateli, ne opakování. Profil přidá do chyby účtu text „vytvořte nové heslo pro aplikace".
 
+Předání z K7 do `musubi-syncd` (doplněk K8, ověří K10): `SyncError::ReauthRequired` nese jen důvod, proto text dává `musubi_dav::Profile::reauth_hint()` a syncd ho přiloží k chybě `unauthorized` při připojení i k pohledu na účet ve stavu `ReauthRequired`. Syncd zaregistruje instanci `icloud` jako `DavProvider::with_profile(…, Profile::Icloud)` a účet profilu `icloud` připojí jen přes `DavSetup::icloud()` (pevné originy iCloudu); adresy od uživatele se pro profil `icloud` nikdy nepoužijí.
+
 Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-Match`, přepis vlastních adres na cestu principalu s `EMAIL=`) jsou zápisové. Fáze 2 je jen zaznamená do profilu jako fakta pro fázi 3.
 
 ### 5.5 Pověření a připojení účtu

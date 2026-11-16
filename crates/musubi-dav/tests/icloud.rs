@@ -4,8 +4,8 @@
 //!
 //! The fake listens on `http://127.0.0.1`, which iCloud's host pattern never
 //! matches, so these tests confirm the fake's hosts through `allow_origins`.
-//! The pattern itself (with `:443`) is unit-tested in `profile.rs` and
-//! `net.rs`.
+//! The pattern itself (`Profile::host_allowed`, with `:443`) is proven only
+//! by unit tests in `profile.rs` and `net.rs`, not end to end.
 
 use futures_util::StreamExt;
 use jiff::Timestamp;
@@ -246,6 +246,16 @@ async fn limits_and_multiget_batches_of_20() {
     assert_eq!(d.id.0, "icloud");
     assert_eq!(d.limits.max_batch, Some(20));
     assert_eq!(d.limits.max_concurrency_per_account, Some(2));
+    let kinds: Vec<_> = d.kinds.iter().map(|k| k.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            EntityKind::Event,
+            EntityKind::Contact,
+            EntityKind::ContactGroup
+        ],
+        "iCloud tasks are not in v1"
+    );
 
     let (cx, _) = connected(&p, &dav).await;
     let mut refs: Vec<RemoteRef> = (0..45)

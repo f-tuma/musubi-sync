@@ -117,6 +117,7 @@ impl DavProvider {
 #[async_trait]
 impl Provider for DavProvider {
     fn descriptor(&self) -> ProviderDescriptor {
+        let profile = self.net.profile;
         let kinds = [
             EntityKind::Event,
             EntityKind::Task,
@@ -124,10 +125,10 @@ impl Provider for DavProvider {
             EntityKind::ContactGroup,
         ]
         .into_iter()
+        .filter(|&k| k != EntityKind::Task || profile.tasks())
         .map(|k| KindCapabilities::new(k, DeltaSupport::SyncToken, PushSupport::None))
         .collect();
         let mut limits = Limits::new(MAX_PAGE);
-        let profile = self.net.profile;
         limits.max_batch = Some(profile.max_batch());
         limits.max_concurrency_per_account = Some(2);
         ProviderDescriptor::new(ProviderId(profile.provider_id().into()), kinds, limits)
