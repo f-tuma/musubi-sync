@@ -1,0 +1,15 @@
+{
+  "name": "discovery",
+  "description": "A collection added at the provider is found by the next discovery and read; a removed one goes away with its objects.",
+  "kinds": ["event"],
+  "steps": [
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "in the default calendar", "day": 1 } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "add_collection", "name": "extra", "kinds": ["event"] },
+    { "op": "put", "ref": "x", "collection": "extra", "object": { "kind": "event", "title": "in the extra calendar", "day": 2 } },
+    { "op": "expect", "converged": true },
+    { "op": "remove_collection", "name": "extra" },
+    { "op": "expect", "converged": true }
+  ]
+}

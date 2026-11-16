@@ -1,0 +1,22 @@
+{
+  "name": "expired_cursor",
+  "description": "An expired sync cursor leads to a full read; objects deleted meanwhile disappear only after it, and nothing else is lost.",
+  "kinds": ["event", "task", "contact"],
+  "steps": [
+    { "op": "put", "ref": "e1", "object": { "kind": "event", "title": "kept event", "day": 1 } },
+    { "op": "put", "ref": "e2", "object": { "kind": "event", "title": "deleted event", "day": 2 } },
+    { "op": "put", "ref": "t1", "object": { "kind": "task", "title": "kept task" } },
+    { "op": "put", "ref": "t2", "object": { "kind": "task", "title": "deleted task" } },
+    { "op": "put", "ref": "c1", "object": { "kind": "contact", "name": "Kept Contact" } },
+    { "op": "put", "ref": "c2", "object": { "kind": "contact", "name": "Deleted Contact" } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "expire_cursor" },
+    { "op": "delete", "ref": "e2" },
+    { "op": "delete", "ref": "t2" },
+    { "op": "delete", "ref": "c2" },
+    { "op": "put", "ref": "e3", "object": { "kind": "event", "title": "event after expiry", "day": 3 } },
+    { "op": "put", "ref": "c3", "object": { "kind": "contact", "name": "Contact After Expiry" } },
+    { "op": "expect", "converged": true }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "increment",
+  "description": "After the initial read, objects created, changed and deleted at the provider reach the node through incremental reads.",
+  "kinds": ["event", "task", "contact", "group"],
+  "steps": [
+    { "op": "put", "ref": "anchor", "object": { "kind": "event", "title": "anchor", "day": 3 } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "new event", "day": 1 } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "new task", "due_day": 2 } },
+    { "op": "put", "ref": "c", "object": { "kind": "contact", "name": "New Contact", "email": "new@example.com" } },
+    { "op": "put", "ref": "g", "object": { "kind": "group", "name": "New Group", "members": ["c"] } },
+    { "op": "expect", "converged": true },
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "changed event", "day": 1, "hour": 15 } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "changed task", "due_day": 2, "done": true } },
+    { "op": "put", "ref": "c", "object": { "kind": "contact", "name": "Changed Contact", "email": "new@example.com" } },
+    { "op": "put", "ref": "g", "object": { "kind": "group", "name": "Changed Group", "members": ["c"] } },
+    { "op": "expect", "converged": true },
+    { "op": "delete", "ref": "g" },
+    { "op": "delete", "ref": "c" },
+    { "op": "delete", "ref": "t" },
+    { "op": "delete", "ref": "e" },
+    { "op": "expect", "converged": true }
+  ]
+}

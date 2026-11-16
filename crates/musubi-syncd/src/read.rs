@@ -12,6 +12,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use musubi_dav::Profile;
 use musubi_model::control::{AccountRecord, AccountState, ApiKeyHash, Scope};
+use musubi_model::remote::MediaType;
 use musubi_model::store::{
     CollectionState, Coverage, EntityView, Include, ItemView, RangeCursor, RangeQuery,
 };
@@ -387,8 +388,16 @@ fn item_json(i: &ItemView) -> Out {
         "observed": i.observed, "tombstone": i.tombstone,
     });
     if let Some(r) = &i.raw {
-        // Raw JSON is embedded as is; it was valid JSON when the adapter stored it.
-        let body: Value = serde_json::from_slice(&r.body).map_err(|e| ApiError::internal(&e))?;
+        // Raw JSON is embedded as is (it was valid JSON when the adapter
+        // stored it); text (iCalendar, vCard) is a string, byte for byte.
+        let body: Value = match r.media_type {
+            MediaType::Json => {
+                serde_json::from_slice(&r.body).map_err(|e| ApiError::internal(&e))?
+            }
+            _ => Value::String(
+                String::from_utf8(r.body.clone()).map_err(|e| ApiError::internal(&e))?,
+            ),
+        };
         v["raw"] = json!({ "media_type": r.media_type, "body": body });
     }
     Ok(Json(v))

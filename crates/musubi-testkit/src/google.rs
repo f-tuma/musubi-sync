@@ -624,6 +624,12 @@ impl FakeGoogle {
         self.inner.lock().refresh_tokens.remove(token);
     }
 
+    /// Makes `token` a valid refresh token, the one the next sign-in hands
+    /// out when no other is valid (the user consents again after a revoke).
+    pub fn grant_refresh_token(&self, token: &str) {
+        self.inner.lock().refresh_tokens.insert(token.to_owned());
+    }
+
     /// Moves the logical clock forward: later writes get an `updated` that
     /// much later (the clock is `Config::epoch` plus one millisecond per write).
     pub fn advance(&self, by: Duration) {

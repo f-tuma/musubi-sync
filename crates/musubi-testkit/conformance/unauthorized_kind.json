@@ -1,0 +1,15 @@
+{
+  "name": "unauthorized_kind",
+  "description": "A kind the user did not authorize is reported in the account's missing list; its collection and data stay, and the other kinds keep syncing.",
+  "kinds": ["event", "task"],
+  "only": ["google"],
+  "steps": [
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "event", "day": 1 } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "task" } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "inject", "fault": { "type": "unauthorized_kind", "kind": "task" } },
+    { "op": "put", "ref": "e2", "object": { "kind": "event", "title": "event after the scope loss", "day": 2 } },
+    { "op": "expect", "missing": ["task"], "converged": true }
+  ]
+}

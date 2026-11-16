@@ -1,0 +1,12 @@
+{
+  "name": "pagination",
+  "description": "A collection larger than one page (the runner sets pages of 20) is read across pages: every object of every kind arrives exactly once and the collection ends fully covered.",
+  "kinds": ["event", "task", "contact"],
+  "steps": [
+    { "op": "put", "ref": "e", "copies": 60, "object": { "kind": "event", "title": "event", "day": 2 } },
+    { "op": "put", "ref": "t", "copies": 60, "object": { "kind": "task", "title": "task" } },
+    { "op": "put", "ref": "c", "copies": 60, "object": { "kind": "contact", "name": "contact" } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true, "timeout_ms": 60000 }
+  ]
+}

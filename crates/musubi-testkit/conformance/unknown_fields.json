@@ -1,0 +1,14 @@
+{
+  "name": "unknown_fields",
+  "description": "Properties the codecs do not know survive in the raw layer byte for byte.",
+  "kinds": ["event", "task", "contact"],
+  "steps": [
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "event", "day": 1, "unknown": "event-x-7f3a" } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "task", "unknown": "task-x-91c2" } },
+    { "op": "put", "ref": "c", "object": { "kind": "contact", "name": "Contact", "unknown": "contact-x-5d0e" } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true, "raw_contains": { "ref": "e", "text": "event-x-7f3a" } },
+    { "op": "expect", "raw_contains": { "ref": "t", "text": "task-x-91c2" } },
+    { "op": "expect", "raw_contains": { "ref": "c", "text": "contact-x-5d0e" } }
+  ]
+}

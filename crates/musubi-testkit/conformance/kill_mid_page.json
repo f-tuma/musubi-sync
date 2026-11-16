@@ -1,0 +1,14 @@
+{
+  "name": "kill_mid_page",
+  "description": "kill -9 of musubi-syncd in the middle of a slowed multi-page read: after the restart the node resumes and converges with nothing lost or duplicated.",
+  "kinds": ["event"],
+  "only": ["google", "dav-generic", "dav-icloud"],
+  "steps": [
+    { "op": "put", "ref": "e", "copies": 300, "object": { "kind": "event", "title": "event", "day": 1 } },
+    { "op": "inject", "fault": { "type": "slow", "ms": 100 } },
+    { "op": "connect" },
+    { "op": "wait", "ms": 700 },
+    { "op": "kill" },
+    { "op": "expect", "converged": true, "timeout_ms": 90000 }
+  ]
+}

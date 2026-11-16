@@ -1,0 +1,14 @@
+{
+  "name": "unchanged",
+  "description": "Polling an unchanged account writes no entity entry to the journal and fetches no object bodies (no multiget).",
+  "kinds": ["event", "task", "contact", "group"],
+  "steps": [
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "event", "day": 1 } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "task" } },
+    { "op": "put", "ref": "c", "object": { "kind": "contact", "name": "Contact" } },
+    { "op": "put", "ref": "g", "object": { "kind": "group", "name": "Group", "members": ["c"] } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "expect", "unchanged": true, "no_requests": ["REPORT calendar-multiget", "REPORT addressbook-multiget"], "quiet_ms": 4000 }
+  ]
+}

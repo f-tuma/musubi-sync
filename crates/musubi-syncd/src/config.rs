@@ -9,7 +9,8 @@
 //!   "signing_key": "<base64 of 32 random bytes>",
 //!   "token_key": "<base64 of 32 random bytes>",
 //!   "google": { "client_id": "...", "client_secret": "..." },
-//!   "dav": { "allow_private": false }
+//!   "dav": { "allow_private": false },
+//!   "sync": { "active": { "min": 15, "max": 60 }, "rediscover_every": 21600 }
 //! }
 //! ```
 //!
@@ -19,7 +20,9 @@
 
 use std::fmt;
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -47,6 +50,69 @@ pub struct Config {
     /// DAV accounts; optional.
     #[serde(default)]
     pub dav: DavSettings,
+    /// Adaptive polling, rediscovery and page size; optional.
+    #[serde(default)]
+    pub sync: SyncSettings,
+}
+
+/// Adaptive polling bounds per interest level (plan 7.2) and the
+/// rediscovery interval, in seconds, and the page size asked of providers.
+/// A missing field keeps the engine's default (the plan's numbers).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncSettings {
+    /// Bounds while the tenant is active (`POST /v1/interest` lately).
+    pub active: Option<Bounds>,
+    /// Bounds while the tenant is neither active nor sleeping.
+    pub normal: Option<Bounds>,
+    /// Bounds of a tenant without interest for 7 days.
+    pub sleeping: Option<Bounds>,
+    /// Rediscovery of an account's collections.
+    pub rediscover_every: Option<f64>,
+    /// Items per page of a read (below the provider's own cap).
+    pub page_size: Option<NonZeroU32>,
+}
+
+/// Interval right after a change (`min`) and after many quiet reads (`max`).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bounds {
+    /// Seconds.
+    pub min: f64,
+    /// Seconds.
+    pub max: f64,
+}
+
+impl SyncSettings {
+    /// `base` with these settings applied.
+    pub(crate) fn engine(
+        &self,
+        mut base: musubi_engine::Config,
+    ) -> Result<musubi_engine::Config, String> {
+        let secs = |name: &str, s: f64| {
+            (s.is_finite() && s > 0.0)
+                .then(|| Duration::from_secs_f64(s))
+                .ok_or_else(|| format!("sync.{name} must be a positive number of seconds"))
+        };
+        for (name, bounds, slot) in [
+            ("active", self.active, &mut base.poll_active),
+            ("normal", self.normal, &mut base.poll_normal),
+            ("sleeping", self.sleeping, &mut base.poll_sleeping),
+        ] {
+            if let Some(b) = bounds {
+                let (min, max) = (secs(name, b.min)?, secs(name, b.max)?);
+                if min > max {
+                    return Err(format!("sync.{name}: min is above max"));
+                }
+                *slot = musubi_engine::PollBounds { min, max };
+            }
+        }
+        if let Some(s) = self.rediscover_every {
+            base.rediscover_every = secs("rediscover_every", s)?;
+        }
+        base.page_size = self.page_size.or(base.page_size);
+        Ok(base)
+    }
 }
 
 /// DAV accounts (`POST /v1/accounts/dav`).
@@ -136,6 +202,7 @@ impl fmt::Debug for Config {
             .field("token_key", &REDACTED)
             .field("google", &self.google)
             .field("dav", &self.dav)
+            .field("sync", &self.sync)
             .finish()
     }
 }
@@ -222,6 +289,7 @@ mod tests {
                 people_api_base: default_people_api_base(),
             },
             dav: DavSettings::default(),
+            sync: SyncSettings::default(),
         };
         let long = "a".repeat(32);
         assert!(c(&long).check().is_ok());
@@ -246,6 +314,27 @@ mod tests {
             "client-secret",
         ] {
             assert!(!debug.contains(secret), "{debug}");
+        }
+    }
+
+    #[test]
+    fn sync_settings_override_only_what_it_names_and_rejects_bad_bounds() {
+        let p = |v: serde_json::Value| -> SyncSettings { serde_json::from_value(v).unwrap() };
+        let base = musubi_engine::Config::default();
+        let c = p(serde_json::json!({ "active": { "min": 0.5, "max": 2 }, "rediscover_every": 3, "page_size": 20 }))
+            .engine(base.clone())
+            .expect("valid");
+        assert_eq!(c.poll_active.min, Duration::from_millis(500));
+        assert_eq!(c.poll_active.max, Duration::from_secs(2));
+        assert_eq!(c.rediscover_every, Duration::from_secs(3));
+        assert_eq!(c.page_size, NonZeroU32::new(20));
+        assert_eq!(c.poll_normal, base.poll_normal);
+        for bad in [
+            serde_json::json!({ "normal": { "min": 10, "max": 5 } }),
+            serde_json::json!({ "sleeping": { "min": 0, "max": 5 } }),
+            serde_json::json!({ "rediscover_every": -1 }),
+        ] {
+            assert!(p(bad.clone()).engine(base.clone()).is_err(), "{bad}");
         }
     }
 }

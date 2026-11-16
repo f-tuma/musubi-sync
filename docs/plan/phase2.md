@@ -459,7 +459,9 @@ Engine drží v paměti u kolekce počítadlo `quiet` (čtení za sebou bez změ
 - Změna (stránka s `upserts` nebo `removals`, ne jen se shodnými `stubs`) vrátí `quiet` na 0.
 - Chyby mají dál stávající odklad (`backoff`). Pro chybu se interval nezkracuje.
 - K intervalu se přičte náhodný rozptyl ±10 %, aby se kolekce jednoho účtu nestahovaly naráz.
-- Meze jsou v `Config` enginu. Čísla v tabulce jsou výchozí a K9 je doladí podle benchmarku D2.
+- Meze jsou v `Config` enginu a v sekci `sync` konfigurace `musubi-syncd` (`"sync": {"active": {"min": 15, "max": 60}}`, sekundy; chybějící pole nechá výchozí hodnotu).
+- K9 výchozí čísla podle D2 **ponechala**. Kolekce beze změn stojí za hodinu při aktivní úrovni 60 požadavků (rozpočet 240), při běžné 5 (30) a při spící 1 (6). Každá kontrola je jeden levný požadavek (prázdný `sync-collection` nebo `PROPFIND` hloubky 0).
+- Kratší `max` aktivní úrovně by zkrátil latenci (D4: p90 46 s) za dvojnásobek požadavků. Dokud není známá kvóta Tasks (otázka 7 v 11.4), K9 nezrychluje. Rezerva vůči rozpočtům dává K10 prostor zrychlit, pokud to kvóta dovolí.
 - Kvóty hlídá stávající omezovač podle `limits.requests_per_minute`. Interval ho neobchází.
 - Kolekce s validátorem `musubi:sha256:` (server bez ETagů, kapitola 3.3) stahuje při každém čtení všechna těla, proto při aktivním zájmu nemá meze aktivní úrovně, ale běžné. Spící tenant ji dotazuje se spící úrovní.
 
@@ -528,7 +530,7 @@ Hermetičnost:
 
 - `crates/musubi-testkit/radicale/requirements.txt` s přesnou verzí a hashi (`pip install --require-hashes`), do venv v CI. Bez sítě za běhu testu.
 - `musubi-testkit::radicale::Radicale::start()` najde venv podle `MUSUBI_RADICALE`. Bez proměnné test Radicale selže s návodem; v jobu `conformance` je proměnná vždy nastavená.
-- Vypršení tokenu: Radicale tokeny sám nezneplatní. Běžec pošle token, který server nikdy nevydal; Radicale ho odmítne `403` s `valid-sync-token` (ověřeno ze zdrojů).
+- Vypršení tokenu: Radicale tokeny sám nezneplatní. Běžec nemůže `musubi-syncd` podstrčit cizí token (kurzor je uvnitř úložiště), proto smaže uložené tokeny kolekce (`.Radicale.cache/sync-token`). Token, který server už nenajde, Radicale odmítne `403` s `valid-sync-token` stejně jako token nikdy nevydaný (K9, scénář `expired_cursor` prochází).
 - Odezva Radicale mezi verzemi: hash v `requirements.txt` mění jen PR s důvodem.
 
 Další DAV servery (Baïkal, Nextcloud, Stalwart) se ve fázi 2 nepouštějí. Kontejnery by zpomalily CI a falešný DAV pokryje odchylky.
@@ -758,10 +760,12 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 
 | Benchmark | Co měří | Cíl |
 | --- | --- | --- |
-| D1 | první data po připojení DAV účtu (falešný DAV s odezvou 50 ms na požadavek, 2 000 událostí) | okno kolem dneška do 2 s; měří se, nehlídá **(neověřeno, kolik dá iCloud)** |
-| D2 | cena nečinnosti: požadavky za hodinu na kolekci beze změn při každé úrovni zájmu | aktivní ≤ 240, běžná ≤ 30, spící ≤ 6; levná kontrola = 1 požadavek |
-| D3 | propustnost dekódování `musubi-ical` (MB/s, VEVENT, VTODO, vCard) | měří se; fáze 0 změřila parse calcard 110–210 MB/s |
-| D4 | latence změny u DAV do SSE | nejvýš interval úrovně + jedna delta; zveřejní se rozdělení, ne slib. People navíc nese zpoždění propsání u Googlu (T10: 0,1–0,2 s, čtyři vzorky z jednoho dne na účtu s jedním kontaktem), které falešný server nemodeluje; D4 ho uvede z T10 a K10 |
+| D1 | první data po připojení DAV účtu (falešný DAV s odezvou 50 ms na požadavek, 2 000 událostí) | okno kolem dneška do 2 s; měří se, nehlídá **(neověřeno, kolik dá iCloud)**. K9: okno (160 z 2 000 událostí) za 0,88 s, celé čtení za 3,0 s |
+| D2 | cena nečinnosti: požadavky za hodinu na kolekci beze změn při každé úrovni zájmu | aktivní ≤ 240, běžná ≤ 30, spící ≤ 6; levná kontrola = 1 požadavek. Hlídá se v `bench-smoke` i `nightly`. K9: aktivní 60, běžná 5, spící 1, vždy 1 požadavek na kontrolu (kolekce se sync tokenem i jen s ctag); kolekce bez ETagů a ctag při aktivním zájmu 10 (jen se zaznamená) |
+| D3 | propustnost dekódování `musubi-ical` (MB/s, VEVENT, VTODO, vCard) | měří se; fáze 0 změřila parse calcard 110–210 MB/s. K9: VEVENT 70,7 MB/s, VTODO 82,6 MB/s, vCard 86,9 MB/s (celé dekódování do modelu, ne jen parse) |
+| D4 | latence změny u DAV do SSE | nejvýš interval úrovně + jedna delta; zveřejní se rozdělení, ne slib. People navíc nese zpoždění propsání u Googlu (T10: 0,1–0,2 s, čtyři vzorky z jednoho dne na účtu s jedním kontaktem), které falešný server nemodeluje; D4 ho uvede z T10 a K10. K9: aktivní úroveň (15–60 s), 15 změn v náhodných chvílích, p50 22 s, p90 46 s, max 47 s |
+
+Měření K9: D1, D2 a D4 měří binárka `crates/musubi-testkit/src/bin/bench.rs` (`musubi-syncd` jako proces nad falešným DAV), D3 je `cargo bench -p musubi-ical`. D2 zrychlí čas 20× (v `bench-smoke` 60×): všechny meze vydělí stejným číslem a hodinu zkrátí na 180 s. Spící úroveň nastane až po 7 dnech bez zájmu, proto D2 dá spící meze na místo běžných. Čísla jsou z jednoho běhu na Intel Core Ultra 7 265K.
 
 Latence u DAV, Tasks a People je omezená dotazováním. Cíl „do 500 ms od oznámení" pro ně neplatí, protože oznámení neexistuje. D4 to ukáže čísly (riziko 11 v kapitole 11.3 návrhu).
 
@@ -789,4 +793,4 @@ Uživatel zatím nerozhodl. U otázek 2, 5 a 6 plán počítá s doporučenou v�
 4. **iCloud: zkracování `507`, velikost dávky `multiget`, `PUT` s `If-Match`, delta po změně** **(neověřeno; T11 bez dat)**. `sync-collection` u CardDAV a `:443` potvrdila T11.
 5. **Rozsah úkolů podle termínu.** Má `/v1/entities?kind=task` umět okno podle `due`? Bez indexu výskytů jde jen o filtr nad `list_entities`; opakované úkoly by potřebovaly rozbalení. **Doporučená výchozí volba:** žádné okno, úkoly se stránkují po `id` (kapitola 4.2).
 6. **Skryté úkoly Googlu** (`hidden: true`, vyčištěné dokončené). **Doporučená výchozí volba:** synchronizovat je jako živé položky s příznakem `CalendarTask.hidden` a nechat skrývání na klientovi (kapitoly 3.1 a 6.2). Pokud T10 ukáže, že je Google po čase maže, příznak to nemění.
-7. **Meze adaptivního dotazování.** Výchozí čísla v kapitole 7.2 jsou odhad; kvóta Tasks API (výchozí denní limit projektu) **(neověřeno)** může vynutit delší `min` aktivní úrovně.
+7. **Meze adaptivního dotazování.** Výchozí čísla v kapitole 7.2 jsou odhad; kvóta Tasks API (výchozí denní limit projektu) **(neověřeno)** může vynutit delší `min` aktivní úrovně. K9 podle D2 výchozí meze ponechala: stojí čtvrtinu až šestinu rozpočtu (kapitola 7.2). Kvótu Tasks zjistí K10.
