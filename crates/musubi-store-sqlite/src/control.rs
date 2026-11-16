@@ -587,11 +587,13 @@ impl ControlStore for SqliteControl {
         lease_for: Duration,
     ) -> Result<Vec<Job>, StoreError> {
         let until = after(now, lease_for)?;
-        // The one write on the path from a push to its sync: a FULL fsync here
-        // stalled B5 for up to 160 ms on CI disks. A lease lost to a power
-        // loss is one whose holder died with it, the same as an expired lease:
-        // the job runs again. The lease counter may roll back with it; no
-        // lease handed out before the loss outlives its holder.
+        // The only FULL fsync between a push's coalescing window and its sync
+        // (the webhook's enqueue is FULL too, but falls inside the 150 ms
+        // window B5 subtracts): here it stalled B5 for up to 160 ms on CI
+        // disks. A lease lost to a power loss is one whose holder died with
+        // it, the same as an expired lease: the job runs again. The lease
+        // counter may roll back with it; no lease handed out before the loss
+        // outlives its holder.
         self.write_normal(|c| {
             let ids: Vec<i64> = c
                 .prepare_cached(
