@@ -296,8 +296,9 @@ pub(crate) fn excerpt(body: &[u8]) -> String {
     out
 }
 
-/// `403` for an API the OAuth client's Cloud project has not enabled, in the
-/// classic and the AIP-193 shape.
+/// `403` for an API the OAuth client's Cloud project has not enabled: the
+/// ErrorInfo `SERVICE_DISABLED`, and from Tasks also `errors[].reason =
+/// accessNotConfigured` (T10).
 fn is_api_disabled(body: &[u8]) -> bool {
     has_reason(body, &["accessNotConfigured", "SERVICE_DISABLED"])
 }
@@ -315,9 +316,9 @@ fn is_rate_limit(body: &[u8]) -> bool {
     )
 }
 
-/// `403` for an OAuth scope the user did not grant, in either shape Google
-/// uses (plan 6.1; which API sends which is unverified, T10): the older
-/// `errors[].reason` and the newer `google.rpc.ErrorInfo` in `details[]`.
+/// `403` for an OAuth scope the user did not grant (plan 6.1): Tasks sends
+/// both `errors[].reason = insufficientPermissions` and the `google.rpc.ErrorInfo`
+/// `ACCESS_TOKEN_SCOPE_INSUFFICIENT`, People only the ErrorInfo (T10).
 pub(crate) fn is_missing_scope(body: &[u8]) -> bool {
     has_reason(
         body,

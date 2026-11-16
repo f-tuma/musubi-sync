@@ -173,8 +173,8 @@ pub struct Fault {
     pub domain: &'static str,
     /// `error.errors[0].reason`, or the `ErrorInfo.reason` with `rpc_status`.
     pub reason: &'static str,
-    /// `None`: the older shape with `error.errors[]` (Calendar, Tasks).
-    /// `Some(status)`: the newer `google.rpc.Status` shape (People) with
+    /// `None`: the older shape with `error.errors[]` (Calendar).
+    /// `Some(status)`: the newer `google.rpc.Status` shape (People, Tasks) with
     /// `error.status` and the reason in a `google.rpc.ErrorInfo` of
     /// `error.details[]`.
     pub rpc_status: Option<&'static str>,
@@ -182,6 +182,9 @@ pub struct Fault {
     pub message: &'static str,
     /// `Retry-After` header in seconds.
     pub retry_after: Option<u64>,
+    /// With `rpc_status`: an `error.errors[0]` `(domain, reason)` next to
+    /// the `ErrorInfo`, as Tasks sends both (T10). Ignored without it.
+    pub legacy: Option<(&'static str, &'static str)>,
 }
 
 impl Fault {
@@ -194,6 +197,7 @@ impl Fault {
             message: "Rate Limit Exceeded",
             retry_after,
             rpc_status: None,
+            legacy: None,
         }
     }
 
@@ -214,24 +218,24 @@ impl Fault {
             message: "Backend Error",
             retry_after: None,
             rpc_status: None,
+            legacy: None,
         }
     }
 
-    /// `403 insufficientPermissions` in the older shape: a scope the user did
-    /// not grant (plan 6.1; which API sends which shape is unverified, T10).
+    /// A scope the user did not grant, as Tasks answers it (T10): `403
+    /// PERMISSION_DENIED` with `ErrorInfo.reason =
+    /// ACCESS_TOKEN_SCOPE_INSUFFICIENT` and `errors[].reason =
+    /// insufficientPermissions`.
     pub fn insufficient_permissions() -> Self {
         Self {
-            status: 403,
-            domain: "global",
-            reason: "insufficientPermissions",
-            message: "Insufficient Permission",
-            retry_after: None,
-            rpc_status: None,
+            legacy: Some(("global", "insufficientPermissions")),
+            ..Self::scope_insufficient()
         }
     }
 
-    /// `403 PERMISSION_DENIED` with `ACCESS_TOKEN_SCOPE_INSUFFICIENT`: a scope
-    /// the user did not grant, in the newer shape.
+    /// A scope the user did not grant, as People answers it (T10): `403
+    /// PERMISSION_DENIED` with only `ErrorInfo.reason =
+    /// ACCESS_TOKEN_SCOPE_INSUFFICIENT`.
     pub fn scope_insufficient() -> Self {
         Self {
             status: 403,
@@ -240,6 +244,7 @@ impl Fault {
             message: "Request had insufficient authentication scopes.",
             retry_after: None,
             rpc_status: Some("PERMISSION_DENIED"),
+            legacy: None,
         }
     }
 
@@ -252,11 +257,13 @@ impl Fault {
             message: "Forbidden",
             retry_after: None,
             rpc_status: None,
+            legacy: None,
         }
     }
 
-    /// `403 PERMISSION_DENIED` with `SERVICE_DISABLED`: the OAuth client's
-    /// Cloud project has not enabled the API.
+    /// The OAuth client's Cloud project has not enabled the API, as People
+    /// answers it (T10): `403 PERMISSION_DENIED` with only `ErrorInfo.reason
+    /// = SERVICE_DISABLED`.
     pub fn api_disabled() -> Self {
         Self {
             status: 403,
@@ -265,10 +272,22 @@ impl Fault {
             message: "People API has not been used in project 0 before or it is disabled.",
             retry_after: None,
             rpc_status: Some("PERMISSION_DENIED"),
+            legacy: None,
         }
     }
 
-    /// `400 FAILED_PRECONDITION` with `EXPIRED_SYNC_TOKEN` (People).
+    /// As [`Fault::api_disabled`], as Tasks answers it (T10): also
+    /// `errors[].reason = accessNotConfigured`.
+    pub fn tasks_api_disabled() -> Self {
+        Self {
+            message: "Google Tasks API has not been used in project 0 before or it is disabled.",
+            legacy: Some(("usageLimits", "accessNotConfigured")),
+            ..Self::api_disabled()
+        }
+    }
+
+    /// `400 FAILED_PRECONDITION` with `EXPIRED_SYNC_TOKEN` (People), as
+    /// documented; the live shape of an expired token is unknown until K10.
     /// [`FakeGoogle::expire_people_sync_tokens`] makes the server answer this
     /// by itself.
     pub fn expired_sync_token() -> Self {
@@ -279,6 +298,7 @@ impl Fault {
             message: "Sync token is expired. Clear local cache and retry call without the sync token.",
             retry_after: None,
             rpc_status: Some("FAILED_PRECONDITION"),
+            legacy: None,
         }
     }
 }
@@ -758,7 +778,7 @@ impl Inner {
                 _ if endpoint == Endpoint::Token => {
                     oauth_error(status, fault.reason, fault.message)
                 }
-                Some(rpc) => rpc_error(status, rpc, fault.domain, fault.reason, fault.message),
+                Some(_) => rpc_error(&fault),
                 None => error(status, fault.domain, fault.reason, fault.message),
             };
             if let Some(secs) = fault.retry_after {
@@ -1218,18 +1238,24 @@ fn error(status: StatusCode, domain: &str, reason: &str, message: &str) -> Respo
     (status, axum::Json(body)).into_response()
 }
 
-/// The newer `google.rpc.Status` error shape (People and newer APIs).
-fn rpc_error(status: StatusCode, rpc: &str, domain: &str, reason: &str, message: &str) -> Response {
-    let body = json!({ "error": {
-        "code": status.as_u16(),
-        "message": message,
-        "status": rpc,
+/// The newer `google.rpc.Status` error shape of a fault with `rpc_status`,
+/// plus Tasks' `errors[]` when it has `legacy`.
+fn rpc_error(f: &Fault) -> Response {
+    let status = StatusCode::from_u16(f.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut body = json!({ "error": {
+        "code": f.status,
+        "message": f.message,
+        "status": f.rpc_status,
         "details": [{
             "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-            "reason": reason,
-            "domain": domain,
+            "reason": f.reason,
+            "domain": f.domain,
         }],
     }});
+    if let Some((domain, reason)) = f.legacy {
+        body["error"]["errors"] =
+            json!([{ "domain": domain, "reason": reason, "message": f.message }]);
+    }
     (status, axum::Json(body)).into_response()
 }
 

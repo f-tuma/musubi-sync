@@ -3,8 +3,8 @@
 //!
 //! A full read requests a sync token; deltas read with it and see deleted
 //! contacts as `metadata.deleted: true`. The token expires (7 days after the
-//! full read that issued it), so roughly once a week the delta answers
-//! `EXPIRED_SYNC_TOKEN` and the engine starts a full read again.
+//! full read that issued it), so roughly once a week the delta is rejected
+//! and the engine starts a full read again.
 
 use jiff::Timestamp;
 use musubi_model::contact::{
@@ -32,8 +32,9 @@ pub(crate) const COLLECTION: &str = "people/me/connections";
 /// Largest `connections.list` page Google serves.
 const MAX_PAGE: u32 = 1000;
 /// Everything [`PeopleCodec`] reads, plus what stays in the raw layer only
-/// (`memberships`, `clientData`). Part of the cursor: Google rejects a sync
-/// token issued for other fields, so a change here forces a full read.
+/// (`memberships`, `clientData`). Part of the cursor, so a change here forces
+/// a full read: Google accepts a token issued for other fields (T10), but a
+/// delta would not fill a new field in for contacts that did not change.
 pub(crate) const PERSON_FIELDS: &str = "addresses,biographies,birthdays,clientData,\
 emailAddresses,memberships,metadata,names,nicknames,organizations,phoneNumbers,photos,urls";
 
@@ -298,10 +299,11 @@ impl GoogleProvider {
         let status = resp.status();
         if matches!(status, StatusCode::BAD_REQUEST | StatusCode::GONE) {
             let body = resp.bytes().await.unwrap_or_default();
-            // Assumed (T10): an expired token is `EXPIRED_SYNC_TOKEN`, as 400
-            // or 410; a rejected page token is a plain 400. Whatever Google
-            // says about a token or page token, the pass restarts as a full
-            // read, which carries neither, so this cannot loop.
+            // An invalid token is `400 INVALID_ARGUMENT` without ErrorInfo
+            // (T10); an expired one is documented as `EXPIRED_SYNC_TOKEN`
+            // (live shape: K10). Whatever Google says about a token or page
+            // token, the pass restarts as a full read, which carries neither,
+            // so this cannot loop.
             if q.token.is_some() || q.page.is_some() {
                 tracing::info!(body = %excerpt(&body), pass = ?q.pass(), "contacts token rejected; full read");
                 return Err(SyncError::CursorExpired);
@@ -706,6 +708,34 @@ mod tests {
         assert_eq!(page.pass, Pass::Delta);
         assert_eq!(page.removals, [RemoteKey("people/c2".into())]);
         assert!(matches!(cursor(&page), PeopleCursor::Sync { token, .. } if token == "s2"));
+    }
+
+    /// T10's recorded deltas: a created contact is an upsert, a tombstone
+    /// with only `resourceName`, `etag` and `metadata` is a removal, and a
+    /// delta without changes has neither `connections` nor totals.
+    #[test]
+    fn recorded_deltas_upsert_created_and_remove_the_tombstone() {
+        let delta = Query {
+            token: Some("t".into()),
+            page: None,
+            size: 100,
+        };
+        let created = include_bytes!("../tests/fixtures/live/t10/people.delta.created.json");
+        let (page, _) = build_page(&delta, created).unwrap();
+        assert_eq!(page.upserts[0].key.0, "people/c1975428914001392424");
+        assert!(page.upserts.len() == 1 && page.removals.is_empty());
+        let deleted = include_bytes!("../tests/fixtures/live/t10/people.delta.deleted.json");
+        let (page, _) = build_page(&delta, deleted).unwrap();
+        assert!(page.upserts.is_empty());
+        assert_eq!(
+            page.removals,
+            [RemoteKey("people/c1975428914001392424".into())]
+        );
+        // The body of `people.delta.other_fields.json`.
+        let (page, next) = build_page(&delta, br#"{"nextSyncToken":"REDACTED"}"#).unwrap();
+        assert!(page.last && next.is_none());
+        assert!(page.upserts.is_empty() && page.removals.is_empty());
+        assert!(matches!(cursor(&page), PeopleCursor::Sync { token, .. } if token == "REDACTED"));
     }
 
     #[test]

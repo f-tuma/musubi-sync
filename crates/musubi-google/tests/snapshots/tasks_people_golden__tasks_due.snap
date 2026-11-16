@@ -1,6 +1,6 @@
 ---
 source: crates/musubi-google/tests/tasks_people_golden.rs
-expression: "decode :: < Task, TasksCodec >\n(\"tasks\", & stringify! (tasks_open)[\"tasks\".len() + 1 ..])"
+expression: "decode :: < Task, TasksCodec >\n(\"tasks\", & stringify! (tasks_due)[\"tasks\".len() + 1 ..])"
 ---
 {
   "uid": "MDY2NjQ1NTc2MDQ1NTg0ODcyNTc6MDow",

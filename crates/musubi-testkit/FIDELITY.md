@@ -259,62 +259,79 @@ makes one calendar behave in each of the suspected ways. K8 recorded what
 
 `src/google/tasks.rs` and `src/google/people.rs` add Google Tasks API v1
 (`tasklists.list`, `tasks.list`, `tasks.get`) and People API v1
-(`people.connections.list`, `people.get`). **No shape here is verified yet**:
-everything follows the API reference and the People "sync" guide. T10's
-recordings check them. Every assumption is listed below.
+(`people.connections.list`, `people.get`). Shapes follow T10's live
+recordings in `musubi-google/tests/fixtures/live/t10/`;
+`tests/google_server.rs` compares the fake with them (keys and value types,
+error reasons). What T10 did not record follows the API reference and the
+People "sync" guide and is marked below.
 
 - **Read endpoints only.** Data changes go through the Rust API:
   `put_task_list`, `put_task`, `delete_task`, `put_contact`,
   `seed_contacts`, `delete_contact`, `expire_people_sync_tokens`, and
   `advance`, which moves the logical clock so that `updatedMin` filters.
 - `tasklists.list`: `maxResults` defaults to 1000, which is also the cap. The
-  page token is an index into the lists.
+  page token is an index into the lists. A list's `updated` moves when a task
+  is inserted, not when one is renamed (T10), so it is no cheap change check.
+  It also changed over the delete, complete and clear steps, but T10 cannot
+  say which one moved it; the fake moves it only on insert.
 - `tasks.list`:
-  - Defaults: `showCompleted=true`, `showDeleted=false`, `showHidden=false`.
+  - Defaults: `showCompleted=true`, `showDeleted=false`, `showHidden=false`,
+    `showAssigned=false`.
   - `maxResults` is capped at 100.
-  - `updatedMin` keeps tasks with `updated >= updatedMin`. Deleted tasks come
-    back only with `showDeleted=true`.
+  - `updatedMin` keeps tasks with `updated >= updatedMin`. Deleted and hidden
+    tasks come back only with `showDeleted=true` and `showHidden=true`, with
+    `updatedMin` too (T10). A future `updatedMin` answers `items: []`.
   - Order is by id, not `position`.
   - A page token is bound to the list and the filters that issued it. Any
     other token answers the same `400 invalid` as a bogus Calendar page token.
     *Undocumented*: Google's answer to a stale or foreign Tasks page token.
-  - `completedMin/Max`, `dueMin/Max` and `showAssigned` are rejected with
-    `400`.
-- *Open (T10)*: Google leaves tasks assigned from Docs or Chat out of
-  `tasks.list` unless `showAssigned=true`. The adapter does not send it, so it
-  does not see them; the fake has no assigned tasks.
+  - `completedMin/Max` and `dueMin/Max` are rejected with `400`.
+  - A task with `assignmentInfo` (assigned from Docs or Chat) is listed only
+    with `showAssigned=true`, as documented; T10 recorded no assigned task.
 - `tasks.get` returns a deleted task too, with `deleted: true` (*undocumented*).
 - Task fields set by the fake: `kind`, `etag`, `updated` (the logical clock),
-  `selfLink`, `position`, `status`, `links`. A deletion sets `deleted: true`
-  and a new `etag`/`updated`. Tasks never expire out of `showDeleted`.
+  `selfLink`, `webViewLink`, `position`, `status`, `links`, and `completed`
+  (defaults to `updated`) on a completed task. `put_task` with the `id` of a
+  task in the list replaces it; any other `id` is ignored, as live
+  `tasks.insert` ignores a client id (T10). A deletion sets `deleted: true`
+  and a new `etag`/`updated` and keeps `status` (T10). Tasks never expire out
+  of `showDeleted`.
 - `people.connections.list`:
   - `personFields` is required: `400` without it.
   - `pageSize` 1–1000, default 100.
   - Every page must repeat every parameter; a page token from other parameters
     answers `400 invalid`.
   - The response carries only the requested fields plus `resourceName` and
-    `etag`. Tombstones in a delta keep `metadata.deleted: true` regardless of
-    the mask. `totalPeople` and `totalItems` count live contacts.
+    `etag`. A tombstone in a delta has only `resourceName`, `etag` and
+    `metadata` (one source with `updateTime` `1970-01-01T00:00:00Z`,
+    `deleted: true`, `objectType`), regardless of the mask (T10).
+  - `totalPeople` and `totalItems` count what the pass lists: live contacts in
+    a full read, changes in a delta (T10 saw `1` for a delta with one
+    deletion). An empty `connections` and zero totals are left out, so a
+    delta without changes is only `{nextSyncToken}` (T10).
   - With `requestSyncToken=true`, the last page carries `nextSyncToken`.
   - A delta returns every contact changed since the token, deletions included.
-  - A token issued for other `personFields` answers `400`.
+  - A token can be used again and accepts other `personFields` (T10).
+  - A token the server cannot read answers `400 INVALID_ARGUMENT` with
+    `message: "Request contains an invalid argument."` and no `details` (T10).
 - **Expired sync token:** `400` with `error.status: FAILED_PRECONDITION` and
   `ErrorInfo.reason: EXPIRED_SYNC_TOKEN`, in the AIP-193 error shape (`code`,
-  `message`, `status`, `details[]`, no `errors[]`). *Undocumented*: whether
-  Google answers `400` or `410`. `Fault { status: 410, ..Fault::expired_sync_token() }`
+  `message`, `status`, `details[]`, no `errors[]`). *Unverified until K10*:
+  the live shape, and whether Google answers `400` or `410`. `Fault { status: 410, ..Fault::expired_sync_token() }`
   covers the other case. Google expires tokens after seven days; the fake
   expires them only through `expire_people_sync_tokens`.
 - `people.get` answers `404` for a deleted or unknown contact.
 - Resource names are `people/c<number>`. The `etag` starts with `%Eg`, and
   `metadata.sources[]` holds one `CONTACT` source with `updateTime`.
-- **Scope errors:** `Fault::insufficient_permissions()` is the classic
-  `403 insufficientPermissions`; `Fault::scope_insufficient()` is the
-  AIP-193 `403 PERMISSION_DENIED` with `ErrorInfo.reason:
-  ACCESS_TOKEN_SCOPE_INSUFFICIENT`. Google sends the second (People, Tasks)
-  or both; which one each API sends is *undocumented* (T10).
-  `Fault::api_disabled()` is the AIP-193 `403 SERVICE_DISABLED` that Google
-  sends when the Cloud project has not enabled the API (the classic shape is
-  `accessNotConfigured`). The adapter treats it like a missing scope. Without a
+- **Scope errors (T10):** both APIs answer an ungranted scope with the
+  AIP-193 `403 PERMISSION_DENIED` and `ErrorInfo.reason:
+  ACCESS_TOKEN_SCOPE_INSUFFICIENT`; Tasks also sends `errors[].reason:
+  insufficientPermissions`. `Fault::insufficient_permissions()` is the Tasks
+  shape, `Fault::scope_insufficient()` the People one. A project without the
+  API enabled gets `ErrorInfo.reason: SERVICE_DISABLED`, from Tasks also with
+  `errors[].reason: accessNotConfigured`: `Fault::tasks_api_disabled()` and
+  `Fault::api_disabled()` (People). `Fault::legacy` adds the `errors[]` entry
+  to an AIP-193 fault. The adapter treats both like a missing scope. Without a
   scripted fault every scope is granted: the token endpoint reports
   `calendar.readonly`, `tasks.readonly` and `contacts.readonly`.
 

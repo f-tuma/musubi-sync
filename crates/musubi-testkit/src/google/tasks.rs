@@ -1,6 +1,6 @@
 //! Google Tasks API v1: `tasklists.list`, `tasks.list` and `tasks.get`
-//! (plan 6.2, 6.4). Shapes follow Google's documentation; T10 has not
-//! recorded live responses yet (FIDELITY.md).
+//! (plan 6.2, 6.4). Shapes follow the live responses T10 recorded
+//! (`musubi-google/tests/fixtures/live/t10/`, FIDELITY.md).
 
 use std::collections::BTreeMap;
 
@@ -23,7 +23,8 @@ pub const MAX_TASK_LISTS_PAGE: u32 = 1000;
 
 pub(super) struct TaskList {
     title: String,
-    /// Version of the last change of the list itself.
+    /// Version of the list's `updated`: its creation and every task
+    /// insert. T10 shows a rename does not move it; other edits are unknown.
     changed: u64,
     tasks: BTreeMap<String, TaskEntry>,
 }
@@ -65,9 +66,12 @@ impl FakeGoogle {
         id
     }
 
-    /// Inserts or replaces a task. The server sets `kind`, `etag`, `updated`,
-    /// `selfLink` and `position`, and defaults `status` to `needsAction`; `id`
-    /// is generated when missing. Returns the task id.
+    /// Inserts or replaces a task. An `id` of a task in the list replaces
+    /// it; any other `id` is ignored, as live `tasks.insert` does (T10), and
+    /// a new one is generated. The server sets `kind`, `etag`, `updated`,
+    /// `selfLink`, `webViewLink` and `position`, defaults `status` to
+    /// `needsAction` and `completed` of a completed task to `updated`.
+    /// Returns the task id.
     ///
     /// # Panics
     /// If the list does not exist or `task` is not an object.
@@ -77,22 +81,36 @@ impl FakeGoogle {
         let mut s = self.inner.lock();
         s.version += 1;
         let v = s.version;
-        let id = match task["id"].as_str() {
-            Some(id) => id.to_owned(),
-            None => format!("T{}", b32hex(v.wrapping_mul(0x9E37_79B9_7F4A_7C15))),
+        let l = s.task_lists.get_mut(list).expect("unknown task list");
+        let old = task["id"].as_str().and_then(|id| l.tasks.get(id));
+        // A task edit keeps its place; like a rename (T10), it does not move the list's `updated`.
+        let (id, position) = match old {
+            Some(t) => (
+                t.body["id"].as_str().unwrap_or_default().to_owned(),
+                t.body["position"].clone(),
+            ),
+            None => {
+                l.changed = v;
+                let id = format!("T{}", b32hex(v.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+                (id, json!(format!("{v:020}")))
+            }
         };
+        let updated = logical(epoch, v).to_string();
         task["kind"] = json!("tasks#task");
         task["id"] = json!(id);
         task["etag"] = json!(etag(v));
-        task["updated"] = json!(logical(epoch, v).to_string());
+        task["updated"] = json!(updated);
         task["selfLink"] = json!(format!(
             "https://www.googleapis.com/tasks/v1/lists/{list}/tasks/{id}"
         ));
+        task["webViewLink"] = json!(format!("https://tasks.google.com/task/{id}?sa=6"));
+        if task["status"] == "completed" {
+            merge_defaults(&mut task, json!({ "completed": updated }));
+        }
         merge_defaults(
             &mut task,
-            json!({ "title": "", "status": "needsAction", "position": format!("{v:020}"), "links": [] }),
+            json!({ "title": "", "status": "needsAction", "position": position, "links": [] }),
         );
-        let l = s.task_lists.get_mut(list).expect("unknown task list");
         l.tasks.insert(
             id.clone(),
             TaskEntry {
@@ -199,20 +217,23 @@ fn tasks_list_inner(g: &Inner, list: &str, q: Vec<(String, String)>) -> Result<R
             "showCompleted",
             "showDeleted",
             "showHidden",
+            "showAssigned",
             "updatedMin",
         ],
     )?;
-    // Google's defaults: completed tasks shown, deleted and hidden ones not.
+    // Google's defaults: completed tasks shown, deleted, hidden and assigned
+    // ones (from Docs or Chat, with `assignmentInfo`) not.
     let flag = |k: &str, default: bool| match p.get(k).map(String::as_str) {
         None => Ok(default),
         Some("true") => Ok(true),
         Some("false") => Ok(false),
         Some(_) => Err(bad_request(&format!("Invalid {k}"))),
     };
-    let (completed, deleted, hidden) = (
+    let (completed, deleted, hidden, assigned) = (
         flag("showCompleted", true)?,
         flag("showDeleted", false)?,
         flag("showHidden", false)?,
+        flag("showAssigned", false)?,
     );
     let updated_min: Option<Timestamp> = p
         .get("updatedMin")
@@ -243,6 +264,7 @@ fn tasks_list_inner(g: &Inner, list: &str, q: Vec<(String, String)>) -> Result<R
             (deleted || b["deleted"] != json!(true))
                 && (hidden || b["hidden"] != json!(true))
                 && (completed || b["status"] != json!("completed"))
+                && (assigned || b.get("assignmentInfo").is_none())
                 && updated_min.is_none_or(|m| logical(epoch, t.version) >= m)
         });
     let items: Vec<(&String, &TaskEntry)> = matching.by_ref().take(size).collect();

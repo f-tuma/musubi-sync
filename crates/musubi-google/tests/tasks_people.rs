@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use jiff::Timestamp;
-use musubi_google::{GoogleConfig, GoogleProvider};
-use musubi_model::provider::{Clock, Credential, FetchHint, Pass, Start};
+use musubi_google::{GoogleConfig, GoogleProvider, TasksCodec};
+use musubi_model::provider::{Clock, Codec, Credential, Decoded, FetchHint, Pass, Start};
 use musubi_model::remote::RemoteRef;
 use musubi_model::{
     AccountCx, AccountId, ChangePage, CollectionRef, Cursor, EntityKind, Provider, RemoteKey,
-    SyncError,
+    SyncError, Task,
 };
 use musubi_testkit::account_cx;
 use musubi_testkit::google::{Config, Endpoint, FakeGoogle, Fault};
@@ -166,60 +166,41 @@ async fn discovery_finds_calendars_task_lists_and_contacts() {
     assert!(probe.contains("pageSize=1"), "{probe}");
 }
 
+/// In the shapes T10 recorded: Tasks sends `insufficientPermissions` and the
+/// ErrorInfo, People only the ErrorInfo.
 #[tokio::test]
-async fn missing_scope_at_discovery_is_unauthorized_in_either_shape() {
-    for (tasks_fault, people_fault) in [
-        (
-            Fault::insufficient_permissions(),
-            Fault::scope_insufficient(),
-        ),
-        (
-            Fault::scope_insufficient(),
-            Fault::insufficient_permissions(),
-        ),
-    ] {
-        let e = env().await;
-        e.g.put_task_list("Inbox");
-        e.g.fail(Endpoint::TaskLists, tasks_fault, 1);
-        e.g.fail(Endpoint::PeopleConnections, people_fault, 1);
-        let d = e.p.discover(&e.cx).await.unwrap();
-        assert_eq!(d.unauthorized, [EntityKind::Task, EntityKind::Contact]);
-        assert!(d.collections.iter().all(|c| c.kind == EntityKind::Event));
-        assert_eq!(d.collections.len(), 1);
-    }
+async fn missing_scope_at_discovery_is_unauthorized() {
+    let e = env().await;
+    e.g.put_task_list("Inbox");
+    e.g.fail(Endpoint::TaskLists, Fault::insufficient_permissions(), 1);
+    e.g.fail(Endpoint::PeopleConnections, Fault::scope_insufficient(), 1);
+    let d = e.p.discover(&e.cx).await.unwrap();
+    assert_eq!(d.unauthorized, [EntityKind::Task, EntityKind::Contact]);
+    assert!(d.collections.iter().all(|c| c.kind == EntityKind::Event));
+    assert_eq!(d.collections.len(), 1);
 }
 
 #[tokio::test]
 async fn disabled_api_at_discovery_is_unauthorized_and_missing_scope_in_changes() {
-    let classic = Fault {
-        domain: "usageLimits",
-        reason: "accessNotConfigured",
-        rpc_status: None,
-        ..Fault::api_disabled()
-    };
-    for (tasks_fault, people_fault) in [
-        (classic.clone(), Fault::api_disabled()),
-        (Fault::api_disabled(), classic.clone()),
-    ] {
-        let e = env().await;
-        let list = e.g.put_task_list("Inbox");
-        e.g.fail(Endpoint::TaskLists, tasks_fault.clone(), 1);
-        e.g.fail(Endpoint::PeopleConnections, people_fault.clone(), 1);
-        let d = e.p.discover(&e.cx).await.unwrap();
-        assert_eq!(d.unauthorized, [EntityKind::Task, EntityKind::Contact]);
-        assert_eq!(d.collections.len(), 1, "calendars stay complete");
-        e.g.fail(Endpoint::TasksList, tasks_fault, 1);
-        let err = e.first_error(&tasks(&list), None).await;
-        assert!(
-            matches!(
-                err,
-                SyncError::MissingScope {
-                    kind: EntityKind::Task
-                }
-            ),
-            "{err:?}"
-        );
-    }
+    // The shapes T10 recorded: Tasks adds `accessNotConfigured`.
+    let e = env().await;
+    let list = e.g.put_task_list("Inbox");
+    e.g.fail(Endpoint::TaskLists, Fault::tasks_api_disabled(), 1);
+    e.g.fail(Endpoint::PeopleConnections, Fault::api_disabled(), 1);
+    let d = e.p.discover(&e.cx).await.unwrap();
+    assert_eq!(d.unauthorized, [EntityKind::Task, EntityKind::Contact]);
+    assert_eq!(d.collections.len(), 1, "calendars stay complete");
+    e.g.fail(Endpoint::TasksList, Fault::tasks_api_disabled(), 1);
+    let err = e.first_error(&tasks(&list), None).await;
+    assert!(
+        matches!(
+            err,
+            SyncError::MissingScope {
+                kind: EntityKind::Task
+            }
+        ),
+        "{err:?}"
+    );
 }
 
 /// A throttled, failing or refused probe makes its kind incomplete for the
@@ -234,6 +215,7 @@ async fn throttled_failing_or_refused_probe_skips_its_kind() {
         message: "Invalid Credentials",
         retry_after: None,
         rpc_status: None,
+        legacy: None,
     };
     for (endpoint, skipped) in [
         (Endpoint::TaskLists, EntityKind::Task),
@@ -375,6 +357,7 @@ async fn tasks_full_read_then_overlapping_delta_without_duplicates() {
         for p in [
             "showCompleted=true",
             "showHidden=true",
+            "showAssigned=true",
             "showDeleted=false",
             "maxResults=2",
         ] {
@@ -438,6 +421,26 @@ async fn tasks_full_read_then_overlapping_delta_without_duplicates() {
     let later = pass(&e.read_ok(&col, cursor(&moved), hint(100)).await);
     assert!(later.removals.is_empty(), "{:?}", later.removals);
     assert_eq!(later.upserts.keys().collect::<Vec<_>>(), [&d]);
+}
+
+/// Tasks assigned from Docs or Chat are left out of `tasks.list` unless
+/// `showAssigned=true`; they sync like any other task, `assignmentInfo` stays
+/// in the raw body only.
+#[tokio::test]
+async fn assigned_tasks_sync_like_any_other() {
+    let e = env().await;
+    let list = e.g.put_task_list("Inbox");
+    let info =
+        json!({ "surfaceType": "DOCUMENT", "linkToTask": "https://docs.google.com/document/d/x" });
+    let assigned =
+        e.g.put_task(&list, json!({ "title": "review", "assignmentInfo": info }));
+    let pages = e.read_ok(&tasks(&list), None, hint(100)).await;
+    assert_eq!(pass(&pages).upserts[&assigned].1["assignmentInfo"], info);
+    let Decoded::Canonical(task) = <TasksCodec as Codec<Task>>::decode(&pages[0].upserts[0].raw)
+    else {
+        panic!("assigned task does not decode");
+    };
+    assert_eq!(task.title, "review");
 }
 
 #[tokio::test]
@@ -569,7 +572,7 @@ async fn people_expired_sync_token_is_cursor_expired() {
     let col = contacts();
     e.g.seed_contacts(1);
     let token = cursor(&e.read_ok(&col, None, hint(100)).await);
-    // The server's own answer, and both statuses the plan allows (T10).
+    // The server's own answer, and both statuses the plan allows (K10).
     e.g.expire_people_sync_tokens();
     assert!(matches!(
         e.first_error(&col, token.clone()).await,
@@ -596,9 +599,31 @@ async fn people_expired_sync_token_is_cursor_expired() {
     );
 }
 
-/// Plan 6.3: Google's exact error for a stale token is unverified (T10), so
-/// any 400 on a request with a sync token restarts the pass; without one it
-/// is a real error.
+/// An unreadable token gets live Google's `400 INVALID_ARGUMENT` without
+/// ErrorInfo (T10, mirrored by the fake): the pass restarts as a full read.
+#[tokio::test]
+async fn people_invalid_sync_token_is_cursor_expired() {
+    let e = env().await;
+    let col = contacts();
+    e.g.seed_contacts(1);
+    let token = cursor(&e.read_ok(&col, None, hint(100)).await).unwrap();
+    let mut c: serde_json::Value = serde_json::from_slice(&token.0).unwrap();
+    c["sync"]["token"] = json!("not-a-token");
+    let err = e
+        .first_error(&col, Some(Cursor(serde_json::to_vec(&c).unwrap())))
+        .await;
+    assert!(matches!(err, SyncError::CursorExpired), "{err:?}");
+    assert!(
+        e.g.requests()
+            .pop()
+            .unwrap()
+            .contains("syncToken=not-a-token")
+    );
+}
+
+/// Plan 6.3: Google's exact error for an expired token is unverified (K10),
+/// so any 400 on a request with a sync token restarts the pass; without one
+/// it is a real error.
 #[tokio::test]
 async fn any_400_with_a_sync_token_is_cursor_expired() {
     let e = env().await;
@@ -612,6 +637,7 @@ async fn any_400_with_a_sync_token_is_cursor_expired() {
         message: "Bad Request",
         retry_after: None,
         rpc_status: None,
+        legacy: None,
     };
     e.g.fail(Endpoint::PeopleConnections, bad.clone(), 1);
     let err = e.first_error(&col, token).await;
