@@ -424,7 +424,7 @@ async fn synced(dav: &FakeDav) -> (DavProvider, AccountCx, String, Cursor) {
 async fn invalid_sync_token_is_cursor_expired() {
     let dav = fake().await;
     let (p, cx, c, cursor) = synced(&dav).await;
-    for status in [403, 409] {
+    for status in [403, 409, 412] {
         dav.fail(
             Req::Report("sync-collection"),
             Fault::InvalidSyncToken { status },

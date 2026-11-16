@@ -1,0 +1,7 @@
+{
+  "status": 207,
+  "headers": {
+    "Content-Type": "application/xml; charset=UTF-8"
+  },
+  "xml": "<d:multistatus xmlns:d=\"DAV:\">\n\n    \n    <d:response>\n        <d:href>/</d:href><d:propstat>\n                <d:prop>\n                    \n                        \n                            <d:current-user-principal><d:href>/DSID/principal/</d:href></d:current-user-principal></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"
+}

@@ -1,0 +1,7 @@
+{
+  "status": 207,
+  "headers": {
+    "Content-Type": "application/xml; charset=UTF-8"
+  },
+  "xml": "<d:multistatus xmlns:d=\"DAV:\">\n\n\n\n\n<d:sync-token>REDACTED</d:sync-token></d:multistatus>"
+}

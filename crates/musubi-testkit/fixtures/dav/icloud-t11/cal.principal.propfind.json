@@ -1,0 +1,7 @@
+{
+  "status": 207,
+  "headers": {
+    "Content-Type": "application/xml; charset=UTF-8"
+  },
+  "xml": "<d:multistatus xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:d=\"DAV:\">\n\n<d:response>\n    <d:href>/DSID/principal/</d:href><d:propstat>\n    \t\t <d:prop>\n                \n                    \n                        <c:calendar-home-set><d:href>https://pNN-caldav.icloud.com:443/DSID/calendars/</d:href></c:calendar-home-set></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat>\n                <d:prop>\n                    \n                        \n                    \n                        \n                            <d:current-user-privilege-set /><d:resourcetype /></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response></d:multistatus>"
+}

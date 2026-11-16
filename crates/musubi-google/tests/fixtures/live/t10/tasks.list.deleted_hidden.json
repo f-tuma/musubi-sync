@@ -1,0 +1,60 @@
+{
+  "kind": "tasks#tasks",
+  "etag": "\"4aD8jTRKY3o\"",
+  "items": [
+    {
+      "kind": "tasks#task",
+      "id": "NURkVnJQZDhKUWlvWDFVNQ",
+      "etag": "\"kLwd8GdXag0\"",
+      "title": "t10-c",
+      "updated": "2026-11-16T10:43:27.326Z",
+      "selfLink": "https://www.googleapis.com/tasks/v1/lists/eXZmbWhROUJXNGlaT2ZScA/tasks/NURkVnJQZDhKUWlvWDFVNQ",
+      "position": "09999998205174192995",
+      "notes": "musubi t10",
+      "status": "completed",
+      "completed": "2026-11-16T10:43:27.004Z",
+      "hidden": true,
+      "links": [],
+      "webViewLink": "https://tasks.google.com/task/5DdVrPd8JQioX1U5?sa=6"
+    },
+    {
+      "kind": "tasks#task",
+      "id": "UDdEX0tBMkJUVUJQS212aA",
+      "etag": "\"mIIgFdxaMu0\"",
+      "title": "t10-a",
+      "updated": "2026-11-16T10:43:26.643Z",
+      "selfLink": "https://www.googleapis.com/tasks/v1/lists/eXZmbWhROUJXNGlaT2ZScA/tasks/UDdEX0tBMkJUVUJQS212aA",
+      "position": "00000000000000000000",
+      "status": "needsAction",
+      "deleted": true,
+      "links": [],
+      "webViewLink": "https://tasks.google.com/task/P7D_KA2BTUBPKmvh?sa=6"
+    },
+    {
+      "kind": "tasks#task",
+      "id": "Q19EWjN2NlUzY09vWkxlXw",
+      "etag": "\"33VnswTDiU0\"",
+      "title": "t10-b2",
+      "updated": "2026-11-16T10:43:23.137Z",
+      "selfLink": "https://www.googleapis.com/tasks/v1/lists/eXZmbWhROUJXNGlaT2ZScA/tasks/Q19EWjN2NlUzY09vWkxlXw",
+      "position": "00000000000000000001",
+      "notes": "musubi t10",
+      "status": "needsAction",
+      "links": [],
+      "webViewLink": "https://tasks.google.com/task/C_DZ3v6U3cOoZLe_?sa=6"
+    },
+    {
+      "kind": "tasks#task",
+      "id": "OTExSGpJWHRkVWt0MnNBQQ",
+      "etag": "\"qr-cFgG1skw\"",
+      "title": "t10-d",
+      "updated": "2026-11-16T10:43:19.549Z",
+      "selfLink": "https://www.googleapis.com/tasks/v1/lists/eXZmbWhROUJXNGlaT2ZScA/tasks/OTExSGpJWHRkVWt0MnNBQQ",
+      "position": "00000000000000000000",
+      "notes": "musubi t10",
+      "status": "needsAction",
+      "links": [],
+      "webViewLink": "https://tasks.google.com/task/911HjIXtdUkt2sAA?sa=6"
+    }
+  ]
+}

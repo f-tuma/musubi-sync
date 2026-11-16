@@ -1,0 +1,360 @@
+{
+  "when": "2026-11-16T10:45:27+00:00",
+  "cal_home_href_has_explicit_443": true,
+  "cal_home_host": "pNN-caldav.icloud.com:443",
+  "cal_home_cross_host": true,
+  "cal_collections": [
+    {
+      "href": "https://pNN-caldav.icloud.com:443/DSID/calendars/",
+      "types": [
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT",
+        "VFREEBUSY",
+        "VTODO"
+      ],
+      "address_data": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "https://pNN-caldav.icloud.com:443/DSID/calendars/id1/",
+      "types": [
+        "calendar",
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT"
+      ],
+      "address_data": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "https://pNN-caldav.icloud.com:443/DSID/calendars/id2/",
+      "types": [
+        "calendar",
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VTODO"
+      ],
+      "address_data": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "https://pNN-caldav.icloud.com:443/DSID/calendars/id3/",
+      "types": [
+        "calendar",
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT"
+      ],
+      "address_data": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "https://pNN-caldav.icloud.com:443/DSID/calendars/inbox/",
+      "types": [
+        "collection",
+        "schedule-inbox"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "schedule-deliver",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT"
+      ],
+      "address_data": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "https://pNN-caldav.icloud.com:443/DSID/calendars/notification/",
+      "types": [
+        "collection",
+        "notification"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "read",
+        "read-current-user-privilege-set",
+        "unbind"
+      ],
+      "comps": [],
+      "address_data": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "https://pNN-caldav.icloud.com:443/DSID/calendars/outbox/",
+      "types": [
+        "collection",
+        "schedule-outbox"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "schedule-send"
+      ],
+      "comps": [
+        "VEVENT",
+        "VTODO"
+      ],
+      "address_data": [],
+      "has_sync_token": false
+    }
+  ],
+  "cal_sync_initial": {
+    "status": 207,
+    "count": 1,
+    "member_statuses": [
+      "200 OK"
+    ],
+    "truncated_507": false,
+    "token_shape": "aaaaaaaaaaaaaa/9aaaaaaaaaaaaaaaaaa9aaaaa//9/aaaaaaaaa9aaaaaaaaa="
+  },
+  "cal_sync_delta_unchanged": {
+    "status": 207,
+    "count": 0,
+    "member_statuses": [],
+    "truncated_507": false,
+    "token_shape": "aaaaaaaaaaaaaa/9aaaaaaaaaaaaaaaaaa9aaaaa//9/aaaaaaaaa9aaaaaaaaa="
+  },
+  "cal_sync_mangled_token": {
+    "status": 403,
+    "error_elements": [
+      "error",
+      "valid-sync-token"
+    ]
+  },
+  "cal_sync_foreign_token": {
+    "status": 403,
+    "error_elements": [
+      "error",
+      "valid-sync-token"
+    ]
+  },
+  "cal_multiget": [
+    {
+      "n": 0,
+      "status": 207,
+      "responses": 0
+    }
+  ],
+  "cal_collection_sizes": [
+    {
+      "comps": [
+        "VTODO"
+      ],
+      "members": 0,
+      "truncated_507": false
+    },
+    {
+      "comps": [
+        "VEVENT"
+      ],
+      "members": 0,
+      "truncated_507": false
+    }
+  ],
+  "card_home_href_has_explicit_443": true,
+  "card_home_host": "pNN-contacts.icloud.com:443",
+  "card_home_cross_host": true,
+  "card_collections": [
+    {
+      "href": "https://pNN-contacts.icloud.com:443/DSID/carddavhome/",
+      "types": [
+        "collection"
+      ],
+      "reports": [
+        "addressbook-multiget",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-acl",
+        "read-current-user-privilege-set",
+        "write"
+      ],
+      "comps": [],
+      "address_data": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "https://pNN-contacts.icloud.com:443/DSID/carddavhome/card/",
+      "types": [
+        "addressbook",
+        "collection"
+      ],
+      "reports": [
+        "addressbook-multiget",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-acl",
+        "read-current-user-privilege-set",
+        "write"
+      ],
+      "comps": [],
+      "address_data": [],
+      "has_sync_token": true
+    }
+  ],
+  "card_sync_initial": {
+    "status": 207,
+    "count": 2,
+    "member_statuses": [
+      "200 OK"
+    ],
+    "truncated_507": false,
+    "token_shape": "aaaaaaaaaaaaaaaa9aaaaaaaaaaaaaaaaaaa9aaaaaa/aaaaaaaa+aa+aaaaaa=="
+  },
+  "card_sync_delta_unchanged": {
+    "status": 207,
+    "count": 0,
+    "member_statuses": [],
+    "truncated_507": false,
+    "token_shape": "aaaaaaaaaaaaaaaa9aaaaaaaaaaaaaaaaaaa9aaaaaa/aaaaaaaa+aa+aaaaaa=="
+  },
+  "card_sync_mangled_token": {
+    "status": 412,
+    "error_elements": [
+      "error",
+      "valid-sync-token"
+    ]
+  },
+  "card_sync_foreign_token": {
+    "status": 412,
+    "error_elements": [
+      "error",
+      "valid-sync-token"
+    ]
+  },
+  "card_multiget": [
+    {
+      "n": 2,
+      "status": 400,
+      "responses": null
+    }
+  ],
+  "card_failed": "ParseError: syntax error: line 1, column 0"
+}

@@ -1,0 +1,14 @@
+{
+  "kind": "tasks#task",
+  "id": "NURkVnJQZDhKUWlvWDFVNQ",
+  "etag": "\"dvU1CZkAHnc\"",
+  "title": "t10-c",
+  "updated": "2026-11-16T10:43:27.025Z",
+  "selfLink": "https://www.googleapis.com/tasks/v1/lists/eXZmbWhROUJXNGlaT2ZScA/tasks/NURkVnJQZDhKUWlvWDFVNQ",
+  "position": "00000000000000000001",
+  "notes": "musubi t10",
+  "status": "completed",
+  "completed": "2026-11-16T10:43:27.004Z",
+  "links": [],
+  "webViewLink": "https://tasks.google.com/task/5DdVrPd8JQioX1U5?sa=6"
+}

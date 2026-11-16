@@ -1,0 +1,13 @@
+{
+  "kind": "tasks#task",
+  "id": "OTExSGpJWHRkVWt0MnNBQQ",
+  "etag": "\"qr-cFgG1skw\"",
+  "title": "t10-d",
+  "updated": "2026-11-16T10:43:19.549Z",
+  "selfLink": "https://www.googleapis.com/tasks/v1/lists/eXZmbWhROUJXNGlaT2ZScA/tasks/OTExSGpJWHRkVWt0MnNBQQ",
+  "position": "00000000000000000000",
+  "notes": "musubi t10",
+  "status": "needsAction",
+  "links": [],
+  "webViewLink": "https://tasks.google.com/task/911HjIXtdUkt2sAA?sa=6"
+}

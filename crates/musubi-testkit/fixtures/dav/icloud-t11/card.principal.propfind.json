@@ -1,0 +1,7 @@
+{
+  "status": 207,
+  "headers": {
+    "Content-Type": "application/xml; charset=UTF-8"
+  },
+  "xml": "<d:multistatus xmlns:card=\"urn:ietf:params:xml:ns:carddav\" xmlns:d=\"DAV:\">\n\n\t<d:response>\n\t\t<d:href>/DSID/principal/</d:href><d:propstat>\n\t\t\t<d:prop>\n\t\t\t\n\t\t\t\n            \n\t\t\t\n\t\t\t\n\t\t\t\n\t\t\t\n            \n            \n            \n            \n            \n\n            \n            \n            \n            \n            \n\t\t\t\n\t\t\t\n            \n            \n            \n            \n            \n            \n            \n            \n            \n            \n            \n             \n             \n             \n             \n             \n             \n             \n                <card:addressbook-home-set>\n                    <d:href>https://pNN-contacts.icloud.com:443/DSID/carddavhome/</d:href></card:addressbook-home-set></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat>\n\t\t\t<d:prop>\n\t\t\t\t<d:resourcetype /><d:current-user-privilege-set /></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response></d:multistatus>"
+}

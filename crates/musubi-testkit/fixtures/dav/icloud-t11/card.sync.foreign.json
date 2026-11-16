@@ -1,0 +1,7 @@
+{
+  "status": 412,
+  "headers": {
+    "Content-Type": "application/xml; charset=UTF-8"
+  },
+  "xml": "<d:error xmlns:d=\"DAV:\">\n    \t<d:valid-sync-token /></d:error>"
+}
