@@ -120,7 +120,9 @@ fn mutated_fixture() -> impl Strategy<Value = Value> {
             ))
             .unwrap()
         })
-        .map(|e| serde_json::from_slice(&std::fs::read(e.unwrap().path()).unwrap()).unwrap())
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap())
         .collect();
     (
         prop::sample::select(fixtures),

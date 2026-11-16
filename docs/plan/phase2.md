@@ -405,28 +405,29 @@ Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-
 ### 6.1 Scope a zjišťování
 
 - `SCOPES` v `oauth.rs` dostane `https://www.googleapis.com/auth/tasks.readonly` a `https://www.googleapis.com/auth/contacts.readonly`, s `include_granted_scopes=true`.
-- Google dovoluje uživateli jednotlivé scope na obrazovce souhlasu odškrtnout. Udělené scope se nikam neukládají (`AccountTokens` ani `AccountCx` je nenesou) a ukládat je není potřeba: zjišťování zavolá `tasklists.list` a `people.connections.list` s `pageSize=1` a chybějící scope znamená druh v `Discovery.unauthorized`. Chybějící scope pozná adaptér podle obou tvarů: `403` s `errors[].reason = insufficientPermissions` (starší tvar, Tasks) i `403 PERMISSION_DENIED` s `ErrorInfo.reason = ACCESS_TOKEN_SCOPE_INSUFFICIENT` (tvar People a novějších API) **(neověřeno, který tvar které API vrací; T10)**. Jiné `403` je `Permanent`. Stejná chyba později v `changes()` nebo `fetch()` je `SyncError::MissingScope` (kapitola 3.5). Engine výsledek uloží do `accounts.missing`.
+- Google dovoluje uživateli jednotlivé scope na obrazovce souhlasu odškrtnout. Udělené scope se nikam neukládají (`AccountTokens` ani `AccountCx` je nenesou) a ukládat je není potřeba: zjišťování zavolá `tasklists.list` a `people.connections.list` s `pageSize=1` a chybějící scope znamená druh v `Discovery.unauthorized`. Chybějící scope pozná adaptér podle obou tvarů. T10 ukázala: Tasks vrací `403 PERMISSION_DENIED` s `errors[].reason = insufficientPermissions` **i** s `ErrorInfo.reason = ACCESS_TOKEN_SCOPE_INSUFFICIENT`, People jen s `ErrorInfo`. Vypnuté API v projektu je `ErrorInfo.reason = SERVICE_DISABLED` (Tasks navíc `errors[].reason = accessNotConfigured`) a není chybějící scope; scope se kontroluje dřív než zapnutí API. Jiné `403` je `Permanent`. Stejná chyba později v `changes()` nebo `fetch()` je `SyncError::MissingScope` (kapitola 3.5). Engine výsledek uloží do `accounts.missing`.
 - Kolekce neudělaného druhu se nemaže a nezakládá. Zkouška, která selže jinak než chybějícím scope, dá druh do `Discovery.incomplete` (kapitola 3.5). Pohled na účet hlásí `missing: ["task"]` a odkaz na opětovný souhlas (`POST /v1/accounts` s `account`). Odpovídá kapitole 3.3 návrhu: chybějící oprávnění je neúplné zjišťování, ne smazání.
 - Účty připojené ve fázi 1 mají jen `calendar.readonly`. Tasks a People u nich začnou až po opětovném souhlasu.
 - Zjišťování: `calendarList` (beze změny), `tasklists.list` (každý seznam je kolekce `Task`), pro People jedna pevná kolekce `people/me/connections` (`Contact`, jméno „Kontakty").
 
 ### 6.2 Tasks
 
-- Čtení: `tasks.list` s `showCompleted=true`, `showHidden=true`, `maxResults=100`, stránkování `pageToken`.
+- Čtení: `tasks.list` s `showCompleted=true`, `showHidden=true`, `showAssigned=true`, `maxResults=100`, stránkování `pageToken`. Bez `showAssigned` Google vynechá úkoly přiřazené z Dokumentů a prostorů Chatu; patří uživateli stejně. `assignmentInfo` zůstává v surové vrstvě, model ho nenese. Zápisy do přiřazených úkolů jsou omezené (nesmí být rodičem, úkol z Dokumentů nemá poznámky, smazání smaže i originál), což řeší až fáze 3.
 - `Full`: bez `updatedMin`, `showDeleted=false`. Nepřítomnost po úplném čtení znamená smazání.
 - Delta: `updatedMin = ts − 60 s`, `showDeleted=true`. `deleted: true` je odebrání. Nový `ts` je největší `updated` z odpovědí (hodiny serveru), bez výsledků se nemění. Překryv 60 s kryje shodné časy; znovu viděný úkol se stejným `etag` engine přeskočí podle validátoru.
 - Vypršení kurzoru Tasks nemají. Neplatný `pageToken` (`400`) je `CursorExpired` jako u kalendáře.
 - Push nemají. Kolekce patří adaptivnímu dotazování (kapitola 7).
-- Levná kontrola: `tasklists.list` vrací `updated` u seznamu. Mění se i při změně úkolu? **(neověřeno, T10)**. Pokud ano, jedno volání za účet rozhodne, které seznamy číst.
+- Levná kontrola není. `tasklists.updated` se podle T10 posune při vložení úkolu, ne při jeho úpravě, takže změny neodhalí. Adaptér čte `tasks.list` s `updatedMin` u každého seznamu.
+- Bez `showDeleted`/`showHidden` vynechá `tasks.list` smazané a skryté úkoly i s `updatedMin` (T10). Smazaný úkol má dál `status: needsAction`; odebrání pozná adaptér jen podle `deleted: true`. Klientské `id` u `tasks.insert` Google ignoruje.
 - Skryté úkoly (`hidden: true`, dokončené a vyčištěné v aplikaci Google) se synchronizují jako živé položky s příznakem `CalendarTask.hidden = true`; klient je může schovat sám. Výchozí volba; otevřená otázka 6.
 
 ### 6.3 People
 
 - Čtení: `people.connections.list` s pevným `personFields` (jména, e-maily, telefony, adresy, organizace, narozeniny, poznámky, URL, přezdívky, fotky, členství, metadata, `clientData`), `pageSize=1000`, `requestSyncToken=true`.
-- Pevné `personFields` jsou součást kurzoru: jejich změna (nová verze mapování) vynutí úplné čtení, protože Google token s jinými parametry odmítne (kapitola 2.7 návrhu).
+- Pevné `personFields` jsou součást kurzoru: jejich změna (nová verze mapování) vynutí úplné čtení, protože delta nevrátí nová pole u nezměněných kontaktů. Google token s jinými `personFields` podle T10 přijme a token jde použít opakovaně; kapitola 2.7 návrhu tvrdila opak.
 - Delta: `syncToken`. `metadata.deleted: true` je odebrání.
 - Token vyprší **7 dní po úplném čtení**, které ho vydalo (providers.md, O8, a dokumentace Googlu), ne 7 dní od posledního použití. Zda inkrementální čtení platnost prodlužuje, není ověřené **(neověřeno)**: T10 vydá úplným čtením **dva nezávislé tokeny** (dvě úplná čtení hned po sobě) a zaznamená čas vydání. Token A se pak nepoužije vůbec; token B se používá k deltám zhruba denně (každá delta vrací nový token, uloží se poslední). K10 nejdřív 8 dní po T10 zkusí deltu s oběma. Plán počítá s horší variantou:
-  - Odpověď s `ErrorInfo.reason = EXPIRED_SYNC_TOKEN` je `CursorExpired`, ať je stav `400` nebo `410` **(neověřeno, který)**.
+  - Odpověď `400` nebo `410` na čtení s tokenem je `CursorExpired`. Neplatný token je podle T10 `400 INVALID_ARGUMENT` bez `ErrorInfo`; adaptér proto nehledá `EXPIRED_SYNC_TOKEN`. Tvar **vypršeného** tokenu ověří K10 **(neověřeno)**.
   - Úplné čtení kontaktů tak proběhne zhruba jednou týdně na účet. Cena: `ceil(počet kontaktů / 1000)` požadavků; první stránka má zvláštní kvótu a může vrátit `429` (níže).
   - Úplné čtení maže nepřítomností, takže ho hlídá existující ochrana proti hromadnému mazání (ověření přes `fetch`). Týdenní opakování ji nesmí spouštět falešně: test v K6 s 5 000 kontakty a vypršeným tokenem nesmí nic smazat.
 - Zvláštní kvóta na první stránku úplného čtení (`429`) je `RateLimited`; engine pozdrží celé úplné čtení, ne jen stránku.
@@ -435,7 +436,7 @@ Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-
 
 ### 6.4 Falešný server Google
 
-`musubi-testkit::google` dostane endpointy `tasklists`, `tasks` a `people.connections` se stejnými chybami jako kalendář (`Fault`): `429` s `Retry-After`, `5xx`, neplatný `pageToken`, `EXPIRED_SYNC_TOKEN`, `403` s `insufficientPermissions` i s `ACCESS_TOKEN_SCOPE_INSUFFICIENT`. Tvary odpovědí podle zaznamenaných odpovědí z T10.
+`musubi-testkit::google` dostane endpointy `tasklists`, `tasks` a `people.connections` se stejnými chybami jako kalendář (`Fault`): `429` s `Retry-After`, `5xx`, neplatný `pageToken`, `EXPIRED_SYNC_TOKEN` (tvar ověří K10), neplatný sync token jako `400 INVALID_ARGUMENT`, `403` chybějícího scope a vypnutého API v tvaru každého API (Tasks `insufficientPermissions` s `ErrorInfo`, People jen `ErrorInfo`). Tvary odpovědí odpovídají zaznamenaným odpovědím z T10 v `crates/musubi-google/tests/fixtures/live/t10/`; testy falešného serveru je porovnávají.
 
 ## 7. Adaptivní dotazování
 
@@ -720,7 +721,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 ### K10. Živá kontrola fáze 2 (spouští koordinátor)
 
 - **Cíl:** celý `musubi-syncd` proti testovacímu účtu Google (Tasks a People) a iCloudu: první data, změna u poskytovatele v proudu změn, skutečná doba při aktivní a běžné úrovni.
-- **Očekávání:** změna úkolu a události DAV do intervalu úrovně plus jedné delty; změna kontaktu People navíc se zpožděním propsání z T10 (několik minut), což se nepočítá jako chyba.
+- **Očekávání:** změna úkolu a události DAV do intervalu úrovně plus jedné delty; změna kontaktu People navíc se zpožděním propsání: T10 naměřila 0,1–0,2 s (čtyři vzorky z jednoho dne, účet s jedním kontaktem, tedy ne rozdělení), K10 ho změří znovu přes `musubi-syncd`. Delší zpoždění se nepočítá jako chyba.
 - **Sync token People:** nejdřív 8 dní po T10 zkusí deltu s tokenem A (bez mezitímních delt) a s posledním tokenem řetězu B (s průběžnými deltami). Výsledek rozhodne, zda týdenní úplné čtení z kapitoly 6.3 nastává, a zapíše se k `(neověřeno)` v 6.3.
 - **Výstup:** doplnění `docs/research/phase2/` o čísla a odchylky; opravy jako nové úkoly. Odchylka, která mění kontrakt, se opraví před K11.
 - **Zápisy:** jen v testovacích účtech, stejně jako T10 a T11.
@@ -760,7 +761,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 | D1 | první data po připojení DAV účtu (falešný DAV s odezvou 50 ms na požadavek, 2 000 událostí) | okno kolem dneška do 2 s; měří se, nehlídá **(neověřeno, kolik dá iCloud)** |
 | D2 | cena nečinnosti: požadavky za hodinu na kolekci beze změn při každé úrovni zájmu | aktivní ≤ 240, běžná ≤ 30, spící ≤ 6; levná kontrola = 1 požadavek |
 | D3 | propustnost dekódování `musubi-ical` (MB/s, VEVENT, VTODO, vCard) | měří se; fáze 0 změřila parse calcard 110–210 MB/s |
-| D4 | latence změny u DAV do SSE | nejvýš interval úrovně + jedna delta; zveřejní se rozdělení, ne slib. People navíc nese zpoždění propsání u Googlu (několik minut, T10), které falešný server nemodeluje; D4 ho uvede z T10 a K10 |
+| D4 | latence změny u DAV do SSE | nejvýš interval úrovně + jedna delta; zveřejní se rozdělení, ne slib. People navíc nese zpoždění propsání u Googlu (T10: 0,1–0,2 s, čtyři vzorky z jednoho dne na účtu s jedním kontaktem), které falešný server nemodeluje; D4 ho uvede z T10 a K10 |
 
 Latence u DAV, Tasks a People je omezená dotazováním. Cíl „do 500 ms od oznámení" pro ně neplatí, protože oznámení neexistuje. D4 to ukáže čísly (riziko 11 v kapitole 11.3 návrhu).
 
@@ -784,7 +785,7 @@ Uživatel zatím nerozhodl. U otázek 2, 5 a 6 plán počítá s doporučenou v�
 
 1. **Testovací účet iCloud pro T11 a K10.** Dodá uživatel: Apple ID s 2FA a heslem pro aplikace, s kalendářem, adresářem a pár kontakty a skupinou. Bez něj K7 stojí jen na sekundárních zdrojích a K11 zmrazí v0 s výhradou, že profil `icloud` je ověřený jen proti falešnému DAV (kapitola 3.8). Zmrazení se kvůli účtu nezastaví, protože profil je data v `musubi-dav` a jeho oprava kontrakt nemění.
 2. **Scope pro zápis už teď?** Fáze 3 bude potřebovat `tasks` a `contacts` (bez `.readonly`) a `calendar.events`. Žádat je teď ušetří druhý souhlas, ale fáze 2 by držela víc oprávnění, než potřebuje (kapitola 7 návrhu: minimální scope). **Doporučená výchozí volba:** teď jen `.readonly`, druhý souhlas až ve fázi 3 (kapitola 6.1).
-3. **Stav a tvar chyby `EXPIRED_SYNC_TOKEN`** u People (`400` nebo `410`) **(neověřeno, T10)**.
+3. **Stav a tvar chyby vypršeného sync tokenu** u People. Neplatný token je podle T10 `400 INVALID_ARGUMENT` bez `ErrorInfo` a adaptér ho bere jako `CursorExpired`. Tvar vypršeného (`400` nebo `410`, s `EXPIRED_SYNC_TOKEN` nebo bez) ověří K10 **(neověřeno)**.
 4. **iCloud: zkracování `507`, velikost dávky `multiget`, `PUT` s `If-Match`, delta po změně** **(neověřeno; T11 bez dat)**. `sync-collection` u CardDAV a `:443` potvrdila T11.
 5. **Rozsah úkolů podle termínu.** Má `/v1/entities?kind=task` umět okno podle `due`? Bez indexu výskytů jde jen o filtr nad `list_entities`; opakované úkoly by potřebovaly rozbalení. **Doporučená výchozí volba:** žádné okno, úkoly se stránkují po `id` (kapitola 4.2).
 6. **Skryté úkoly Googlu** (`hidden: true`, vyčištěné dokončené). **Doporučená výchozí volba:** synchronizovat je jako živé položky s příznakem `CalendarTask.hidden` a nechat skrývání na klientovi (kapitoly 3.1 a 6.2). Pokud T10 ukáže, že je Google po čase maže, příznak to nemění.

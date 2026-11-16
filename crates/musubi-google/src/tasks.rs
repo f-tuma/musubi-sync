@@ -290,6 +290,9 @@ impl GoogleProvider {
             p.append_pair("maxResults", &q.size.to_string());
             p.append_pair("showCompleted", "true");
             p.append_pair("showHidden", "true");
+            // Tasks assigned from Docs or Chat are left out by default; they
+            // are the user's tasks too. Their writes are restricted (plan 6.2).
+            p.append_pair("showAssigned", "true");
             let delta = q.pass == Pass::Delta;
             p.append_pair("showDeleted", if delta { "true" } else { "false" });
             if let Some(ts) = q.ts.filter(|_| delta) {
@@ -301,8 +304,9 @@ impl GoogleProvider {
         }
         let resp = self.send(cx, self.http.get(url)).await?;
         let status = resp.status();
-        // Assumed shape (T10): a rejected page token is a 400. The pass starts
-        // over as a full read; a 400 without a page token is a real error.
+        // A rejected page token is a 400 (K8 recorded it for Calendar; T10 did
+        // not exercise Tasks). The pass starts over as a full read; a 400
+        // without a page token is a real error.
         if status == StatusCode::BAD_REQUEST && q.page.is_some() {
             let body = resp.bytes().await.unwrap_or_default();
             tracing::warn!(body = %excerpt(&body), pass = ?q.pass, "tasks.list: page token rejected; full read");
@@ -467,6 +471,28 @@ mod tests {
         assert_eq!(page.removals, [RemoteKey("gone".into())]);
         let (page, _) = build_page(&query(Pass::Full, None), body).unwrap();
         assert!(page.removals.is_empty());
+    }
+
+    /// T10's recorded `showDeleted=true&showHidden=true` list: the deleted
+    /// task keeps `status: needsAction` and is still a removal; the hidden
+    /// (cleared) one syncs as a live task.
+    #[test]
+    fn recorded_deleted_task_is_a_removal_and_hidden_one_an_upsert() {
+        let body = include_bytes!("../tests/fixtures/live/t10/tasks.list.deleted_hidden.json");
+        let delta = query(Pass::Delta, Some("2026-11-16T10:00:00Z"));
+        let (page, _) = build_page(&delta, body).unwrap();
+        assert_eq!(page.removals, [RemoteKey("UDdEX0tBMkJUVUJQS212aA".into())]);
+        let live = [
+            "NURkVnJQZDhKUWlvWDFVNQ",
+            "Q19EWjN2NlUzY09vWkxlXw",
+            "OTExSGpJWHRkVWt0MnNBQQ",
+        ];
+        let keys: Vec<&str> = page.upserts.iter().map(|o| o.key.0.as_str()).collect();
+        assert_eq!(keys, live);
+        let (page, _) = build_page(&query(Pass::Full, None), body).unwrap();
+        assert!(page.removals.is_empty());
+        let keys: Vec<&str> = page.upserts.iter().map(|o| o.key.0.as_str()).collect();
+        assert_eq!(keys, live);
     }
 
     #[test]

@@ -315,6 +315,7 @@ async fn other_bad_request_on_a_page_is_an_error() {
         message: "Bad Request",
         retry_after: None,
         rpc_status: None,
+        legacy: None,
     };
     e.g.fail(Endpoint::EventsList, bad, 1);
     let stale = Cursor(br#"{"full":{"page":"p"}}"#.to_vec());

@@ -1255,25 +1255,235 @@ async fn people_connections_sync_token_reports_deletions_and_expires() {
     );
 }
 
+/// A body T10 recorded from live Google; wrapped `{status, body}` files
+/// yield their body.
+fn recorded(name: &str) -> Value {
+    let path = format!(
+        "{}/../musubi-google/tests/fixtures/live/t10/{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let v: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect(&path)).expect(&path);
+    match v.get("body") {
+        Some(body) if v.get("status").is_some() => body.clone(),
+        _ => v,
+    }
+}
+
+/// The structure of a JSON value: object keys, array element shape and
+/// leaf types, without the values.
+fn shape(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => Value::Object(m.iter().map(|(k, x)| (k.clone(), shape(x))).collect()),
+        Value::Array(a) => Value::Array(a.first().map(shape).into_iter().collect()),
+        Value::String(_) => json!("string"),
+        Value::Number(_) => json!("number"),
+        Value::Bool(_) => json!("bool"),
+        Value::Null => Value::Null,
+    }
+}
+
+/// The parts of an error body a client classifies by.
+fn error_skeleton(v: &Value) -> Value {
+    let e = &v["error"];
+    let reasons = |a: &Value, only_info: bool| -> Vec<Value> {
+        a.as_array()
+            .into_iter()
+            .flatten()
+            .filter(|d| !only_info || d["@type"] == "type.googleapis.com/google.rpc.ErrorInfo")
+            .map(|d| d["reason"].clone())
+            .collect()
+    };
+    json!({
+        "code": e["code"],
+        "status": e["status"],
+        "errors": reasons(&e["errors"], false),
+        "errorInfo": reasons(&e["details"], true),
+    })
+}
+
 #[tokio::test]
-async fn scope_faults_have_both_documented_shapes() {
+async fn tasks_match_recorded_t10_shapes() {
+    let g = start(Seed::default()).await;
+    let token = g.access_token();
+    let t = token.as_str();
+    let list = g.put_task_list("t10");
+    let lists_url = format!("{}/users/@me/lists", g.tasks_api());
+    let list_entry = || async { get(&lists_url, t).await.json["items"][0].clone() };
+    let created = list_entry().await;
+    assert_eq!(shape(&created), shape(&recorded("tasklists.get")));
+
+    // A client `id` on insert is ignored.
+    let open = g.put_task(
+        &list,
+        json!({ "id": "client-id", "title": "t10-d", "notes": "musubi t10" }),
+    );
+    assert_ne!(open, "client-id");
+    let after_insert = list_entry().await;
+    assert_ne!(
+        after_insert["updated"], created["updated"],
+        "an insert moves the list"
+    );
+    let done = g.put_task(
+        &list,
+        json!({ "title": "t10-c", "notes": "musubi t10", "status": "completed" }),
+    );
+    let gone = g.put_task(&list, json!({ "title": "t10-a" }));
+    let after_inserts = list_entry().await;
+    // A rename does not move tasklists.updated (T10).
+    g.put_task(
+        &list,
+        json!({ "id": open, "title": "t10-d2", "notes": "musubi t10" }),
+    );
+    assert_eq!(list_entry().await["updated"], after_inserts["updated"]);
+
+    let url = |q: &str| format!("{}/lists/{list}/tasks?{q}", g.tasks_api());
+    let task = |id: &str| {
+        let url = format!("{}/lists/{list}/tasks/{id}", g.tasks_api());
+        async move { get(&url, t).await.json }
+    };
+    assert_eq!(shape(&task(&open).await), shape(&recorded("tasks.insert")));
+    assert_eq!(
+        shape(&task(&done).await),
+        shape(&recorded("tasks.patch.completed"))
+    );
+
+    // Clear hides the completed task; then delete one.
+    g.put_task(&list, json!({ "id": done, "title": "t10-c", "notes": "musubi t10", "status": "completed", "hidden": true }));
+    g.delete_task(&list, &gone);
+    let all = get(&url("showDeleted=true&showHidden=true"), t).await.json;
+    let rec = recorded("tasks.list.deleted_hidden");
+    assert_eq!(shape(&all)["kind"], shape(&rec)["kind"]);
+    let shapes = |l: &Value| -> BTreeSet<String> {
+        l["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| shape(i).to_string())
+            .collect()
+    };
+    assert_eq!(shapes(&all), shapes(&rec), "open, hidden and deleted tasks");
+    let deleted = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == json!(gone))
+        .unwrap();
+    assert_eq!(
+        deleted["status"], "needsAction",
+        "a deleted task keeps its status"
+    );
+
+    // Without the flags, deleted and hidden tasks are left out, even with
+    // updatedMin.
+    for q in ["", "updatedMin=1970-01-01T00:00:00Z"] {
+        let r = get(&url(q), t).await.json;
+        assert_eq!(shapes(&r), shapes(&recorded("tasks.list.default")), "{q}");
+        assert_eq!(r["items"].as_array().unwrap().len(), 1, "{q}");
+    }
+    let future = get(&url("updatedMin=2999-01-01T00:00:00Z"), t).await.json;
+    assert_eq!(
+        shape(&future),
+        shape(&recorded("tasks.list.updatedMin_future"))
+    );
+}
+
+#[tokio::test]
+async fn assigned_tasks_need_show_assigned() {
+    let g = start(Seed::default()).await;
+    let t = g.access_token();
+    let list = g.put_task_list("t10");
+    let assigned = g.put_task(
+        &list,
+        json!({ "title": "from Docs", "assignmentInfo": { "surfaceType": "DOCUMENT", "linkToTask": "https://docs.google.com/" } }),
+    );
+    let url = |q: &str| format!("{}/lists/{list}/tasks?{q}", g.tasks_api());
+    let by_default = get(&url(""), &t).await;
+    assert_eq!(by_default.json["items"], json!([]));
+    let shown = get(&url("showAssigned=true"), &t).await;
+    assert_eq!(shown.json["items"][0]["id"], json!(assigned));
+    assert_eq!(
+        shown.json["items"][0]["assignmentInfo"]["surfaceType"],
+        "DOCUMENT"
+    );
+}
+
+#[tokio::test]
+async fn people_match_recorded_t10_shapes() {
+    let g = start(Seed::default()).await;
+    let token = g.access_token();
+    let t = token.as_str();
+    let base = format!("{}/people/me/connections", g.people_api());
+    let fields = "personFields=names,emailAddresses,metadata";
+    let rec = recorded("people.createContact");
+    let person = |family: &str| {
+        let mut names = rec["names"].clone();
+        names[0]["familyName"] = json!(family);
+        json!({ "names": names, "emailAddresses": rec["emailAddresses"] })
+    };
+    let full = get(&format!("{base}?{fields}&requestSyncToken=true"), t)
+        .await
+        .json;
+    let first = full["nextSyncToken"].as_str().unwrap().to_owned();
+    let delta = |token: String, fields: &'static str| {
+        let url = format!("{base}?{fields}&requestSyncToken=true&syncToken={token}");
+        async move { get(&url, t).await.json }
+    };
+
+    let name = g.put_contact(person("T10"));
+    let created = delta(first, fields).await;
+    assert_eq!(shape(&created), shape(&recorded("people.delta.created")));
+    let after_create = created["nextSyncToken"].as_str().unwrap().to_owned();
+
+    let mut renamed = person("T10 v1");
+    renamed["resourceName"] = json!(name);
+    g.put_contact(renamed);
+    let updated = delta(after_create.clone(), fields).await;
+    assert_eq!(shape(&updated), shape(&recorded("people.delta.updated")));
+    let after_update = updated["nextSyncToken"].as_str().unwrap().to_owned();
+
+    g.delete_contact(&name);
+    let deleted = delta(after_update.clone(), fields).await;
+    assert_eq!(shape(&deleted), shape(&recorded("people.delta.deleted")));
+    let after_delete = deleted["nextSyncToken"].as_str().unwrap().to_owned();
+
+    // A token is reusable and accepts other personFields; nothing changed
+    // means only a new token.
+    let other = delta(after_delete.clone(), "personFields=names").await;
+    assert_eq!(shape(&other), shape(&recorded("people.delta.other_fields")));
+    assert_eq!(shape(&delta(after_delete, fields).await), shape(&other));
+    assert_eq!(
+        delta(after_create, fields).await["connections"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "an older token lists the later changes again"
+    );
+
+    let invalid = get(&format!("{base}?{fields}&syncToken=not-a-token"), t).await;
+    assert_eq!(invalid.status, 400);
+    assert_eq!(invalid.json, recorded("people.delta.invalid_token"));
+}
+
+#[tokio::test]
+async fn scope_and_api_faults_match_recorded_t10_shapes() {
     let g = start(Seed::default()).await;
     let t = g.access_token();
     let url = format!("{}/users/@me/lists", g.tasks_api());
-    g.fail(Endpoint::TaskLists, Fault::insufficient_permissions(), 1);
-    let r = get(&url, &t).await;
-    assert_eq!(r.status, 403);
-    assert_eq!(
-        r.json["error"]["errors"][0]["reason"],
-        "insufficientPermissions"
-    );
-    g.fail(Endpoint::TaskLists, Fault::scope_insufficient(), 1);
-    let r = get(&url, &t).await;
-    assert_eq!(r.status, 403);
-    assert_eq!(r.json["error"]["status"], "PERMISSION_DENIED");
-    assert_eq!(
-        r.json["error"]["details"][0]["reason"],
-        "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
-    );
+    for (fault, fixture) in [
+        (Fault::insufficient_permissions(), "tasks.403.missing_scope"),
+        (Fault::tasks_api_disabled(), "tasks.403.api_disabled"),
+        (Fault::scope_insufficient(), "people.403.missing_scope"),
+        (Fault::api_disabled(), "people.403.api_disabled"),
+    ] {
+        g.fail(Endpoint::TaskLists, fault, 1);
+        let r = get(&url, &t).await;
+        assert_eq!(r.status, 403, "{fixture}");
+        assert_eq!(
+            error_skeleton(&r.json),
+            error_skeleton(&recorded(fixture)),
+            "{fixture}"
+        );
+    }
     assert_eq!(get(&url, &t).await.status, 200, "faults are counted");
 }

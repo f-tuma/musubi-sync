@@ -1,18 +1,19 @@
 //! Google People API v1: `people.connections.list` and `people.get`
-//! (plan 6.3, 6.4). Shapes follow Google's documentation; T10 has not
-//! recorded live responses yet (FIDELITY.md).
+//! (plan 6.3, 6.4). Shapes follow the live responses T10 recorded
+//! (`musubi-google/tests/fixtures/live/t10/`); the expired-token answer
+//! is still documented-only (K10, FIDELITY.md).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::{HeaderMap, StatusCode, Uri};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    Endpoint, FakeGoogle, Inner, Params, St, b64, bad_request, decode, encode, invalid_page_token,
-    logical, not_found, ok, params, req_line, rpc_error,
+    Endpoint, FakeGoogle, Fault, Inner, Params, St, b64, bad_request, decode, encode,
+    invalid_page_token, logical, not_found, ok, params, req_line, rpc_error,
 };
 
 /// Google's cap on `pageSize` for `people.connections.list`.
@@ -32,10 +33,11 @@ struct Contact {
     deleted: bool,
 }
 
+/// Not bound to `personFields`: live Google accepts a token with other
+/// fields (T10).
 #[derive(Serialize, Deserialize, PartialEq)]
 struct SyncToken {
     v: u64,
-    fields: String,
 }
 
 /// Where a `connections.list` pass continues: after the last resource name
@@ -111,7 +113,9 @@ impl FakeGoogle {
             .collect()
     }
 
-    /// Deletes a contact: deltas list it with `metadata.deleted: true`.
+    /// Deletes a contact: deltas list it as T10 recorded, with only
+    /// `resourceName`, `etag` and `metadata` (a source with the epoch as
+    /// `updateTime`, `deleted: true`).
     ///
     /// # Panics
     /// If the contact does not exist.
@@ -127,7 +131,16 @@ impl FakeGoogle {
         c.body = json!({
             "resourceName": resource_name,
             "etag": person_etag(v),
-            "metadata": { "deleted": true, "objectType": "PERSON" },
+            "metadata": {
+                "sources": [{
+                    "type": "CONTACT",
+                    "id": format!("{:x}", v),
+                    "etag": format!("#{}", b64(&v.to_le_bytes())),
+                    "updateTime": "1970-01-01T00:00:00Z",
+                }],
+                "deleted": true,
+                "objectType": "PERSON",
+            },
         });
         c.version = v;
         c.deleted = true;
@@ -143,17 +156,22 @@ impl FakeGoogle {
     }
 }
 
-/// Live Google's answer to an expired sync token, as documented: `400
+/// Google's answer to an expired sync token, as documented: `400
 /// FAILED_PRECONDITION` with `ErrorInfo.reason = EXPIRED_SYNC_TOKEN` (the
-/// status, 400 or 410, is unverified; T10).
+/// live shape is unverified until K10).
 fn expired_sync_token() -> Response {
-    rpc_error(
-        StatusCode::BAD_REQUEST,
-        "FAILED_PRECONDITION",
-        "people.googleapis.com",
-        "EXPIRED_SYNC_TOKEN",
-        "Sync token is expired. Clear local cache and retry call without the sync token.",
-    )
+    rpc_error(&Fault::expired_sync_token())
+}
+
+/// Live Google's answer to a sync token it cannot parse (T10): `400
+/// INVALID_ARGUMENT` without `details`.
+fn invalid_sync_token() -> Response {
+    let body = json!({ "error": {
+        "code": 400,
+        "message": "Request contains an invalid argument.",
+        "status": "INVALID_ARGUMENT",
+    }});
+    (StatusCode::BAD_REQUEST, axum::Json(body)).into_response()
 }
 
 /// The person with only the requested fields (Google's `personFields` mask).
@@ -229,8 +247,8 @@ fn connections_inner(g: &Inner, q: Vec<(String, String)>) -> Result<Response, Re
         None => None,
         Some(t) => match decode::<SyncToken>(t) {
             Some(t) if t.v < s.people.min_sync => return Err(expired_sync_token()),
-            Some(t) if t.fields == p["personFields"] => Some(t.v),
-            _ => return Err(bad_request("Invalid sync token")),
+            Some(t) => Some(t.v),
+            None => return Err(invalid_sync_token()),
         },
     };
     let (after, snapshot) = match p.get("pageToken") {
@@ -240,24 +258,30 @@ fn connections_inner(g: &Inner, q: Vec<(String, String)>) -> Result<Response, Re
             _ => return Err(invalid_page_token()),
         },
     };
+    let listed = |c: &Contact| match since {
+        // A delta lists every change since the token, deletions included.
+        Some(v) => c.version > v,
+        None => !c.deleted,
+    };
     let mut matching = s
         .people
         .contacts
         .iter()
         .filter(|(name, _)| after.as_ref().is_none_or(|a| *name > a))
-        .filter(|(_, c)| match since {
-            // A delta lists every change since the token, deletions included.
-            Some(v) => c.version > v,
-            None => !c.deleted,
-        });
+        .filter(|(_, c)| listed(c));
     let page: Vec<(&String, &Contact)> = matching.by_ref().take(size).collect();
     let more = matching.next().is_some();
-    let total = s.people.contacts.values().filter(|c| !c.deleted).count();
-    let mut body = json!({
-        "connections": page.iter().map(|(_, c)| masked(&c.body, &fields)).collect::<Vec<_>>(),
-        "totalPeople": total,
-        "totalItems": total,
-    });
+    // T10: the totals count what the pass lists (a delta: its changes) and,
+    // like an empty `connections`, are left out when zero.
+    let total = s.people.contacts.values().filter(|c| listed(c)).count();
+    let mut body = json!({});
+    if !page.is_empty() {
+        body["connections"] = page.iter().map(|(_, c)| masked(&c.body, &fields)).collect();
+    }
+    if total > 0 {
+        body["totalPeople"] = json!(total);
+        body["totalItems"] = json!(total);
+    }
     match (more, page.last()) {
         (true, Some((last, _))) => {
             body["nextPageToken"] = json!(encode(&PageToken {
@@ -267,10 +291,7 @@ fn connections_inner(g: &Inner, q: Vec<(String, String)>) -> Result<Response, Re
             }));
         }
         _ if request_token => {
-            body["nextSyncToken"] = json!(encode(&SyncToken {
-                v: snapshot,
-                fields: p["personFields"].clone(),
-            }));
+            body["nextSyncToken"] = json!(encode(&SyncToken { v: snapshot }));
         }
         _ => {}
     }
