@@ -24,7 +24,7 @@ pub const MAX_TASK_LISTS_PAGE: u32 = 1000;
 pub(super) struct TaskList {
     title: String,
     /// Version of the list's `updated`: its creation and every task
-    /// insert, not a task edit (T10).
+    /// insert. T10 shows a rename does not move it; other edits are unknown.
     changed: u64,
     tasks: BTreeMap<String, TaskEntry>,
 }
@@ -83,7 +83,7 @@ impl FakeGoogle {
         let v = s.version;
         let l = s.task_lists.get_mut(list).expect("unknown task list");
         let old = task["id"].as_str().and_then(|id| l.tasks.get(id));
-        // A task edit keeps its place and does not move the list's `updated`.
+        // A task edit keeps its place; like a rename (T10), it does not move the list's `updated`.
         let (id, position) = match old {
             Some(t) => (
                 t.body["id"].as_str().unwrap_or_default().to_owned(),

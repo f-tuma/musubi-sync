@@ -271,8 +271,9 @@ People "sync" guide and is marked below.
   `advance`, which moves the logical clock so that `updatedMin` filters.
 - `tasklists.list`: `maxResults` defaults to 1000, which is also the cap. The
   page token is an index into the lists. A list's `updated` moves when a task
-  is inserted, not when one is edited or renamed (T10), so it is no cheap
-  change check.
+  is inserted, not when one is renamed (T10), so it is no cheap change check.
+  It also changed over the delete, complete and clear steps, but T10 cannot
+  say which one moved it; the fake moves it only on insert.
 - `tasks.list`:
   - Defaults: `showCompleted=true`, `showDeleted=false`, `showHidden=false`,
     `showAssigned=false`.
