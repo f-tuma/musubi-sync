@@ -36,7 +36,7 @@ Kalendáře účtu jsou prázdné a adresář má jednu vizitku. Velikost dávky
 - Úvodní čtení s prázdným tokenem: `207` s tokenem. **Kolekce sama je mezi členy** se stavem `200`: CalDAV ji vrací s lomítkem na konci, CardDAV **bez** (`…/card` místo `…/card/`). `sync.rs` ji přeskakuje přes `same_path`, takže to sedí.
 - Delta s vráceným tokenem bez změny: `207`, nula členů, token stejného tvaru.
 - **Neplatný token** (pozměněný i cizí): CalDAV **`403`**, CardDAV **`412`**, oba s `<D:error><D:valid-sync-token/></D:error>`.
-- `addressbook-multiget`, ve kterém je href kolekce, skončí **`400 Bad Request` pro celý požadavek**, ne `404` pro jeden href. Multiget proto nesmí dostat odkaz na kolekci; `sync.rs` ho do referencí nedává.
+- `addressbook-multiget` s hrefem kolekce skončil **`400 Bad Request` pro celý požadavek**; tentýž multiget jen s vizitkou vrátil `207`. Jde o jediný vzorek, závěr je odvozený. Multiget proto nesmí dostat odkaz na kolekci; `sync.rs` ho do referencí nedává.
 - `503` ani `507` se neobjevily.
 
 Token uložil koordinátor (soubor 0600, mimo repozitář). K10 s ním nejdřív 2026-12-16 zkusí deltu s 30 dní starým tokenem, pokud uživatel heslo pro aplikace do té doby nezruší.

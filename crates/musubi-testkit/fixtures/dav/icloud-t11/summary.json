@@ -226,15 +226,13 @@
     "member_statuses": [
       "200 OK"
     ],
-    "truncated_507": false,
-    "token_shape": "aaaaaaaaaaaaaa/9aaaaaaaaaaaaaaaaaa9aaaaa//9/aaaaaaaaa9aaaaaaaaa="
+    "truncated_507": false
   },
   "cal_sync_delta_unchanged": {
     "status": 207,
     "count": 0,
     "member_statuses": [],
-    "truncated_507": false,
-    "token_shape": "aaaaaaaaaaaaaa/9aaaaaaaaaaaaaaaaaa9aaaaa//9/aaaaaaaaa9aaaaaaaaa="
+    "truncated_507": false
   },
   "cal_sync_mangled_token": {
     "status": 403,
@@ -325,15 +323,13 @@
     "member_statuses": [
       "200 OK"
     ],
-    "truncated_507": false,
-    "token_shape": "aaaaaaaaaaaaaaaa9aaaaaaaaaaaaaaaaaaa9aaaaaa/aaaaaaaa+aa+aaaaaa=="
+    "truncated_507": false
   },
   "card_sync_delta_unchanged": {
     "status": 207,
     "count": 0,
     "member_statuses": [],
-    "truncated_507": false,
-    "token_shape": "aaaaaaaaaaaaaaaa9aaaaaaaaaaaaaaaaaaa9aaaaaa/aaaaaaaa+aa+aaaaaa=="
+    "truncated_507": false
   },
   "card_sync_mangled_token": {
     "status": 412,

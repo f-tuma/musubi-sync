@@ -18,19 +18,19 @@ Uložená těla jsou bez sync a page tokenů, adresa účtu je `owner@example.co
 
 | Krok | Výsledek |
 | --- | --- |
-| `tasks.insert` s `id` v těle | `200`, **server `id` tiše ignoruje** a přidělí vlastní |
+| `tasks.insert` s `id` v těle (`musubiT10clientId01`; fixture odeslané tělo nenese) | `200`, **server `id` tiše ignoruje** a přidělí vlastní |
 | `tasks.delete` | `204` |
 | dokončení (`patch status=completed`) | `200`, `completed` vyplněné |
 | `tasks/clear` | `204`; dokončený úkol dostane `hidden: true` |
 | `list` bez parametrů | jen otevřené úkoly (dokončený a skrytý ani smazaný ne) |
 | `list` se `showDeleted` + `showHidden` | i smazaný (`deleted: true`, `status` zůstává `needsAction`) a skrytý (`completed`, `hidden: true`) |
 | `list` s `updatedMin` bez příznaků | **smazané ani skryté nevrací** |
-| `list` s `updatedMin` + `showDeleted` + `showHidden` | vše změněné od `updatedMin`, smazané i skryté |
+| `list` s `updatedMin` (minutu před vložením) + `showDeleted` + `showHidden` | smazané i skryté; všechny úkoly vznikly po `updatedMin`, filtr dokládá až budoucí `updatedMin` |
 | `list` s `updatedMin` v budoucnosti | prázdný seznam, bez chyby |
 
 - Inkrement musí posílat `showDeleted=true` i `showHidden=true`; samotné `updatedMin` smazání ztratí.
 - Klientské ID se nepřenese, takže nejistý výsledek vytvoření dál řeší pozorování podle obsahu (návrh 12.5).
-- **`tasklists.updated` se změnou úkolu nemění.** Přejmenování úkolu ho nechalo stejné; po smazání, dokončení a vyčištění se změnilo, ale nejde říct, který z kroků to způsobil. Jako levná kontrola „který seznam číst" proto nestačí: adaptér čte `tasks.list` s `updatedMin` u každého seznamu (plán 6.2).
+- **Přejmenování úkolu `tasklists.updated` nemění.** Vložení úkolu ho posune (`tasklists.get` nese čas vložení posledního úkolu). Po smazání, dokončení a vyčištění se podle logu skriptu změnilo, ale fixture to nedokládá a nejde říct, který krok to způsobil. Jako levná kontrola „který seznam číst" proto nestačí: adaptér čte `tasks.list` s `updatedMin` u každého seznamu (plán 6.2).
 - Seznam `musubi-t10` s jedním smazaným a jedním skrytým úkolem v účtu zůstal; K10 podle něj ověří, zda je Google po čase odstraňuje (otevřená otázka 6).
 
 ## 4. People API
