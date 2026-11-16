@@ -1,0 +1,7 @@
+{
+  "status": 207,
+  "headers": {
+    "Content-Type": "application/xml; charset=UTF-8"
+  },
+  "xml": "<d:multistatus xmlns:d=\"DAV:\">\n    <d:response>\n        <d:href>/DSID/calendars/id1/</d:href><d:propstat>\n            <d:prop>\n                \n                    \n                        <d:getetag>REDACTED</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:sync-token>REDACTED</d:sync-token></d:multistatus>"
+}

@@ -184,7 +184,8 @@ pub enum Fault {
         /// `Retry-After` in seconds.
         retry_after: Option<u64>,
     },
-    /// `status` (`403` as Radicale, or `409`) with
+    /// `status` (`403` as Radicale and iCloud CalDAV, `409`, or `412` as
+    /// iCloud CardDAV) with
     /// `<D:error><D:valid-sync-token/></D:error>`, whatever the token.
     InvalidSyncToken {
         /// HTTP status.

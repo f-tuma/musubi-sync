@@ -271,7 +271,8 @@ async fn sync(
 ) -> Result<Pages, SyncError> {
     let r = send(s, "REPORT", &t.url, Some("0"), xml::sync_collection(&token)).await?;
     match r.status {
-        403 | 409 if xml::has_condition(&r.body, DAV, "valid-sync-token") => {
+        // 403 (RFC 6578, Radicale, iCloud CalDAV), 409, 412 (iCloud CardDAV, T11).
+        403 | 409 | 412 if xml::has_condition(&r.body, DAV, "valid-sync-token") => {
             return Err(SyncError::CursorExpired);
         }
         // The report is gone: descend to ctag (or none) at the next discovery.

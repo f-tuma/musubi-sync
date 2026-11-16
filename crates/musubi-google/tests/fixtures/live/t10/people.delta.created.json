@@ -1,0 +1,51 @@
+{
+  "connections": [
+    {
+      "resourceName": "people/c1975428914001392424",
+      "etag": "%EgcBAgkuNz0+GgQBAgUHIgxrd0syck9FSUt2az0=",
+      "metadata": {
+        "sources": [
+          {
+            "type": "CONTACT",
+            "id": "1b6a22218a16b328",
+            "etag": "#kwK2rOEIKvk=",
+            "updateTime": "2026-11-16T10:43:32.555160Z"
+          }
+        ],
+        "objectType": "PERSON"
+      },
+      "names": [
+        {
+          "metadata": {
+            "primary": true,
+            "source": {
+              "type": "CONTACT",
+              "id": "1b6a22218a16b328"
+            },
+            "sourcePrimary": true
+          },
+          "displayName": "Musubi T10",
+          "familyName": "T10",
+          "givenName": "Musubi",
+          "displayNameLastFirst": "T10, Musubi",
+          "unstructuredName": "Musubi T10"
+        }
+      ],
+      "emailAddresses": [
+        {
+          "metadata": {
+            "primary": true,
+            "source": {
+              "type": "CONTACT",
+              "id": "1b6a22218a16b328"
+            }
+          },
+          "value": "t10@example.com"
+        }
+      ]
+    }
+  ],
+  "nextSyncToken": "REDACTED",
+  "totalPeople": 1,
+  "totalItems": 1
+}

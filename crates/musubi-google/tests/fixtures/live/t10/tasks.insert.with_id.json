@@ -1,0 +1,15 @@
+{
+  "status": 200,
+  "body": {
+    "kind": "tasks#task",
+    "id": "UDdEX0tBMkJUVUJQS212aA",
+    "etag": "\"VYH-NaRU5pM\"",
+    "title": "t10-a",
+    "updated": "2026-11-16T10:43:18.810Z",
+    "selfLink": "https://www.googleapis.com/tasks/v1/lists/eXZmbWhROUJXNGlaT2ZScA/tasks/UDdEX0tBMkJUVUJQS212aA",
+    "position": "00000000000000000000",
+    "status": "needsAction",
+    "links": [],
+    "webViewLink": "https://tasks.google.com/task/P7D_KA2BTUBPKmvh?sa=6"
+  }
+}

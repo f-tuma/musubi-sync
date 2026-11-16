@@ -1,0 +1,23 @@
+{
+  "connections": [
+    {
+      "resourceName": "people/c1975428914001392424",
+      "etag": "%EgcBAgkuNz0+GgQBAgUHIgxqNlFVYnIwaU9vVT0=",
+      "metadata": {
+        "sources": [
+          {
+            "type": "CONTACT",
+            "id": "1b6a22218a16b328",
+            "etag": "#j6QUbr0iOoU=",
+            "updateTime": "1970-01-01T00:00:00Z"
+          }
+        ],
+        "deleted": true,
+        "objectType": "PERSON"
+      }
+    }
+  ],
+  "nextSyncToken": "REDACTED",
+  "totalPeople": 1,
+  "totalItems": 1
+}

@@ -1,0 +1,38 @@
+{
+  "status": 403,
+  "body": {
+    "error": {
+      "code": 403,
+      "message": "People API has not been used in project 000000000000 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/people.googleapis.com/overview?project=000000000000 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.",
+      "status": "PERMISSION_DENIED",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "reason": "SERVICE_DISABLED",
+          "domain": "googleapis.com",
+          "metadata": {
+            "consumer": "projects/000000000000",
+            "activationUrl": "https://console.developers.google.com/apis/api/people.googleapis.com/overview?project=000000000000",
+            "containerInfo": "000000000000",
+            "serviceTitle": "People API",
+            "service": "people.googleapis.com"
+          }
+        },
+        {
+          "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+          "locale": "en-US",
+          "message": "People API has not been used in project 000000000000 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/people.googleapis.com/overview?project=000000000000 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry."
+        },
+        {
+          "@type": "type.googleapis.com/google.rpc.Help",
+          "links": [
+            {
+              "description": "Google developers console API activation",
+              "url": "https://console.developers.google.com/apis/api/people.googleapis.com/overview?project=000000000000"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
