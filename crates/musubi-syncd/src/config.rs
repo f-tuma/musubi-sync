@@ -89,10 +89,12 @@ impl SyncSettings {
         &self,
         mut base: musubi_engine::Config,
     ) -> Result<musubi_engine::Config, String> {
+        // 30 days keeps `Duration::from_secs_f64` and `now + interval` far from overflow.
+        const MAX_SECS: f64 = 30.0 * 24.0 * 3600.0;
         let secs = |name: &str, s: f64| {
-            (s.is_finite() && s > 0.0)
+            (s > 0.0 && s <= MAX_SECS)
                 .then(|| Duration::from_secs_f64(s))
-                .ok_or_else(|| format!("sync.{name} must be a positive number of seconds"))
+                .ok_or_else(|| format!("sync.{name} must be seconds above 0, at most 30 days"))
         };
         for (name, bounds, slot) in [
             ("active", self.active, &mut base.poll_active),
@@ -329,10 +331,15 @@ mod tests {
         assert_eq!(c.rediscover_every, Duration::from_secs(3));
         assert_eq!(c.page_size, NonZeroU32::new(20));
         assert_eq!(c.poll_normal, base.poll_normal);
+        let month = p(serde_json::json!({ "sleeping": { "min": 1, "max": 2_592_000 } }));
+        assert!(month.engine(base.clone()).is_ok(), "30 days is allowed");
         for bad in [
             serde_json::json!({ "normal": { "min": 10, "max": 5 } }),
             serde_json::json!({ "sleeping": { "min": 0, "max": 5 } }),
             serde_json::json!({ "rediscover_every": -1 }),
+            serde_json::json!({ "active": { "min": 1, "max": 1e300 } }),
+            serde_json::json!({ "sleeping": { "min": 1, "max": 2_592_001 } }),
+            serde_json::json!({ "rediscover_every": 1e20 }),
         ] {
             assert!(p(bad.clone()).engine(base.clone()).is_err(), "{bad}");
         }

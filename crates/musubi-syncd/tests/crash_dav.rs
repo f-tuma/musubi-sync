@@ -2,18 +2,22 @@
 //! DAV account from the slowed fake DAV server, then a restart. Each round
 //! changes the fake while the node is down (new, edited and deleted events
 //! and contacts, now and then expired sync tokens), starts the node, kills it
-//! once the `n`-th DAV request is in flight and checks:
+//! once the `n`-th DAV request (or `k`-th multiget) is in flight and checks:
 //!
 //! - at the kill: a collection whose stored cursor is the fake's current sync
 //!   token holds exactly the fake's objects (the cursor never runs ahead of
-//!   the pages committed before it);
+//!   the pages committed before it). The one allowance: a full read whose
+//!   last page committed but whose deletions have not run yet
+//!   (`read_complete`, finished on restart) may still hold objects the fake
+//!   deleted;
 //! - after the restart: the account resumes and the store converges to the
 //!   fake with nothing lost or duplicated (one item per object, the store
 //!   invariants of plan 6.3, a client following `/v1/changes` saw every
 //!   journal entry once).
 //!
 //! A run is 20 rounds over its own fake and node (the fake grows with every
-//! round). `MUSUBI_DAV_CRASH_RUNS` (1) runs, `MUSUBI_DAV_CRASH_JOBS` (4) at a
+//! round) and fails unless at least one kill left a collection with some but
+//! not all pages of its read committed, so the cursor check is not vacuous. `MUSUBI_DAV_CRASH_RUNS` (1) runs, `MUSUBI_DAV_CRASH_JOBS` (4) at a
 //! time, `MUSUBI_CRASH_SEED` the seed of run 0 (run `i` uses seed + i); a
 //! failure names its seed and round, and the seed replays its changes (the
 //! kill timing itself is not reproducible).
@@ -32,7 +36,7 @@ use musubi_testkit::google::FakeGoogle;
 use musubi_testkit::harness::{Api, Daemon, Rng, config, free_addr};
 use serde_json::{Value, json};
 
-/// Per request: a 20-object page waits for its `multiget`, so a read of a
+/// Per request: a 10-object page waits for its `multiget`, so a read of a
 /// few hundred objects takes a second and commits page by page.
 const LATENCY: Duration = Duration::from_millis(15);
 
@@ -152,6 +156,19 @@ impl World {
         (objs, cursors)
     }
 
+    /// Collections whose full read has committed its last page (and cursor)
+    /// but not yet deleted what it did not see; a restart finishes it.
+    fn unfinished(&self) -> std::collections::BTreeSet<String> {
+        let db = self.main_db();
+        let mut q = db
+            .prepare("SELECT remote FROM collections WHERE gone = 0 AND read_complete = 1")
+            .expect("prepare");
+        q.query_map([], |r| r.get::<_, String>(0))
+            .expect("collections")
+            .map(|r| path_of(&r.expect("collection")))
+            .collect()
+    }
+
     /// New, edited and deleted objects while the node is down.
     fn change(&mut self, rng: &mut Rng, round: u64) {
         let n = if round == 0 { 300 } else { 10 + rng.below(80) };
@@ -241,11 +258,7 @@ async fn syncd_survives_sigkill_during_a_dav_read() {
     let rounds = runs * ROUNDS;
     println!(
         "crash_dav: {rounds} rounds, {mid_read} kills with a request in flight, \
-         {between} collections caught between pages"
-    );
-    assert!(
-        mid_read * 2 >= rounds,
-        "only {mid_read} of {rounds} kills hit a read"
+         {between} collections caught with some but not all pages committed"
     );
 }
 
@@ -269,7 +282,7 @@ async fn run(seed: u64) -> (u64, u64) {
     let mut c = config(addr, &dir.path().join("data"), &google);
     c["dav"] = json!({ "allow_private": true });
     let fast = json!({ "min": 0.3, "max": 1 });
-    c["sync"] = json!({ "active": fast, "normal": fast, "sleeping": fast, "page_size": 20 });
+    c["sync"] = json!({ "active": fast, "normal": fast, "sleeping": fast, "page_size": 10 });
     let config = dir.path().join("config.json");
     std::fs::write(&config, c.to_string()).expect("config");
     let mut w = World {
@@ -296,6 +309,10 @@ async fn run(seed: u64) -> (u64, u64) {
     let (mut mid_read, mut between) = (0, 0);
     let mut account = String::new();
     for round in 0..ROUNDS {
+        if round > 0 {
+            w.kill();
+        }
+        let before = w.store().0;
         w.change(&mut rng, round);
         let expected = w.expected();
         let mark = w.dav.requests().len();
@@ -314,30 +331,50 @@ async fn run(seed: u64) -> (u64, u64) {
         } else {
             w.serve();
         }
-        // Kill once the n-th request of this run is in flight.
-        let n = 1 + rng.below(25) as usize;
+        // Kill once the n-th request of this round is in flight (anywhere
+        // in a read), or once its k-th multiget is (a page of the same read
+        // has likely committed): always in the long reads (the first one and
+        // the full reads after expired tokens), else every other round.
+        let long = round == 0 || round % 5 == 4;
+        let (n, k) = if !long && rng.below(2) == 0 {
+            (1 + rng.below(25) as usize, 0)
+        } else {
+            (0, 2 + rng.below(3) as usize)
+        };
+        let reached = |w: &World| {
+            let reqs = &w.dav.requests()[mark..];
+            let multigets = reqs.iter().filter(|r| r.label().ends_with("-multiget"));
+            reqs.len() >= n && multigets.count() >= k
+        };
         let deadline = Instant::now() + Duration::from_secs(10);
-        while w.dav.requests().len() < mark + n && Instant::now() < deadline {
+        while !reached(&w) && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         tokio::time::sleep(Duration::from_millis(rng.below(LATENCY.as_millis() as u64))).await;
         w.kill();
-        if w.dav.requests().len() >= mark + n {
+        if reached(&w) {
             mid_read += 1;
         }
 
         let (held, cursors) = w.store();
+        let unfinished = w.unfinished();
         for (col, cursor) in &cursors {
             let token = cursor
                 .as_ref()
                 .and_then(|c| c["sync_token"]["token"].as_str());
             if token == Some(w.dav.sync_token(col).as_str()) {
+                let mut have = held.get(col).cloned().unwrap_or_default();
+                let want = expected.get(col).cloned().unwrap_or_default();
+                if unfinished.contains(col) {
+                    // Deletions of a full read come after its last page.
+                    have.retain(|name, _| want.contains_key(name));
+                }
                 assert_eq!(
-                    held.get(col).cloned().unwrap_or_default(),
-                    expected.get(col).cloned().unwrap_or_default(),
+                    have, want,
                     "round {round} (seed {seed}): {col} has the current sync token but not its objects"
                 );
-            } else if held.get(col) != expected.get(col) {
+            } else if held.get(col) != before.get(col) && held.get(col) != expected.get(col) {
+                // Some pages of the read committed, not all: a kill between pages.
                 between += 1;
             }
         }
@@ -390,5 +427,9 @@ async fn run(seed: u64) -> (u64, u64) {
         }
         follower.check(&j);
     }
+    assert!(
+        between > 0,
+        "seed {seed}: no kill landed between two committed pages in {ROUNDS} rounds"
+    );
     (mid_read, between)
 }
