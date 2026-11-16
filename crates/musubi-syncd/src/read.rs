@@ -10,7 +10,8 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use musubi_model::control::{AccountRecord, ApiKeyHash, Scope};
+use musubi_dav::Profile;
+use musubi_model::control::{AccountRecord, AccountState, ApiKeyHash, Scope};
 use musubi_model::store::{
     CollectionState, Coverage, EntityView, Include, ItemView, RangeCursor, RangeQuery,
 };
@@ -72,6 +73,16 @@ pub(crate) fn account_view(a: &App, rec: &AccountRecord) -> Result<Value, ApiErr
             "body": { "provider": rec.provider, "account": rec.id },
         });
     }
+    if rec.state == AccountState::ReauthRequired && rec.provider.0 == "icloud" {
+        let cols = a.storage.open(rec.tenant)?.collections()?;
+        let reasons = cols
+            .iter()
+            .filter(|c| c.account == rec.id && !c.gone)
+            .filter_map(|c| c.status.error.as_ref().map(|e| e.message.as_str()));
+        if password_rejected(reasons) {
+            v["hint"] = json!(Profile::Icloud.reauth_hint());
+        }
+    }
     if let Some(e) = a.control.endpoint(rec.id)? {
         for k in ["profile", "caldav_url", "carddav_url", "origins"] {
             v[k] = e.state.get(k).cloned().unwrap_or(Value::Null);
@@ -94,6 +105,23 @@ pub(crate) async fn collections(State(app): State<Arc<App>>, caller: Caller) -> 
         .await?;
     let cols: Vec<Value> = cols.iter().map(collection_json).collect();
     Ok(Json(json!({ "collections": cols })))
+}
+
+/// Plan 5.4: iCloud's `401` asks for a new app-specific password. The engine
+/// records the reauth reason only on the account's collections (`rejected`,
+/// `endpoint_moved`), so the hint needs a `rejected` among them. With no
+/// collections the reason is unknown and no hint is shown. A redirect off iCloud
+/// (`endpoint_moved`, a `cross_origin_redirect`) is not about the password.
+fn password_rejected<'a>(reasons: impl Iterator<Item = &'a str>) -> bool {
+    let mut rejected = false;
+    for r in reasons {
+        match r {
+            "endpoint_moved" | "cross_origin_redirect" => return false,
+            "rejected" => rejected = true,
+            _ => {}
+        }
+    }
+    rejected
 }
 
 fn collection_json(c: &CollectionState) -> Value {
@@ -536,5 +564,24 @@ impl Feed {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::password_rejected;
+
+    #[test]
+    fn the_password_hint_needs_a_rejected_reason() {
+        let hint = |r: &[&str]| password_rejected(r.iter().copied());
+        assert!(hint(&["rejected", "rejected"]));
+        assert!(hint(&["missing_scope", "rejected"]));
+        assert!(!hint(&[]), "no collections: reason unknown");
+        assert!(!hint(&["rejected", "endpoint_moved"]));
+        assert!(!hint(&["cross_origin_redirect"]));
+        assert!(
+            !hint(&["unauthorized"]),
+            "the counted retry, not yet reauth"
+        );
     }
 }

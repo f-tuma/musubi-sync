@@ -58,6 +58,24 @@ pub struct DavSettings {
     /// over `https`.
     #[serde(default)]
     pub allow_private: bool,
+    /// Test-only: points profile `icloud` at a fake server (the fake DAV in
+    /// `icloud` mode) instead of Apple's fixed entries. Everything else of
+    /// the profile stays. Needs `allow_private`; never read from the API.
+    #[serde(default)]
+    pub icloud_test_entries: Option<IcloudTestEntries>,
+}
+
+/// `dav.icloud_test_entries`: the URLs `DavSetup::icloud()` would hold.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IcloudTestEntries {
+    /// In place of `https://caldav.icloud.com/`.
+    pub caldav: String,
+    /// In place of `https://contacts.icloud.com/`.
+    pub carddav: String,
+    /// The fake's partition hosts, in place of iCloud's host pattern.
+    #[serde(default)]
+    pub allow_origins: Vec<String>,
 }
 
 /// Google OAuth client. Endpoints default to Google's production ones.
@@ -163,6 +181,11 @@ impl Config {
         if k.starts_with("mk_") || k.starts_with("mt1.") {
             return Err("admin_key must not start with mk_ or mt1.".into());
         }
+        if self.dav.icloud_test_entries.is_some() && !self.dav.allow_private {
+            return Err(
+                "dav.icloud_test_entries is test-only and needs dav.allow_private = true".into(),
+            );
+        }
         Ok(())
     }
 }
@@ -205,6 +228,16 @@ mod tests {
         assert!(c(&long[1..]).check().is_err(), "31 characters");
         assert!(c(&format!("mk_{long}")).check().is_err());
         assert!(c(&format!("mt1.{long}")).check().is_err());
+        let mut fake_icloud = c(&long);
+        fake_icloud.dav.icloud_test_entries = Some(IcloudTestEntries {
+            caldav: "http://127.0.0.1:1/".into(),
+            carddav: "http://127.0.0.1:2/".into(),
+            allow_origins: Vec::new(),
+        });
+        let e = fake_icloud.check().unwrap_err();
+        assert!(e.contains("dav.allow_private"), "{e}");
+        fake_icloud.dav.allow_private = true;
+        assert!(fake_icloud.check().is_ok());
         let debug = format!("{:?}", c(&long));
         for secret in [
             long.as_str(),

@@ -10,9 +10,10 @@
 //! a new account's discovery, the webhook enqueues the engine's push job, and
 //! deleting a tenant removes its accounts through the engine first, so their
 //! watch channels are stopped while their tokens still exist. Its registry
-//! has the `google` instance (Calendar, Tasks, People) and `dav`
-//! (CalDAV/CardDAV, codecs of musubi-ical). Only `POST /v1/interest` raises a
-//! tenant's polling ([`SyncEngine::touch`]); SSE and reads do not.
+//! has the `google` instance (Calendar, Tasks, People), `dav` (CalDAV/CardDAV,
+//! codecs of musubi-ical) and `icloud` (the same adapter with profile
+//! `icloud`). Only `POST /v1/interest` raises a tenant's polling
+//! ([`SyncEngine::touch`]); SSE and reads do not.
 //!
 //! **Callers.** Every `/v1` route except the OAuth callback and the webhook
 //! needs `Authorization: Bearer <credential>`:
@@ -60,7 +61,7 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use jiff::Timestamp;
-use musubi_dav::{DavConfig, DavProvider};
+use musubi_dav::{DavConfig, DavProvider, DavSetup, Profile};
 use musubi_engine::{Codecs, DecodeFn, Engine, Providers};
 use musubi_google::{GoogleCodec, GoogleConfig, GoogleProvider, PeopleCodec, TasksCodec};
 use musubi_ical::{IcalCodec, VCardCodec};
@@ -100,6 +101,9 @@ pub struct App {
     storage: Arc<SqliteStorage>,
     google: Arc<GoogleProvider>,
     dav: Arc<DavProvider>,
+    icloud: Arc<DavProvider>,
+    /// `DavSetup::icloud()`, or `dav.icloud_test_entries`.
+    icloud_entry: DavSetup,
     engine: SyncEngine,
     oauth: oauth::Client,
     http: reqwest::Client,
@@ -150,12 +154,12 @@ impl App {
             )
             .map_err(err)?,
         );
-        let dav = Arc::new(
-            DavProvider::new(DavConfig {
-                allow_private: c.dav.allow_private,
-            })
-            .map_err(err)?,
-        );
+        let dav_config = DavConfig {
+            allow_private: c.dav.allow_private,
+        };
+        let dav = Arc::new(DavProvider::new(dav_config).map_err(err)?);
+        let icloud = Arc::new(DavProvider::with_profile(dav_config, Profile::Icloud).map_err(err)?);
+        let icloud_entry = dav::icloud_entry(&c.dav)?;
         // GoogleProvider::new installed the ring provider reqwest needs.
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -178,8 +182,8 @@ impl App {
                         contact_group: None,
                     },
                 )
-                // K7: register the `icloud` instance (musubi-dav, profile icloud) here with dav_codecs().
-                .with(dav.clone(), dav_codecs()),
+                .with(dav.clone(), dav_codecs())
+                .with(icloud.clone(), dav_codecs()),
             control.clone(),
             Arc::new(Vault {
                 control: control.clone(),
@@ -202,6 +206,8 @@ impl App {
             storage,
             google,
             dav,
+            icloud,
+            icloud_entry,
             engine,
             oauth: oauth::Client {
                 client_id: g.client_id.clone(),
@@ -444,6 +450,8 @@ pub(crate) struct ApiError {
     code: &'static str,
     message: String,
     oldest: Option<Seq>,
+    /// What the user should do, beyond the message (`musubi_dav::Profile::reauth_hint`).
+    hint: Option<&'static str>,
 }
 
 impl ApiError {
@@ -453,6 +461,7 @@ impl ApiError {
             code,
             message: message.into(),
             oldest: None,
+            hint: None,
         }
     }
 
@@ -518,6 +527,9 @@ impl IntoResponse for ApiError {
         let mut body = json!({ "error": self.code, "message": self.message });
         if let Some(o) = self.oldest {
             body["oldest"] = json!(o);
+        }
+        if let Some(h) = self.hint {
+            body["hint"] = json!(h);
         }
         let mut r = (self.status, Json(body)).into_response();
         if self.status == StatusCode::UNAUTHORIZED {
