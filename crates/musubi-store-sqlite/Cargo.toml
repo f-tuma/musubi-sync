@@ -24,6 +24,7 @@ crash-points = []
 [dev-dependencies]
 # `hooks` for the progress handler that counts VM steps in a unit test.
 rusqlite = { workspace = true, features = ["hooks"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

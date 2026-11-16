@@ -4,7 +4,10 @@
 //! tokens, pending OAuth sign-ins, the durable job queue and watch channels.
 //! Called by the API layer (tenants, keys, accounts, sign-ins), the scheduler
 //! of the engine (jobs) and the webhook handler (channels). Every operation is
-//! one transaction; writes are durable when the call returns (`synchronous=FULL`).
+//! one transaction; writes are durable when the call returns (`synchronous=FULL`),
+//! except a lease ([`ControlStore::lease_due`]): it survives a crash of the
+//! process, and one lost to a power loss is like an expired lease, as its holder
+//! died with it.
 //!
 //! [`TokenVault`] is the engine's view of account credentials: plain
 //! [`Credentials`] in, plain credentials out. `musubi-syncd` implements it over

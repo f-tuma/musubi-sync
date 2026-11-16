@@ -14,8 +14,9 @@
 //! Phase-0 conditions kept here (plan 3.2): `busy_timeout` is the first pragma
 //! of every connection; writes run in `BEGIN IMMEDIATE` on a writer connection
 //! separate from the readers; `main.db` commits with `synchronous=NORMAL`,
-//! `control.db` with `FULL`; WAL checkpoints are run by the store itself
-//! (see [`storage`]); `changes.seq` is `AUTOINCREMENT`.
+//! `control.db` with `FULL` except the job lease (`lease_due`, plan 3.1); WAL
+//! checkpoints are run by the store itself (see [`storage`]); `changes.seq` is
+//! `AUTOINCREMENT`.
 
 mod control;
 #[cfg(feature = "crash-points")]

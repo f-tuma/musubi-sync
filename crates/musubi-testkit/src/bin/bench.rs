@@ -569,7 +569,18 @@ async fn b6(o: &Opts) -> Vec<Row> {
 /// B7: RSS per sleeping account, one tenant per account.
 async fn b7(o: &Opts) -> Vec<Row> {
     let accounts: usize = if o.smoke { 20 } else { 10_000 };
-    let n = Arc::new(Node::start(&o.syncd, google::Config::default()).await);
+    // A tenant sleeps 7 days after its last interest; the run puts the
+    // engine's sleeping bounds (plan 7.2) in place of the normal ones instead
+    // of waiting, as D2 does. At the normal ones People (no push) is first
+    // polled about 480 s after its account connected, while 10 000 accounts
+    // take 400 s to 750 s to connect on CI: each poll's write wakes its
+    // tenant's writer for `writer_idle`, and the count below found them.
+    let n = Arc::new(
+        Node::start_with(&o.syncd, google::Config::default(), |c| {
+            c["sync"] = json!({ "normal": { "min": 3600.0, "max": 21_600.0 } });
+        })
+        .await,
+    );
     tokio::time::sleep(Duration::from_secs(1)).await;
     let (base_rss, base_threads) = (n.proc_status("VmRSS:"), n.proc_status("Threads:"));
     let t0 = Instant::now();
