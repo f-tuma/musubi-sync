@@ -1032,6 +1032,29 @@ async fn an_icloud_connect_refuses_addresses_and_wrong_passwords_and_stores_noth
     let (s, v) = connect(&n, &t, generic(&g, "wrong")).await;
     assert_eq!((s, &v["error"]), (400, &json!("unauthorized")), "{v}");
     assert!(v.get("hint").is_none(), "{v}");
+
+    // A redirect off iCloud names the target but asks for no `allow_origins`,
+    // which profile icloud refuses.
+    d.fail(
+        Req::Any,
+        Fault::Redirect {
+            status: 301,
+            to: Host::Outside,
+        },
+        1,
+    );
+    let (s, v) = connect(&n, &t, icloud("secret")).await;
+    assert_eq!(
+        (s, &v["error"]),
+        (400, &json!("cross_origin_redirect")),
+        "{v}"
+    );
+    let message = v["message"].as_str().expect("message");
+    assert!(message.contains(&d.url(Host::Outside)), "{v}");
+    assert!(!message.contains("allow_origins"), "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
+    assert_eq!(outside(&d), 0);
+    assert!(collections(&n, &t).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1052,9 +1075,14 @@ async fn a_rejected_icloud_password_asks_for_a_new_app_specific_password() {
     d.set_password("changed");
     let (s, v) = n.call("POST", "/v1/interest", Some(&t.read), None).await;
     assert_eq!(s, 204, "{v}");
-    let v = until("reauth_required", async || {
+    // The engine marks the account before it records the reason.
+    let v = until("rejected", async || {
+        let rejected = collections(&n, &t)
+            .await
+            .iter()
+            .all(|c| c["error"]["message"] == "rejected");
         let v = account(&n, &t, &id).await;
-        (v["state"] == "reauth_required").then_some(v)
+        (rejected && v["state"] == "reauth_required").then_some(v)
     })
     .await;
     let hint = musubi_dav::Profile::Icloud.reauth_hint().expect("hint");
@@ -1089,6 +1117,52 @@ async fn a_rejected_icloud_password_asks_for_a_new_app_specific_password() {
     })
     .await;
     assert!(v.get("hint").is_none(), "{v}");
+}
+
+/// A reconnect names an account of its own instance: a `dav` account under
+/// profile `icloud`, or an `icloud` one under `generic`, is not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnect_under_the_other_profile_is_not_found_and_changes_nothing() {
+    let a = apple(DavConfig::default()).await;
+    let g = dav(DavConfig::default()).await;
+    let n = icloud_node(&a).await;
+    let _engine = n.app.engine().start();
+    let t = tenant(&n).await;
+    let mut ids = Vec::new();
+    for body in [generic(&g, "secret"), icloud("secret")] {
+        let (s, v) = connect(&n, &t, body).await;
+        assert_eq!(s, 200, "{v}");
+        ids.push(v["id"].as_str().expect("id").to_owned());
+    }
+    let (dav_id, icloud_id) = (&ids[0], &ids[1]);
+    let mut before = Vec::new();
+    for id in &ids {
+        before.push(
+            until("active", async || {
+                let v = account(&n, &t, id).await;
+                (v["state"] == "active").then_some(v)
+            })
+            .await,
+        );
+    }
+    let cols = collections(&n, &t).await.len();
+    let seen = (a.requests().len(), g.requests().len());
+
+    let mut on_icloud = icloud("secret");
+    on_icloud["account"] = json!(dav_id);
+    let mut on_generic = generic(&g, "secret");
+    on_generic["account"] = json!(icloud_id);
+    for body in [on_icloud, on_generic] {
+        let (s, v) = connect(&n, &t, body.clone()).await;
+        assert_eq!((s, &v["error"]), (404, &json!("not_found")), "{body}: {v}");
+    }
+    assert_eq!((a.requests().len(), g.requests().len()), seen);
+    for (id, b) in ids.iter().zip(&before) {
+        assert_eq!(&account(&n, &t, id).await, b);
+    }
+    assert_eq!(collections(&n, &t).await.len(), cols);
+    let accounts = n.app.control().accounts(t.id).expect("accounts");
+    assert_eq!(accounts.len(), 2, "{accounts:?}");
 }
 
 /// Another DSID: the node is restarted with its iCloud entries at another

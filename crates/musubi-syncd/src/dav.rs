@@ -73,6 +73,11 @@ fn connect_error(profile: Profile, e: ConnectError) -> ApiError {
         },
         ConnectError::NotDav(_) => reason("not_dav", message),
         ConnectError::BlockedAddress(_) => reason("blocked_address", message),
+        // iCloud refuses `allow_origins`: nothing for the user to confirm.
+        ConnectError::CrossOriginRedirect(to) if profile == Profile::Icloud => reason(
+            "cross_origin_redirect",
+            format!("iCloud redirected outside its own hosts: {to}; nothing was sent there"),
+        ),
         // The message names the target, for the user to confirm through `allow_origins`.
         ConnectError::CrossOriginRedirect(_) => reason("cross_origin_redirect", message),
         ConnectError::SubjectMismatch => reason("subject_mismatch", message),

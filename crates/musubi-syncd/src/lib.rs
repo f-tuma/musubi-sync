@@ -11,8 +11,9 @@
 //! deleting a tenant removes its accounts through the engine first, so their
 //! watch channels are stopped while their tokens still exist. Its registry
 //! has the `google` instance (Calendar, Tasks, People), `dav` (CalDAV/CardDAV,
-//! codecs of musubi-ical) and `icloud` (the same adapter with profile `icloud`). Only `POST /v1/interest` raises a
-//! tenant's polling ([`SyncEngine::touch`]); SSE and reads do not.
+//! codecs of musubi-ical) and `icloud` (the same adapter with profile
+//! `icloud`). Only `POST /v1/interest` raises a tenant's polling
+//! ([`SyncEngine::touch`]); SSE and reads do not.
 //!
 //! **Callers.** Every `/v1` route except the OAuth callback and the webhook
 //! needs `Authorization: Bearer <credential>`:
