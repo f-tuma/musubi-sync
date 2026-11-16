@@ -144,9 +144,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
+      # cargo-afl builds with -C target-cpu=native, so a cache from another runner CPU
+      # can hold proc-macros that die with SIGILL here. Key the cache by CPU model.
+      - id: cpu
+        run: echo "model=$(grep -m1 '^model name' /proc/cpuinfo | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: crates/musubi-recurrence/fuzz
+          key: cpu-${{ steps.cpu.outputs.model }}
           # Not true (the default): a cached cargo-afl skips `cargo install`, but rust-cache
           # prunes registry/src, where `cargo afl config --build` finds the AFL++ sources.
           cache-bin: false
