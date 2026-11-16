@@ -196,10 +196,10 @@ impl App {
                 musubi_store_sqlite::crash::point("commit-sse", true);
                 sink.notify(tenant, head)
             }),
-            musubi_engine::Config {
+            c.sync.engine(musubi_engine::Config {
                 callback: Some(callback.as_str().parse().map_err(err)?),
                 ..Default::default()
-            },
+            })?,
         );
         Ok(Arc::new(Self {
             control,

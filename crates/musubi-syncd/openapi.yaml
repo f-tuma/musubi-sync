@@ -272,8 +272,8 @@ paths:
                   raw:
                     type: object
                     properties:
-                      media_type: { type: string, enum: [json] }
-                      body: {}
+                      media_type: { type: string, enum: [json, calendar, vcard] }
+                      body: { description: "json: the provider's JSON object; calendar and vcard: the text as a string" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /v1/changes:

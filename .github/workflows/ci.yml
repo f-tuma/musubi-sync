@@ -51,7 +51,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      # Includes the dependency-direction check (musubi-testkit/tests/dependency_direction.rs).
+      # Includes the dependency-direction check (musubi-testkit/tests/dependency_direction.rs)
+      # and the K9 DAV crash test (musubi-syncd/tests/crash_dav.rs, 20 SIGKILLs during a DAV read).
       - run: cargo test --workspace --locked
       # K1: only an optimized build writes fast enough to reach the WAL hard
       # limit and exercise the TRUNCATE path; the test asserts it in release.
@@ -123,6 +124,11 @@ jobs:
       - run: cargo test -p musubi-syncd --features crash-points --release --locked --test crash -- --nocapture
         env:
           MUSUBI_SYNCD_CRASH_RUNS: "50"
+      # Phase 2 K9 (8.4, 11.1): 1000 SIGKILLs during a DAV read (50 runs of 20).
+      - if: ${{ !cancelled() }}
+        run: cargo test -p musubi-syncd --release --locked --test crash_dav -- --nocapture
+        env:
+          MUSUBI_DAV_CRASH_RUNS: "50"
       # K7 (6.5): full-scale benchmarks against their budgets.
       - if: ${{ !cancelled() }}
         run: cargo build --release --locked -p musubi-syncd -p musubi-testkit --bins

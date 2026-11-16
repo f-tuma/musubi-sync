@@ -26,8 +26,10 @@
 //! }
 //! ```
 //!
-//! - `kinds`: the entity kinds the scenario needs. A target that lacks one
-//!   ([`Target::kinds`]) skips the whole scenario with that reason.
+//! - `kinds`: the entity kinds the scenario covers. A target runs the
+//!   scenario over the kinds it serves ([`Target::kinds`]): `put`s of other
+//!   kinds, and every later use of their refs, are dropped before the run. A
+//!   target that serves none of them skips the scenario with that reason.
 //! - `only`: optional list of [`Target::name`]s the scenario applies to (the
 //!   "—" cells of the plan's table); other targets do not run it and do not
 //!   report it as skipped.
@@ -166,6 +168,10 @@ pub enum Object {
         /// Refs of member contacts put earlier in the scenario.
         #[serde(default)]
         members: Vec<String>,
+        /// Apple's form (vCard 3, `X-ADDRESSBOOKSERVER-KIND:group` and
+        /// `X-ADDRESSBOOKSERVER-MEMBER`) even where vCard 4 exists.
+        #[serde(default)]
+        apple: bool,
     },
 }
 
@@ -196,6 +202,14 @@ impl Object {
             Object::Contact { name, .. } | Object::Group { name, .. } => name,
         }
     }
+
+    /// See [`Object::label`].
+    pub fn label_mut(&mut self) -> &mut String {
+        match self {
+            Object::Event { title, .. } | Object::Task { title, .. } => title,
+            Object::Contact { name, .. } | Object::Group { name, .. } => name,
+        }
+    }
 }
 
 /// One step of a scenario.
@@ -214,6 +228,10 @@ pub enum Step {
         collection: Option<String>,
         /// The object's new content.
         object: Object,
+        /// Put this many objects instead: refs `<ref>.1`, `<ref>.2`, … with
+        /// labels `<label> 1`, `<label> 2`, … (pagination, crash tests).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        copies: Option<u32>,
     },
     /// Delete an object at the provider ([`Target::delete`]).
     Delete {
@@ -305,6 +323,11 @@ pub struct Expect {
     /// contain a text, typically an object's `unknown` value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_contains: Option<RawContains>,
+    /// The account's `missing` kinds (`GET /v1/accounts/{id}`) are exactly
+    /// these. `converged` then accepts the `missing_scope` error on the
+    /// collections of these kinds, which the node keeps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<Kind>,
     /// Give up after this many milliseconds (default 20000).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
@@ -336,6 +359,12 @@ pub enum Fault {
     },
     /// The credentials stop working (`401`) until [`Step::Reconnect`].
     Unauthorized,
+    /// The account loses the authorization for one kind (a scope the user
+    /// did not grant) while the rest keeps working.
+    UnauthorizedKind {
+        /// The kind.
+        kind: Kind,
+    },
     /// Every response is delayed.
     Slow {
         /// Delay in milliseconds.
@@ -454,6 +483,7 @@ mod tests {
                     all_day: false,
                     unknown: None,
                 },
+                copies: None,
             }
         );
         assert!(matches!(s.steps[1], Step::Inject { times: 1, .. }));

@@ -1,0 +1,16 @@
+{
+  "name": "mixed_calendar",
+  "description": "One calendar holding VEVENT and VTODO yields events and tasks, created and changed.",
+  "kinds": ["event", "task"],
+  "only": ["dav-generic", "dav-icloud", "radicale"],
+  "steps": [
+    { "op": "add_collection", "name": "mixed", "kinds": ["event", "task"] },
+    { "op": "put", "ref": "e", "collection": "mixed", "object": { "kind": "event", "title": "mixed event", "day": 1 } },
+    { "op": "put", "ref": "t", "collection": "mixed", "object": { "kind": "task", "title": "mixed task", "due_day": 1 } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "mixed event changed", "day": 1 } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "mixed task changed", "done": true } },
+    { "op": "expect", "converged": true }
+  ]
+}

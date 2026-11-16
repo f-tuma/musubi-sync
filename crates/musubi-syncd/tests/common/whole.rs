@@ -312,7 +312,12 @@ pub fn journal(db: &Connection) -> Vec<Change> {
 /// expired, longer than the engine's 60 s term, or taken before the last
 /// restart.
 pub fn check_store(w: &World) {
-    let db = w.main_db();
+    check_dbs(&w.main_db(), &w.control_db(), w.started);
+}
+
+/// [`check_store`] over a tenant's `main.db` and `control.db`, the node
+/// (re)started at `started` (microseconds).
+pub fn check_dbs(db: &Connection, ctl: &Connection, started: i64) {
     let count = |sql: &str| -> i64 { db.query_row(sql, [], |r| r.get(0)).expect(sql) };
     let checks = [
         (
@@ -349,7 +354,6 @@ pub fn check_store(w: &World) {
         assert_eq!(count(sql), 0, "{what}");
     }
     let now = jiff::Timestamp::now().as_microsecond();
-    let ctl = w.control_db();
     let leases: i64 = ctl
         .query_row(
             // A lease from before the restart ends before `started` + 60 s;
@@ -357,7 +361,7 @@ pub fn check_store(w: &World) {
             "SELECT count(*) FROM jobs WHERE lease IS NOT NULL
              AND (lease_until < ?1 - 1000000 OR lease_until > ?1 + 61000000
                   OR lease_until < ?2 + 60000000)",
-            [now, w.started],
+            [now, started],
             |r| r.get(0),
         )
         .expect("jobs");

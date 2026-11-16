@@ -1,0 +1,20 @@
+{
+  "name": "reauth",
+  "description": "401 puts the account in reauth_required; after a reconnect it is active again and catches up with what changed meanwhile.",
+  "kinds": ["event", "task", "contact", "group"],
+  "steps": [
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "event", "day": 1 } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "task" } },
+    { "op": "put", "ref": "c", "object": { "kind": "contact", "name": "Contact" } },
+    { "op": "put", "ref": "g", "object": { "kind": "group", "name": "Group", "members": ["c"] } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "inject", "fault": { "type": "unauthorized" } },
+    { "op": "put", "ref": "e2", "object": { "kind": "event", "title": "event while locked out", "day": 2 } },
+    { "op": "put", "ref": "t2", "object": { "kind": "task", "title": "task while locked out" } },
+    { "op": "put", "ref": "c2", "object": { "kind": "contact", "name": "Contact While Locked Out" } },
+    { "op": "expect", "account_state": "reauth_required" },
+    { "op": "reconnect" },
+    { "op": "expect", "account_state": "active", "converged": true }
+  ]
+}

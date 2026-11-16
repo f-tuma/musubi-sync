@@ -1,0 +1,17 @@
+{
+  "name": "contact_group",
+  "description": "Contact groups in both forms (vCard 4 KIND:group and Apple's X-ADDRESSBOOKSERVER-KIND) arrive as groups next to the contacts, and their changes follow.",
+  "kinds": ["contact", "group"],
+  "only": ["dav-generic", "dav-icloud", "radicale"],
+  "steps": [
+    { "op": "put", "ref": "c1", "object": { "kind": "contact", "name": "Ann", "email": "ann@example.com" } },
+    { "op": "put", "ref": "c2", "object": { "kind": "contact", "name": "Bob" } },
+    { "op": "put", "ref": "team", "object": { "kind": "group", "name": "Team", "members": ["c1", "c2"] } },
+    { "op": "put", "ref": "family", "object": { "kind": "group", "name": "Family", "members": ["c1"], "apple": true } },
+    { "op": "connect" },
+    { "op": "expect", "converged": true },
+    { "op": "put", "ref": "team", "object": { "kind": "group", "name": "Team renamed", "members": ["c2"] } },
+    { "op": "put", "ref": "family", "object": { "kind": "group", "name": "Family renamed", "members": ["c1", "c2"], "apple": true } },
+    { "op": "expect", "converged": true }
+  ]
+}

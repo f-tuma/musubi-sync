@@ -1,9 +1,10 @@
-//! Benchmarks B1–B7 of plan 6.5: the release `musubi-syncd` binary as a child
-//! process over the fake Google server, measured from the client side (HTTP
-//! over loopback included). B8/B9 are crate benches (`musubi-google`,
-//! `musubi-recurrence`).
+//! Benchmarks B1–B7 of plan 6.5 and D1, D2 and D4 of phase 2 plan 11.2: the
+//! release `musubi-syncd` binary as a child process over the fake Google or
+//! DAV server, measured from the client side (HTTP over loopback included).
+//! B8/B9 and D3 are crate benches (`musubi-google`, `musubi-recurrence`,
+//! `musubi-ical`).
 //!
-//! `bench [--smoke] [--syncd PATH] [--only B1,B3,...]`
+//! `bench [--smoke] [--syncd PATH] [--only B1,D2,...]`
 //!
 //! `--smoke` runs small and fails only on an order-of-magnitude miss (10× a
 //! time budget); without it the scale and budgets are plan 6.5's. Prints a
@@ -15,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use jiff::SignedDuration;
+use musubi_testkit::dav::{self, Config as DavConfig, FakeDav, Kind, Quirk};
 use musubi_testkit::google::{self, FakeGoogle, Seed};
 use musubi_testkit::harness::{Api, Daemon, Rng, config, free_addr};
 use serde_json::{Value, json};
@@ -52,11 +54,17 @@ struct Tenant {
 
 impl Node {
     async fn start(syncd: &Path, fake: google::Config) -> Self {
+        Self::start_with(syncd, fake, |_| {}).await
+    }
+
+    /// [`Node::start`] with the configuration changed by `f`.
+    async fn start_with(syncd: &Path, fake: google::Config, f: impl FnOnce(&mut Value)) -> Self {
         let fake = FakeGoogle::start(fake).await.expect("fake google");
         let dir = tempfile::tempdir().expect("tempdir");
         let addr = free_addr();
         let cfg = dir.path().join("config.json");
-        let c = config(addr, &dir.path().join("data"), &fake);
+        let mut c = config(addr, &dir.path().join("data"), &fake);
+        f(&mut c);
         std::fs::write(&cfg, c.to_string()).expect("config");
         let daemon = tokio::task::block_in_place(|| Daemon::serve(syncd, &cfg, &[]));
         Self {
@@ -234,6 +242,64 @@ async fn b1(o: &Opts) -> Vec<Row> {
     )]
 }
 
+/// A client of `/v1/stream`.
+struct Sse {
+    resp: reqwest::Response,
+    buf: String,
+}
+
+impl Sse {
+    async fn open(n: &Node, t: &Tenant) -> Self {
+        let resp = n
+            .api
+            .http
+            .get(format!("{}/v1/stream", n.api.base))
+            .bearer_auth(&t.read)
+            // The client's 60 s cap covers the whole body; `past` bounds each event.
+            .timeout(Duration::from_secs(24 * 3600))
+            .send()
+            .await
+            .expect("stream");
+        assert_eq!(resp.status(), 200);
+        Self {
+            resp,
+            buf: String::new(),
+        }
+    }
+
+    /// The id (head seq) of the next event.
+    async fn next_id(&mut self) -> u64 {
+        loop {
+            if let Some(i) = self.buf.find("\n\n") {
+                let ev: String = self.buf.drain(..i + 2).collect();
+                if let Some(id) = ev.lines().find_map(|l| l.strip_prefix("id: ")) {
+                    return id.trim().parse().expect("seq");
+                }
+                continue;
+            }
+            let chunk = self
+                .resp
+                .chunk()
+                .await
+                .expect("stream")
+                .expect("stream open");
+            self.buf.push_str(&String::from_utf8_lossy(&chunk));
+        }
+    }
+
+    /// Waits for an event past `last`; returns its id.
+    async fn past(&mut self, last: u64) -> u64 {
+        loop {
+            let id = tokio::time::timeout(Duration::from_secs(120), self.next_id())
+                .await
+                .expect("no SSE event");
+            if id > last {
+                return id;
+            }
+        }
+    }
+}
+
 /// Notification → SSE event, `iters` times, at `latency` per fake request.
 async fn push_to_sse(o: &Opts, latency: Duration, iters: usize) -> Vec<Duration> {
     let fake = google::Config {
@@ -254,45 +320,15 @@ async fn push_to_sse(o: &Opts, latency: Duration, iters: usize) -> Vec<Duration>
     }
     // The delta right after the full read.
     tokio::time::sleep(COALESCE + latency * 2 + Duration::from_millis(200)).await;
-    let mut sse = n
-        .api
-        .http
-        .get(format!("{}/v1/stream", n.api.base))
-        .bearer_auth(&t.read)
-        .send()
-        .await
-        .expect("stream");
-    assert_eq!(sse.status(), 200);
-    let mut buf = String::new();
-    let mut next_id = async |sse: &mut reqwest::Response| -> u64 {
-        loop {
-            if let Some(i) = buf.find("\n\n") {
-                let ev: String = buf.drain(..i + 2).collect();
-                if let Some(id) = ev.lines().find_map(|l| l.strip_prefix("id: ")) {
-                    return id.trim().parse().expect("seq");
-                }
-                continue;
-            }
-            let chunk = sse.chunk().await.expect("stream").expect("stream open");
-            buf.push_str(&String::from_utf8_lossy(&chunk));
-        }
-    };
-    let mut last = next_id(&mut sse).await;
+    let mut sse = Sse::open(&n, &t).await;
+    let mut last = sse.next_id().await;
     let primary = n.fake.primary();
     let mut out = Vec::new();
     for i in 0..iters {
         let t0 = Instant::now();
         n.fake
             .put_event(&primary, event(&format!("push {i}"), epoch(), None));
-        loop {
-            let id = tokio::time::timeout(Duration::from_secs(30), next_id(&mut sse))
-                .await
-                .expect("no SSE event");
-            if id > last {
-                last = id;
-                break;
-            }
-        }
+        last = sse.past(last).await;
         out.push(t0.elapsed());
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -594,6 +630,256 @@ async fn b7(o: &Opts) -> Vec<Row> {
     }]
 }
 
+/// A node allowing private DAV servers, its `sync` section set to `sync`,
+/// and a fresh tenant on it.
+async fn dav_node(o: &Opts, sync: Value) -> (Node, Tenant) {
+    let n = Node::start_with(&o.syncd, google::Config::default(), |c| {
+        c["dav"] = json!({ "allow_private": true });
+        c["sync"] = sync;
+    })
+    .await;
+    let t = n.tenant().await;
+    (n, t)
+}
+
+async fn connect_dav(n: &Node, t: &Tenant, dav: &FakeDav) {
+    let body = json!({
+        "profile": "generic", "server_url": dav.server_url(),
+        "username": "alice", "password": "secret",
+    });
+    let (s, v) = n
+        .api
+        .call("POST", "/v1/accounts/dav", Some(&t.admin), Some(body))
+        .await
+        .expect("connect");
+    assert_eq!(s, 200, "connect: {v}");
+}
+
+fn vevent(uid: &str, start: jiff::Timestamp) -> String {
+    let fmt = |t: jiff::Timestamp| t.strftime("%Y%m%dT%H%M%SZ").to_string();
+    format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//bench//EN\r\nBEGIN:VEVENT\r\n\
+         UID:{uid}\r\nDTSTAMP:20260101T000000Z\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:{uid}\r\n\
+         END:VEVENT\r\nEND:VCALENDAR\r\n",
+        fmt(start),
+        fmt(start + SignedDuration::from_mins(45))
+    )
+}
+
+/// The engine's first-impression window (`musubi_engine::Config` defaults):
+/// 30 days back, 90 forward.
+fn window(now: jiff::Timestamp) -> (jiff::Timestamp, jiff::Timestamp) {
+    (
+        now - SignedDuration::from_hours(30 * 24),
+        now + SignedDuration::from_hours(90 * 24),
+    )
+}
+
+/// D1: from `POST /v1/accounts/dav` to every event of the window around
+/// today readable, 50 ms per fake request, events spread over ±2 years.
+/// Measured, not guarded.
+async fn d1(o: &Opts) -> Vec<Row> {
+    let events = if o.smoke { 500 } else { 2000 };
+    let dav = FakeDav::start(DavConfig {
+        latency: Duration::from_millis(50),
+        ..DavConfig::default()
+    })
+    .await
+    .expect("fake dav");
+    let cal = dav.add_collection(Kind::Calendar(&["VEVENT"]), "home", "Home");
+    let now = jiff::Timestamp::now();
+    let (from, to) = window(now);
+    let mut rng = Rng::new(11);
+    let mut in_window = 0;
+    for i in 0..events {
+        let start = now + SignedDuration::from_mins(rng.below(4 * 525_600) as i64 - 2 * 525_600);
+        in_window += usize::from(start >= from && start < to);
+        dav.put(
+            &cal,
+            &format!("d1-{i}.ics"),
+            &vevent(&format!("d1-{i}"), start),
+        );
+    }
+    let (n, t) = dav_node(o, json!({})).await;
+    let t0 = Instant::now();
+    connect_dav(&n, &t, &dav).await;
+    let path = format!("/v1/entities?from={from}&to={to}&limit=1000&ids_only=true");
+    let first_window = loop {
+        let v = n.get(&path, &t.read).await;
+        if v["occurrences"].as_array().map_or(0, Vec::len) >= in_window {
+            break t0.elapsed();
+        }
+        assert!(t0.elapsed() < Duration::from_secs(120), "no window: {v}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    n.full(&t, Duration::from_secs(600)).await;
+    let full = t0.elapsed();
+    let report = |what: String, d: Duration, budget: &str| Row {
+        id: "D1",
+        what,
+        value: ms(d),
+        budget: budget.into(),
+        ok: true,
+    };
+    vec![
+        report(
+            format!(
+                "connect → window of {in_window} events around today readable, {events} events, 50 ms fake"
+            ),
+            first_window,
+            "report (target < 2 s, not guarded)",
+        ),
+        report(
+            format!("connect → full read of {events} events"),
+            full,
+            "report",
+        ),
+    ]
+}
+
+/// D2: requests per hour of an unchanged collection at each interest level.
+/// Time runs `scale`× faster (every bound divided by it), so one hour is
+/// `3600 / scale` s. Guarded: active ≤ 240, normal ≤ 30, sleeping ≤ 6, and a
+/// cheap check is one request (every request in the hour is one).
+async fn d2(o: &Opts) -> Vec<Row> {
+    let scale = if o.smoke { 60.0 } else { 20.0 };
+    // The engine's defaults (plan 7.2).
+    let (active, normal, sleeping) = ((15.0, 60.0), (120.0, 900.0), (3600.0, 21_600.0));
+    let b = |(min, max): (f64, f64)| json!({ "min": min / scale, "max": max / scale });
+    // A tenant sleeps 7 days after its last interest; the run puts the
+    // sleeping bounds in place of the normal ones instead of waiting.
+    let levels = [
+        (
+            "active",
+            json!({ "active": b(active), "normal": b(normal) }),
+            240.0,
+        ),
+        ("normal", json!({ "normal": b(normal) }), 30.0),
+        ("sleeping", json!({ "normal": b(sleeping) }), 6.0),
+    ];
+    let runs = levels.map(|(level, sync, budget)| async move {
+        let dav = FakeDav::start(DavConfig::default()).await.expect("fake dav");
+        let cal = dav.add_collection(Kind::Calendar(&["VEVENT"]), "sync", "Sync token");
+        let book = dav.add_collection(Kind::AddressBook, "ctag", "Ctag only");
+        dav.quirk(&book, Quirk::NoSync);
+        let hashed = dav.add_collection(Kind::Calendar(&["VEVENT"]), "hashed", "No ETags");
+        for q in [Quirk::NoSync, Quirk::NoCtag, Quirk::NoEtag] {
+            dav.quirk(&hashed, q);
+        }
+        let now = jiff::Timestamp::now();
+        for i in 0..20 {
+            dav.put(&cal, &format!("e{i}.ics"), &vevent(&format!("e{i}"), now));
+            dav.put(&hashed, &format!("h{i}.ics"), &vevent(&format!("h{i}"), now));
+            let card = format!("BEGIN:VCARD\r\nVERSION:4.0\r\nUID:c{i}\r\nFN:C {i}\r\nEND:VCARD\r\n");
+            dav.put(&book, &format!("c{i}.vcf"), &card);
+        }
+        let (n, t) = dav_node(o, sync).await;
+        connect_dav(&n, &t, &dav).await;
+        n.full(&t, Duration::from_secs(60)).await;
+        let interest = || n.api.call("POST", "/v1/interest", Some(&t.read), None);
+        let mark = dav.requests().len();
+        let hour = Duration::from_secs_f64(3600.0 / scale);
+        let t0 = Instant::now();
+        while t0.elapsed() < hour {
+            if level == "active" {
+                let (s, _) = interest().await.expect("interest");
+                assert_eq!(s, 204);
+            }
+            tokio::time::sleep(Duration::from_secs(30).min(hour.saturating_sub(t0.elapsed()))).await;
+        }
+        let reqs = dav.requests()[mark..].to_vec();
+        let on = |col: &str| reqs.iter().filter(|r| r.path.starts_with(col)).collect::<Vec<_>>();
+        let cheap = |r: &&dav::Request| {
+            r.label() == "REPORT sync-collection"
+                || (r.method == "PROPFIND" && r.depth.as_deref() == Some("0"))
+        };
+        let mut rows = Vec::new();
+        for (col, what) in [(&cal, "sync token"), (&book, "ctag only")] {
+            let rs = on(col);
+            let all_cheap = rs.iter().all(cheap);
+            rows.push(Row {
+                id: "D2",
+                what: format!("{level}: requests per hour, unchanged collection ({what}), time ×{scale}"),
+                value: format!("{}{}", rs.len(), if all_cheap { ", each a cheap check" } else { ", NOT all cheap checks" }),
+                budget: format!("≤ {budget}, 1 request per check"),
+                ok: rs.len() as f64 <= budget && all_cheap,
+            });
+        }
+        if level == "active" {
+            let rs = on(&hashed);
+            rows.push(Row {
+                id: "D2",
+                what: format!("{level}: requests per hour, unchanged collection without ETags or ctag (polled at normal bounds), time ×{scale}"),
+                value: rs.len().to_string(),
+                budget: "report".into(),
+                ok: true,
+            });
+        }
+        rows
+    });
+    let [a, b, c] = runs;
+    let (a, b, c) = tokio::join!(a, b, c);
+    [a, b, c].into_iter().flatten().collect()
+}
+
+/// D4: a DAV change → its SSE event while the tenant is active, at random
+/// moments. Bounded by the level's interval plus one delta; the distribution
+/// is reported, not guarded. Smoke runs 60× faster bounds.
+async fn d4(o: &Opts) -> Vec<Row> {
+    let (scale, samples) = if o.smoke { (60.0, 5) } else { (1.0, 15) };
+    let (min, max) = (15.0 / scale, 60.0 / scale);
+    let dav = FakeDav::start(DavConfig {
+        latency: Duration::from_millis(50),
+        ..DavConfig::default()
+    })
+    .await
+    .expect("fake dav");
+    let cal = dav.add_collection(Kind::Calendar(&["VEVENT"]), "home", "Home");
+    let now = jiff::Timestamp::now();
+    dav.put(&cal, "seed.ics", &vevent("seed", now));
+    let (n, t) = dav_node(o, json!({ "active": { "min": min, "max": max } })).await;
+    connect_dav(&n, &t, &dav).await;
+    n.full(&t, Duration::from_secs(60)).await;
+    let n = Arc::new(n);
+    let keep = {
+        let (n, key) = (n.clone(), t.read.clone());
+        tokio::spawn(async move {
+            loop {
+                let _ = n.api.call("POST", "/v1/interest", Some(&key), None).await;
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        })
+    };
+    let mut sse = Sse::open(&n, &t).await;
+    let mut last = n.head(&t).await;
+    let mut rng = Rng::new(4);
+    let mut lat = Vec::new();
+    for i in 0..samples {
+        let gap = Duration::from_secs_f64(max * 1.5 * rng.below(1000) as f64 / 1000.0);
+        tokio::time::sleep(gap).await;
+        let t0 = Instant::now();
+        dav.put(
+            &cal,
+            &format!("d4-{i}.ics"),
+            &vevent(&format!("d4-{i}"), now),
+        );
+        last = sse.past(last).await;
+        lat.push(t0.elapsed());
+    }
+    keep.abort();
+    vec![Row {
+        id: "D4",
+        what: format!(
+            "DAV change → SSE, active level ({min}–{max} s), 50 ms fake, {samples} changes at random moments: p50 {}, p90 {}",
+            ms(pct(&lat, 0.5)),
+            ms(pct(&lat, 0.9))
+        ),
+        value: ms(pct(&lat, 1.0)),
+        budget: format!("report (bound: {max} s interval + one delta)"),
+        ok: true,
+    }]
+}
+
 fn opts() -> Opts {
     let mut o = Opts {
         smoke: false,
@@ -649,6 +935,15 @@ async fn main() {
     }
     if want("B7") {
         rows.extend(b7(&o).await);
+    }
+    if want("D1") {
+        rows.extend(d1(&o).await);
+    }
+    if want("D2") {
+        rows.extend(d2(&o).await);
+    }
+    if want("D4") {
+        rows.extend(d4(&o).await);
     }
     println!("| # | measured | value | budget | |\n| --- | --- | --- | --- | --- |");
     for r in &rows {

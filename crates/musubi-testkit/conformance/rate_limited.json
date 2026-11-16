@@ -1,0 +1,18 @@
+{
+  "name": "rate_limited",
+  "description": "429 and 503 with Retry-After delay the reads but lose nothing: the node waits and converges.",
+  "kinds": ["event", "task", "contact"],
+  "steps": [
+    { "op": "put", "ref": "e", "object": { "kind": "event", "title": "event", "day": 1 } },
+    { "op": "put", "ref": "t", "object": { "kind": "task", "title": "task" } },
+    { "op": "put", "ref": "c", "object": { "kind": "contact", "name": "Contact" } },
+    { "op": "connect" },
+    { "op": "inject", "fault": { "type": "rate_limited", "status": 429, "retry_after": 1 }, "times": 2 },
+    { "op": "expect", "converged": true, "timeout_ms": 30000 },
+    { "op": "inject", "fault": { "type": "rate_limited", "status": 503, "retry_after": 1 }, "times": 2 },
+    { "op": "put", "ref": "e2", "object": { "kind": "event", "title": "event after 503", "day": 2 } },
+    { "op": "put", "ref": "t2", "object": { "kind": "task", "title": "task after 503" } },
+    { "op": "put", "ref": "c2", "object": { "kind": "contact", "name": "Contact After 503" } },
+    { "op": "expect", "converged": true, "timeout_ms": 30000 }
+  ]
+}
