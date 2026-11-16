@@ -1,7 +1,7 @@
 //! Outgoing requests: where the password may go (plan, chapter 5.5).
 //!
 //! - Every target, the first one and each redirect, must be in the account's
-//!   allowed origins before anything is sent; a redirect elsewhere is never
+//!   allowed origins (or the profile's hosts) before anything is sent; a redirect elsewhere is never
 //!   followed, so its target gets no request at all.
 //! - The address a host name resolves to is checked by the client's own DNS
 //!   resolver and the connection goes to exactly those addresses (no second
@@ -20,6 +20,8 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, LOCATION, RETRY_AFTER};
 use reqwest::{Method, Url};
 use secrecy::{ExposeSecret, SecretString};
 
+use crate::profile::Profile;
+
 /// Redirects followed per request.
 const MAX_REDIRECTS: usize = 5;
 /// Response body cap.
@@ -31,6 +33,7 @@ pub(crate) struct Net {
     /// Only with `allow_private`: `http` to loopback.
     http: Option<reqwest::Client>,
     allow_private: bool,
+    pub profile: Profile,
 }
 
 /// Why a request was not answered.
@@ -80,16 +83,19 @@ pub(crate) fn origin(url: &Url) -> String {
     url.origin().ascii_serialization()
 }
 
-/// Whether `url` may carry the password: inside the allowed origins and
-/// without userinfo (which reqwest would send as a second `Authorization`).
-pub(crate) fn allowed(url: &Url, origins: &[String]) -> bool {
-    url.username().is_empty() && url.password().is_none() && origins.contains(&origin(url))
+/// Whether `url` may carry the password: inside the allowed origins or the
+/// profile's hosts, and without userinfo (which reqwest would send as a
+/// second `Authorization`).
+pub(crate) fn allowed(url: &Url, origins: &[String], profile: Profile) -> bool {
+    url.username().is_empty()
+        && url.password().is_none()
+        && (origins.contains(&origin(url)) || profile.host_allowed(url))
 }
 
 /// Whether a redirect from `from` to `to` may be followed: allowed, and never
 /// from `https` down to anything else.
-pub(crate) fn redirect_allowed(from: &Url, to: &Url, origins: &[String]) -> bool {
-    (from.scheme() != "https" || to.scheme() == "https") && allowed(to, origins)
+pub(crate) fn redirect_allowed(from: &Url, to: &Url, origins: &[String], profile: Profile) -> bool {
+    (from.scheme() != "https" || to.scheme() == "https") && allowed(to, origins, profile)
 }
 
 /// `url` without userinfo, for errors and logs.
@@ -184,7 +190,7 @@ fn client(guard: Guard) -> Result<reqwest::Client, reqwest::Error> {
 }
 
 impl Net {
-    pub(crate) fn new(allow_private: bool) -> Result<Self, reqwest::Error> {
+    pub(crate) fn new(allow_private: bool, profile: Profile) -> Result<Self, reqwest::Error> {
         // Err only means a provider is installed already, which is what we need.
         let _ = rustls::crypto::ring::default_provider().install_default();
         Ok(Self {
@@ -193,12 +199,13 @@ impl Net {
                 .then(|| client(Guard(is_loopback)))
                 .transpose()?,
             allow_private,
+            profile,
         })
     }
 
     /// The client for `url`, if its scheme, origin and IP literal pass.
     fn client_for(&self, url: &Url, origins: &[String]) -> Result<&reqwest::Client, NetError> {
-        if !allowed(url, origins) {
+        if !allowed(url, origins, self.profile) {
             return Err(NetError::CrossOrigin(scrub(url.clone())));
         }
         let host = url.host_str().unwrap_or_default().to_owned();
@@ -244,6 +251,11 @@ impl<'a> Session<'a> {
         })
     }
 
+    /// Whether `url` may carry the password ([`allowed`]).
+    pub(crate) fn allowed(&self, url: &Url) -> bool {
+        allowed(url, self.origins, self.net.profile)
+    }
+
     /// Sends one request, following redirects by the rules above.
     pub(crate) async fn send(
         &self,
@@ -278,7 +290,7 @@ impl<'a> Session<'a> {
                     .and_then(|l| url.join(l).ok());
                 // A redirect without a usable Location is just an answer.
                 if let Some(next) = next {
-                    if !redirect_allowed(&url, &next, self.origins) {
+                    if !redirect_allowed(&url, &next, self.origins, self.net.profile) {
                         return Err(NetError::CrossOrigin(scrub(next)));
                     }
                     if self.mode == Mode::Run && matches!(status, 301 | 308) {
@@ -452,13 +464,24 @@ mod tests {
     fn redirects_stay_inside_and_never_downgrade() {
         let u = |s: &str| Url::parse(s).unwrap();
         let origins = vec!["https://h".to_string(), "http://h".to_string()];
-        let ok = |from: &str, to: &str| redirect_allowed(&u(from), &u(to), &origins);
+        let ok =
+            |from: &str, to: &str| redirect_allowed(&u(from), &u(to), &origins, Profile::Generic);
         assert!(ok("https://h/a", "https://h/b"));
         assert!(ok("http://h/a", "https://h/b"));
         assert!(!ok("https://h/a", "http://h/b"), "https to http");
         assert!(!ok("https://h/a", "https://h:8443/b"), "port change");
         assert!(!ok("https://h/a", "https://u:p@h/b"), "userinfo");
         assert!(!ok("https://h/a", "https://evil/b"));
+        // iCloud: the partition hosts too, still never downgraded.
+        let icloud =
+            |from: &str, to: &str| redirect_allowed(&u(from), &u(to), &origins, Profile::Icloud);
+        assert!(icloud("https://h/a", "https://p52-caldav.icloud.com:443/b"));
+        assert!(!icloud("https://h/a", "http://p52-caldav.icloud.com/b"));
+        assert!(!icloud(
+            "https://h/a",
+            "https://u:p@p52-caldav.icloud.com/b"
+        ));
+        assert!(!icloud("https://h/a", "https://evil/b"));
     }
 
     #[test]
@@ -474,8 +497,8 @@ mod tests {
 
     #[test]
     fn targets_are_checked_before_sending() {
-        let strict = Net::new(false).unwrap();
-        let lax = Net::new(true).unwrap();
+        let strict = Net::new(false, Profile::Generic).unwrap();
+        let lax = Net::new(true, Profile::Generic).unwrap();
         let all: Vec<String> = [
             "https://10.0.0.1",
             "https://127.0.0.1:8443",

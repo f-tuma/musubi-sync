@@ -9,7 +9,7 @@ use musubi_model::{
 };
 use reqwest::Url;
 
-use crate::net::{Mode, NetError, Reply, Session, allowed, origin, scrub};
+use crate::net::{Mode, NetError, Reply, Session, origin, scrub};
 use crate::state::{Col, Level, Principals, State, normalise};
 use crate::xml::{self, CALDAV, CARDDAV, CS, DAV, Multistatus, pct_decode};
 use crate::{ConnectError, DavProvider};
@@ -31,7 +31,7 @@ pub(crate) async fn run(p: &DavProvider, cx: &AccountCx) -> Result<Discovery, Co
         .endpoint
         .as_ref()
         .ok_or_else(|| ConnectError::InvalidConfig("no endpoint".into()))?;
-    let mut st = State::from_endpoint(endpoint).map_err(ConnectError::InvalidConfig)?;
+    let mut st = State::load(endpoint, p.net.profile).map_err(ConnectError::InvalidConfig)?;
     let origins = st.origins.clone();
     let s = Session::new(&p.net, cx, &origins, Mode::Discover)?;
     let recorded = p.descents().get(&cx.account).cloned().unwrap_or_default();
@@ -120,7 +120,7 @@ fn inside(s: &Session<'_>, base: &Url, href: &str) -> Result<Url, ConnectError> 
     let url = base
         .join(href)
         .map_err(|e| ConnectError::NotDav(format!("bad href {href}: {e}")))?;
-    if allowed(&url, s.origins) {
+    if s.allowed(&url) {
         Ok(url)
     } else {
         Err(ConnectError::CrossOriginRedirect(scrub(url).to_string()))
@@ -212,7 +212,7 @@ async fn collections(
         if same_path(&key, &home_key) {
             continue;
         }
-        if !allowed(&url, s.origins) {
+        if !s.allowed(&url) {
             let url = scrub(url);
             tracing::warn!(%url, "DAV collection outside the allowed origins; skipped");
             continue;
@@ -236,7 +236,7 @@ async fn collections(
                     };
                     if comp("VEVENT") {
                         EntityKind::Event
-                    } else if comp("VTODO") {
+                    } else if comp("VTODO") && s.net.profile.tasks() {
                         EntityKind::Task
                     } else {
                         continue;

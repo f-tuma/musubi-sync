@@ -124,7 +124,7 @@ Fotky se v kanonickém tvaru neukládají. Vložená fotka zůstane v surové vr
 
 ### 3.2 Druh objektu a kolekce
 
-CalDAV kalendář může míchat VEVENT a VTODO (Radicale to dovolí; iCloud ne **(neověřeno)**). Adresář míchá kontakty a skupiny. Druh proto nese objekt, ne kolekce:
+CalDAV kalendář může míchat VEVENT a VTODO (Radicale to dovolí; iCloud má zvlášť kolekce VEVENT a VTODO, potvrzeno T11). Adresář míchá kontakty a skupiny. Druh proto nese objekt, ne kolekce:
 
 - `RemoteObject` dostane `kind: EntityKind`. Adaptér ho vyplní: Google podle kolekce, DAV přes `musubi_ical::kind_of`. Objekt bez podporovaného druhu (VJOURNAL, VFREEBUSY) adaptér přeskočí a zapíše do logu na úrovni `debug`.
 - `RemoteCollection.kind` zůstává jako hlavní druh kolekce pro výpis kolekcí: kalendář je `Event`, kalendář jen s VTODO je `Task`, seznam úkolů Googlu je `Task`, adresář je `Contact`.
@@ -154,7 +154,7 @@ DAV vrací seznam změn (adresa a ETag) bez těla. Těla stahuje `multiget` a st
 - Engine zjistí uložené validátory přes existující `TenantStore::items_by_remote`.
 - Stejný validátor: klíč jde do `PageWrite::unchanged` (jako dnes u úplného čtení).
 - Jiný nebo chybějící validátor, nebo nový klíč: engine je po dávkách `limits.max_batch` stáhne přes `Provider::fetch` a zapíše je jako `upserts` téže stránky, v jedné transakci s kurzorem stránky.
-- `limits.max_batch` znamená jen „nejvíc odkazů v jednom volání `Provider::fetch`" (dokumentace pole to řekne). Jak adaptér volání dál dělí, je jeho věc: Google na dávky HTTP batch, DAV na jeden `multiget`. `None` znamená, že engine použije 100. Hodnoty: Google 1000 (beze změny), obecný DAV 50, iCloud 20 **(neověřeno)**.
+- `limits.max_batch` znamená jen „nejvíc odkazů v jednom volání `Provider::fetch`" (dokumentace pole to řekne). Jak adaptér volání dál dělí, je jeho věc: Google na dávky HTTP batch, DAV na jeden `multiget`. `None` znamená, že engine použije 100. Hodnoty: Google 1000 (beze změny), obecný DAV 50, iCloud 20 **(neověřeno; T11 bez dat)**.
 - Objekt, který `fetch` nevrátí (smazaný mezi výpisem a stažením), se v té stránce nezapíše. U úplného čtení ho pak smaže nepřítomnost; u delty ho přinese další `sync-collection` jako odebraný.
 - Kurzor stránky se uloží až po stažení všech jejích těl, takže pád mezi výpisem a stažením stránku zopakuje.
 
@@ -324,7 +324,7 @@ Pravidla:
 - Kolekce je `calendar` nebo `addressbook` z `resourcetype`. Schedule inbox a outbox, notifikace a odběry (`CS:subscribed`) se přeskočí.
 - Druh kalendáře podle `supported-calendar-component-set`: obsahuje VEVENT → `Event`; jen VTODO → `Task`; nic z toho → přeskočit. Chybí-li vlastnost, `Event` (RFC 4791: chybějící = všechny komponenty).
 - Delta kolekce: `sync-collection` v `supported-report-set` → `SyncToken`; jinak `getctag` → `CtagEtag`; jinak `None` (každé čtení je výpis ETagů).
-- Přístup z `current-user-privilege-set`: `write-content` nebo `write` → `Writer`, jinak `Reader`. Kolekce bez vlastnosti pod vlastním home setem je `Owner` (iCloud oprávnění nehlásí, kapitola 2.6 návrhu).
+- Přístup z `current-user-privilege-set`: `write-content` nebo `write` → `Writer`, jinak `Reader`. Kolekce bez vlastnosti pod vlastním home setem je `Owner` (kapitola 2.6 návrhu; iCloud vlastnost podle T11 hlásí).
 - Klíč kolekce (`RemoteKey`) je absolutní cesta kolekce. Klíč objektu je absolutní cesta objektu. Host do klíče nepatří; je v `Endpoint`.
 - Subjekt účtu je normalizované URL principalu CalDAV; účet bez CalDAV (jen `carddav_url`) má subjekt z principalu CardDAV. Dva účty se stejným subjektem téhož tenanta jsou stejný účet (`UNIQUE(tenant, provider, subject)`).
 - iCloud a obecný DAV s oddělenými `caldav_url` a `carddav_url` mají dva principaly na dvou hostech. Oba (normalizované) se uloží do `Endpoint.state` jako `principals: { caldav?, carddav? }`; subjekt je jen jeden z nich, ale opětovné připojení kontroluje oba (kapitola 5.5).
@@ -338,7 +338,7 @@ Pravidla:
 | `Full` | `sync-collection` s prázdným tokenem, jen `getetag` → `stubs`, `Pass::Full`; poslední stránka nese nový token | `getctag` hloubka 0, pak `PROPFIND` hloubka 1 s `getetag` → `stubs`, `Pass::Full`; kurzor `Ctag` nese ctag přečtený **před** výpisem, takže změna během výpisu se ukáže při další kontrole | `PROPFIND` hloubka 1 s `getetag` → `stubs`, `Pass::Full` |
 | delta s kurzorem | `sync-collection` s tokenem → `stubs` změněných a `removals` (odpověď se stavem `404`), `Pass::Delta` | `getctag` hloubka 0: stejný → jedna prázdná poslední stránka (levná kontrola, jeden požadavek); jiný → výpis ETagů jako u `Full` | výpis ETagů jako u `Full` |
 
-- Stránkování: Radicale vrací celý výsledek najednou, iCloud může výsledek zkrátit **(neověřeno)**. Zkrácení podle RFC 6578 kapitola 3.6 není stav HTTP: odpověď je `207 Multi-Status` a uvnitř ní je `D:response` pro adresu kolekce se stavem `507` (a případně `D:number-of-matches-within-limits`). Adaptér dělí výsledek na stránky `max_page_size`. Zkrácená odpověď znamená stránku, která není poslední, a pokračování s tokenem z téže odpovědi.
+- Stránkování: Radicale vrací celý výsledek najednou, iCloud může výsledek zkrátit **(neověřeno; T11 `507` neviděla)**. Zkrácení podle RFC 6578 kapitola 3.6 není stav HTTP: odpověď je `207 Multi-Status` a uvnitř ní je `D:response` pro adresu kolekce se stavem `507` (a případně `D:number-of-matches-within-limits`). Adaptér dělí výsledek na stránky `max_page_size`. Zkrácená odpověď znamená stránku, která není poslední, a pokračování s tokenem z téže odpovědi.
 - Rozpracované úplné čtení po pádu začne výpis znovu. Už uložené objekty se vrátí jako `stubs` se stejným validátorem, takže stojí jen výpis, ne nové stažení.
 - `multiget`: `C:calendar-multiget` nebo `CR:addressbook-multiget`; jedno volání `fetch` je jeden `multiget` o nejvýš `limits.max_batch` adresách (kapitola 3.4; kapitola 2.6 návrhu říká „v desítkách").
 - Okno prvního dojmu je jen u kalendářů s `Event`. Úkoly a kontakty začínají rovnou `Full`.
@@ -370,11 +370,11 @@ Profil je data v `musubi-dav::profile`, ne větvení kódu:
 | povolené originy (kam smí jít heslo) | originy `server_url` (nebo `caldav_url` a `carddav_url`) a originy, které uživatel při připojení výslovně potvrdil (kapitola 5.5); pevné od připojení | `^(caldav\|p[0-9]+-caldav)\.icloud\.com$`, `^(contacts\|p[0-9]+-contacts)\.icloud\.com$`; jen `https`, port 443 (výslovný `:443` i bez portu) |
 | objekt na jiném originu než jeho kolekce | odmítnout | odmítnout (vzor `isIcloudPersonalContentDestination` v Musubi) |
 | souběžnost na účet | 2 | 2 (kapitola 2.6 návrhu, I5) |
-| `multiget` dávka | 50 | 20 **(neověřeno)** |
-| oprávnění kolekce | z `current-user-privilege-set` | chybí: vlastní home set = `Owner` |
+| `multiget` dávka | 50 | 20 **(neověřeno; T11 bez dat)** |
+| oprávnění kolekce | z `current-user-privilege-set` | z `current-user-privilege-set` (T11); kalendáře a adresář `write` → `Writer` |
 | VTODO | ano | kolekce jen s VTODO se přeskočí (úkoly iCloudu nejsou ve v1, kapitola 2.6 návrhu) |
 | vCard | 3.0 i 4.0 | 3.0 |
-| `sync-collection` u CardDAV | z `supported-report-set` | z `supported-report-set`; T11 ověří **(neověřeno)** |
+| `sync-collection` u CardDAV | z `supported-report-set` | z `supported-report-set`; potvrzeno T11. Neplatný token: CalDAV `403`, CardDAV `412` (oba `D:valid-sync-token`) → `CursorExpired`. První čtení vrací i kolekci samotnou se `200` (CalDAV s lomítkem, CardDAV bez); ta není objekt. `addressbook-multiget` s adresou kolekce selže celý `400` |
 | `503` dávky | běžné zpomalení | běžné zpomalení; I5 |
 
 Heslo pro aplikace: iCloud přijme Basic jen s heslem pro aplikace (účet s 2FA). Změna hesla Apple ID všechna hesla pro aplikace zneplatní (I6). `401` proto znamená výzvu uživateli, ne opakování. Profil přidá do chyby účtu text „vytvořte nové heslo pro aplikace".
@@ -390,7 +390,7 @@ Odchylky z I2 (iCloud ignoruje `SCHEDULE-AGENT=CLIENT`, `412` na zastaralý `If-
 **Heslo jde jen na povolené originy.** Basic posílá heslo v každém požadavku, takže každé přesměrování je místo, kde může uniknout:
 
 - Povolené originy (schéma, host, port) se určí při připojení a uloží do `Endpoint`: originy zadaných adres a originy z `allow_origins`. U `icloud` platí pevné vzory z profilu. Později se už nemění, jen novým připojením.
-- Originy i URL principalu se porovnávají **normalizované**: schéma a host malými písmeny, výchozí port schématu (443 pro `https`, 80 pro `http`) je totéž jako žádný port. Home sety iCloudu často nesou výslovné `:443` (`https://p52-caldav.icloud.com:443/…`) **(neověřeno, T11)**; bez normalizace by je ochrana odmítla a subjekt by se lišil podle toho, kudy zjišťování přišlo.
+- Originy i URL principalu se porovnávají **normalizované**: schéma a host malými písmeny, výchozí port schématu (443 pro `https`, 80 pro `http`) je totéž jako žádný port. Home sety iCloudu často nesou výslovné `:443` (`https://p52-caldav.icloud.com:443/…`), potvrzeno T11; bez normalizace by je ochrana odmítla a subjekt by se lišil podle toho, kudy zjišťování přišlo.
 - HTTP klient přesměrování nesleduje sám. Adaptér každé přesměrování zkontroluje: cíl v povolených originech → pokračuje s hlavičkou `Authorization`; cíl mimo ně → požadavek se nepošle vůbec (ani bez hesla). Při připojení to je `400 cross_origin_redirect` s cílovou adresou, aby ji uživatel mohl potvrdit přes `allow_origins` a zkusit znovu. Za běhu je to `ReauthRequired` s důvodem `endpoint_moved`.
 - `http` jen pro adresy, které se přeloží na loopback, a jen se zapnutou volbou `dav.allow_private` (testy s Radicale). Jinde se heslo nešifrovaně neposílá nikdy; samostatná volba `dav.allow_http` neexistuje.
 
@@ -508,7 +508,7 @@ Scénáře (každý pro všechny druhy, které cíl podporuje):
 - přesměrování na partition host a mimo něj; `404` kolekce;
 - `401`;
 - slabý a chybějící ETag; ETag změněný mezi výpisem a `multiget`; objekt smazaný mezi nimi;
-- režim `icloud`: partition hosty, chybějící `current-user-privilege-set`, vCard 3.0.
+- režim `icloud` podle T11: partition hosty s `:443`, `current-user-privilege-set` z T11, `supported-address-data` `404`, vCard 3.0, kolekce v `sync-collection`, `412` u CardDAV, `400` u `addressbook-multiget` s kolekcí.
 
 Počítadlo požadavků po metodách, aby testy ověřily levnou kontrolu (jeden `PROPFIND`) a že se stahuje jen změněné.
 
@@ -783,7 +783,7 @@ Uživatel zatím nerozhodl. U otázek 2, 5 a 6 plán počítá s doporučenou v�
 1. **Testovací účet iCloud pro T11 a K10.** Dodá uživatel: Apple ID s 2FA a heslem pro aplikace, s kalendářem, adresářem a pár kontakty a skupinou. Bez něj K7 stojí jen na sekundárních zdrojích a K11 zmrazí v0 s výhradou, že profil `icloud` je ověřený jen proti falešnému DAV (kapitola 3.8). Zmrazení se kvůli účtu nezastaví, protože profil je data v `musubi-dav` a jeho oprava kontrakt nemění.
 2. **Scope pro zápis už teď?** Fáze 3 bude potřebovat `tasks` a `contacts` (bez `.readonly`) a `calendar.events`. Žádat je teď ušetří druhý souhlas, ale fáze 2 by držela víc oprávnění, než potřebuje (kapitola 7 návrhu: minimální scope). **Doporučená výchozí volba:** teď jen `.readonly`, druhý souhlas až ve fázi 3 (kapitola 6.1).
 3. **Stav a tvar chyby `EXPIRED_SYNC_TOKEN`** u People (`400` nebo `410`) **(neověřeno, T10)**.
-4. **iCloud a `sync-collection` u CardDAV, zkracování `507`, velikost dávky `multiget`** **(neověřeno, T11)**.
+4. **iCloud: zkracování `507`, velikost dávky `multiget`, `PUT` s `If-Match`, delta po změně** **(neověřeno; T11 bez dat)**. `sync-collection` u CardDAV a `:443` potvrdila T11.
 5. **Rozsah úkolů podle termínu.** Má `/v1/entities?kind=task` umět okno podle `due`? Bez indexu výskytů jde jen o filtr nad `list_entities`; opakované úkoly by potřebovaly rozbalení. **Doporučená výchozí volba:** žádné okno, úkoly se stránkují po `id` (kapitola 4.2).
 6. **Skryté úkoly Googlu** (`hidden: true`, vyčištěné dokončené). **Doporučená výchozí volba:** synchronizovat je jako živé položky s příznakem `CalendarTask.hidden` a nechat skrývání na klientovi (kapitoly 3.1 a 6.2). Pokud T10 ukáže, že je Google po čase maže, příznak to nemění.
 7. **Meze adaptivního dotazování.** Výchozí čísla v kapitole 7.2 jsou odhad; kvóta Tasks API (výchozí denní limit projektu) **(neověřeno)** může vynutit delší `min` aktivní úrovně.

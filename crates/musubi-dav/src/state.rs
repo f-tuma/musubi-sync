@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ConnectError;
 use crate::net::origin;
+use crate::profile::Profile;
 use crate::xml::{pct_decode, pct_encode};
 
 /// How an account is connected: the input of chapter 5.5 without the
@@ -29,10 +30,26 @@ pub struct DavSetup {
 }
 
 impl DavSetup {
-    /// The endpoint a first [`crate::DavProvider::connect`] starts from:
-    /// the entries and the allowed origins, fixed from now on. A new connect
-    /// also drops every delta descent (plan, chapter 5.3).
+    /// iCloud's fixed entries (plan, chapter 5.4); the partition hosts come
+    /// from the profile's host pattern.
+    pub fn icloud() -> DavSetup {
+        DavSetup {
+            caldav_url: Some("https://caldav.icloud.com/".into()),
+            carddav_url: Some("https://contacts.icloud.com/".into()),
+            ..DavSetup::default()
+        }
+    }
+
+    /// The endpoint a first [`crate::DavProvider::connect`] of a `generic`
+    /// instance starts from, see [`DavSetup::endpoint_for`].
     pub fn endpoint(&self) -> Result<Endpoint, ConnectError> {
+        self.endpoint_for(Profile::Generic)
+    }
+
+    /// The endpoint a first connect of a `profile` instance starts from: the
+    /// entries and the allowed origins, fixed from now on. A new connect
+    /// also drops every delta descent (plan, chapter 5.3).
+    pub fn endpoint_for(&self, profile: Profile) -> Result<Endpoint, ConnectError> {
         let parse = |u: &Option<String>| -> Result<Option<Url>, ConnectError> {
             u.as_deref()
                 .map(|u| {
@@ -71,7 +88,7 @@ impl DavSetup {
         origins.dedup();
         let state = State {
             v: 1,
-            profile: "generic".into(),
+            profile: profile.name().into(),
             caldav_url: caldav.as_ref().map(Url::to_string),
             carddav_url: carddav.as_ref().map(Url::to_string),
             origins,
@@ -193,18 +210,32 @@ pub(crate) struct State {
 impl State {
     pub fn from_endpoint(e: &Endpoint) -> Result<State, String> {
         let s: State = serde_json::from_value(e.state.clone()).map_err(|e| e.to_string())?;
-        if s.v != 1 || s.profile != "generic" {
+        if s.v != 1 || Profile::from_name(&s.profile).is_none() {
             return Err(format!("unsupported endpoint state v{} {}", s.v, s.profile));
         }
         Ok(s)
     }
 
-    pub fn of(cx: &musubi_model::AccountCx) -> Result<State, SyncError> {
+    /// An endpoint of the instance's own profile: its origins and rules
+    /// belong together.
+    pub fn load(e: &Endpoint, profile: Profile) -> Result<State, String> {
+        let s = State::from_endpoint(e)?;
+        if s.profile != profile.name() {
+            return Err(format!(
+                "endpoint of profile {} on a {} instance",
+                s.profile,
+                profile.name()
+            ));
+        }
+        Ok(s)
+    }
+
+    pub fn of(cx: &musubi_model::AccountCx, profile: Profile) -> Result<State, SyncError> {
         let e = cx
             .endpoint
             .as_ref()
             .ok_or_else(|| SyncError::Permanent("DAV account without endpoint".into()))?;
-        State::from_endpoint(e).map_err(|e| SyncError::Permanent(e.into()))
+        State::load(e, profile).map_err(|e| SyncError::Permanent(e.into()))
     }
 
     pub fn to_json(&self) -> serde_json::Value {

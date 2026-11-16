@@ -1154,9 +1154,18 @@ async fn icloud_profile_splits_entries_and_puts_homes_on_partition_hosts() {
             .kid(NS_CS, "notification")
             .is_some()
     );
-    assert!(
-        missing(resp(&ms, &cal), NS_DAV, "current-user-privilege-set"),
-        "iCloud leaves privileges out"
+    let privs = |r: &El| -> Vec<String> {
+        found(r, NS_DAV, "current-user-privilege-set")
+            .expect("privileges")
+            .all(NS_DAV, "privilege")
+            .map(|p| p.kids[0].name.clone())
+            .collect()
+    };
+    // T11's sets.
+    assert!(privs(resp(&ms, &cal)).contains(&"read-free-busy".to_owned()));
+    assert_eq!(
+        privs(n),
+        ["read", "unbind", "read-current-user-privilege-set"]
     );
 
     let ms = pf(
@@ -1164,15 +1173,61 @@ async fn icloud_profile_splits_entries_and_puts_homes_on_partition_hosts() {
         Host::CarddavPartition,
         "/addressbooks/alice/",
         "1",
-        "<CR:supported-address-data/>",
+        "<CR:supported-address-data/><D:current-user-privilege-set/>",
     )
     .await;
-    let types = found(resp(&ms, &book), NS_CARDDAV, "supported-address-data")
-        .expect("data")
-        .all(NS_CARDDAV, "address-data-type")
-        .count();
-    assert_eq!(types, 1, "vCard 3.0 only");
+    let b = resp(&ms, &book);
+    assert!(missing(b, NS_CARDDAV, "supported-address-data"));
+    assert_eq!(
+        privs(b),
+        [
+            "read",
+            "write",
+            "bind",
+            "read-acl",
+            "read-current-user-privilege-set"
+        ]
+    );
     dav.put(&book, "a.vcf", &vcard("3.0", "A"));
+}
+
+#[tokio::test]
+async fn icloud_profile_sync_collection_and_multiget_follow_t11() {
+    let dav = start(Profile::Icloud, false).await;
+    let book = dav.add_collection(Kind::AddressBook, "card", "Contacts");
+    let cal = dav.add_collection(Kind::Calendar(&["VEVENT"]), "home", "Home");
+    dav.put(&book, "a.vcf", &vcard("3.0", "A"));
+    let a = format!("{book}a.vcf");
+
+    // An initial read lists the collection itself: CardDAV without the slash.
+    let ms = report(&dav, &book, &sync_collection("", None)).await.xml();
+    assert_eq!(hrefs(&ms), [book.trim_end_matches('/'), a.as_str()]);
+    assert!(found(resp(&ms, book.trim_end_matches('/')), NS_DAV, "getetag").is_some());
+    let ms = report(&dav, &cal, &sync_collection("", None)).await.xml();
+    assert_eq!(hrefs(&ms), std::slice::from_ref(&cal));
+    // A delta does not.
+    let ms = report(&dav, &cal, &sync_collection(&dav.sync_token(&cal), None))
+        .await
+        .xml();
+    assert!(hrefs(&ms).is_empty());
+
+    // A bad token: 412 on CardDAV, 403 on CalDAV.
+    for (col, code) in [(&book, 412), (&cal, 403)] {
+        let r = report(&dav, col, &sync_collection("garbage", None)).await;
+        assert_eq!(r.status, code, "{col}");
+        assert_eq!(error_condition(&r), "valid-sync-token");
+    }
+
+    // A multiget naming the address book fails whole.
+    let mg = |hrefs: &[&str]| multiget("CR:addressbook-multiget", hrefs, "CR:address-data");
+    assert_eq!(report(&dav, &book, &mg(&[&a])).await.status, 207);
+    for col in [book.as_str(), book.trim_end_matches('/')] {
+        assert_eq!(
+            report(&dav, &book, &mg(&[col, &a])).await.status,
+            400,
+            "{col}"
+        );
+    }
 }
 
 #[tokio::test]

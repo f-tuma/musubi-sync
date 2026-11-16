@@ -107,9 +107,14 @@ impl Default for Config {
 pub enum Profile {
     /// A standards-following server (Radicale, Baïkal, Nextcloud).
     Generic,
-    /// iCloud: CalDAV and CardDAV on separate entry hosts, home sets on the
-    /// partition hosts, no `D:current-user-privilege-set`, vCard 3.0 only, a
-    /// notifications collection in the calendar home.
+    /// iCloud as T11 measured it: CalDAV and CardDAV on separate entry
+    /// hosts, home sets as absolute URLs on the partition hosts, T11's
+    /// privilege sets, no `CR:supported-address-data` (`404`), vCard 3.0
+    /// only, a notifications collection in the calendar home. A bad
+    /// `sync-collection` token is `412` on address books (`403` on
+    /// calendars); an initial `sync-collection` lists the collection itself
+    /// (`200`, address books without the trailing slash); an
+    /// `addressbook-multiget` naming the collection fails whole with `400`.
     Icloud,
 }
 
@@ -168,7 +173,7 @@ pub enum Quirk {
     WeakEtag,
     /// No `D:getetag` (a `404` propstat) and no `ETag` header.
     NoEtag,
-    /// `D:current-user-privilege-set` has only `D:read` (profile `generic`).
+    /// `D:current-user-privilege-set` has only `D:read`.
     ReadOnly,
 }
 
@@ -1120,9 +1125,32 @@ fn prop(cx: &Cx<'_>, s: &State, res: &Res, ns: &str, name: &str) -> Option<Strin
                 s.version
             )
         }
-        (NS_DAV, "current-user-privilege-set") if !icloud && obj.is_none() => {
-            let privs: &[&str] = if col?.has(Quirk::ReadOnly) {
+        (NS_DAV, "current-user-privilege-set") if obj.is_none() => {
+            let c = col?;
+            let privs: &[&str] = if c.has(Quirk::ReadOnly) {
                 &["read", "read-current-user-privilege-set"]
+            } else if icloud {
+                // T11's sets.
+                match c.kind {
+                    Kind::AddressBook => &[
+                        "read",
+                        "write",
+                        "bind",
+                        "read-acl",
+                        "read-current-user-privilege-set",
+                    ],
+                    Kind::Notifications => &["read", "unbind", "read-current-user-privilege-set"],
+                    _ => &[
+                        "read",
+                        "write",
+                        "write-content",
+                        "write-properties",
+                        "bind",
+                        "unbind",
+                        "read-free-busy",
+                        "read-current-user-privilege-set",
+                    ],
+                }
             } else {
                 &[
                     "read",
@@ -1140,15 +1168,15 @@ fn prop(cx: &Cx<'_>, s: &State, res: &Res, ns: &str, name: &str) -> Option<Strin
             }
             v + "</D:current-user-privilege-set>"
         }
+        // T11: iCloud answers 404 for it.
         (NS_CARDDAV, "supported-address-data")
-            if obj.is_none() && col?.kind == Kind::AddressBook =>
+            if !icloud && obj.is_none() && col?.kind == Kind::AddressBook =>
         {
-            let mut v = String::from("<CR:supported-address-data>");
-            v.push_str("<CR:address-data-type content-type=\"text/vcard\" version=\"3.0\"/>");
-            if !icloud {
-                v.push_str("<CR:address-data-type content-type=\"text/vcard\" version=\"4.0\"/>");
-            }
-            v + "</CR:supported-address-data>"
+            "<CR:supported-address-data>\
+             <CR:address-data-type content-type=\"text/vcard\" version=\"3.0\"/>\
+             <CR:address-data-type content-type=\"text/vcard\" version=\"4.0\"/>\
+             </CR:supported-address-data>"
+                .into()
         }
         (NS_DAV, "getetag") => format!("<D:getetag>{}</D:getetag>", esc(&col?.etag(obj?)?)),
         (NS_DAV, "getcontenttype") => {
@@ -1296,6 +1324,10 @@ fn sync_collection(
     truncate: Option<usize>,
 ) -> Response {
     let c = &s.collections[col];
+    // T11: iCloud answers a bad token with 412 on CardDAV, and lists the
+    // collection itself in an initial read (CardDAV without the slash).
+    let icloud = cx.inner.config.profile == Profile::Icloud;
+    let card = c.kind == Kind::AddressBook;
     let token = doc.kid(NS_DAV, "sync-token").map_or("", |t| t.text.trim());
     let since = if token.is_empty() {
         None
@@ -1306,6 +1338,9 @@ fn sync_collection(
             .and_then(|n| n.parse::<u64>().ok());
         match n {
             Some(n) if n >= c.min_sync && n <= s.version => Some(n),
+            _ if icloud && card => {
+                return dav_error(StatusCode::PRECONDITION_FAILED, "valid-sync-token");
+            }
             _ => return dav_error(StatusCode::FORBIDDEN, "valid-sync-token"),
         }
     };
@@ -1339,6 +1374,11 @@ fn sync_collection(
         s.version
     };
     let mut out = multistatus_open();
+    if icloud && since.is_none() {
+        let href = if card { col.trim_end_matches('/') } else { col };
+        let etag = format!("<D:getetag>\"ctag-{}\"</D:getetag>", c.changed);
+        response(&mut out, href, &etag, "");
+    }
     for (name, o) in changed {
         let href = format!("{col}{name}");
         if o.body.is_some() {
@@ -1414,6 +1454,15 @@ fn multiget(
         .filter(|k| k.is(NS_DAV, "href"))
         .map(|k| href_path(k.text.trim()))
         .collect();
+    // T11: iCloud fails a whole addressbook-multiget that names the collection.
+    if cx.inner.config.profile == Profile::Icloud
+        && s.collections[col].kind == Kind::AddressBook
+        && hrefs
+            .iter()
+            .any(|h| h.trim_end_matches('/') == col.trim_end_matches('/'))
+    {
+        return status(StatusCode::BAD_REQUEST);
+    }
     for h in &hrefs {
         let (c, name) = split_object(h);
         if c != col {

@@ -13,7 +13,7 @@ use reqwest::Url;
 use crate::net::{Mode, Reply, Session, origin};
 use crate::state::{Col, CursorState, Level, State};
 use crate::xml::{self, CALDAV, CARDDAV, CS, DAV, Multistatus, pct_decode};
-use crate::{DavProvider, MAX_BATCH, MAX_PAGE};
+use crate::{DavProvider, MAX_PAGE};
 
 /// One request's worth of work; each yields one or more pages.
 enum Step {
@@ -65,7 +65,7 @@ pub(crate) fn changes<'a>(
                     return Some((Ok(page), (queue, step, target)));
                 }
                 let next = match step.take()? {
-                    Step::Begin(cursor, start) => match begin(cx, col, cursor, start) {
+                    Step::Begin(cursor, start) => match begin(p, cx, col, cursor, start) {
                         Ok((t, first)) => {
                             target = Some(t);
                             Ok((Vec::new(), Some(first)))
@@ -88,12 +88,13 @@ pub(crate) fn changes<'a>(
 
 /// Picks the first request by start, cursor and the collection's level.
 fn begin(
+    p: &DavProvider,
     cx: &AccountCx,
     col: &CollectionRef,
     cursor: Option<Cursor>,
     start: Start,
 ) -> Result<(Target, Step), SyncError> {
-    let st = State::of(cx)?;
+    let st = State::of(cx, p.net.profile)?;
     let c = st.col(&col.0)?.clone();
     let url = c.url(&col.0)?;
     let first = match (cursor.as_ref().map(CursorState::from_cursor), c.delta) {
@@ -455,7 +456,7 @@ fn object(
     ))
 }
 
-/// One `multiget` per collection and `MAX_BATCH` references.
+/// One `multiget` per collection and the profile's batch of references.
 pub(crate) async fn fetch(
     p: &DavProvider,
     cx: &AccountCx,
@@ -464,7 +465,7 @@ pub(crate) async fn fetch(
     if refs.is_empty() {
         return Ok(Vec::new());
     }
-    let st = State::of(cx)?;
+    let st = State::of(cx, p.net.profile)?;
     let s = Session::new(&p.net, cx, &st.origins, Mode::Run)?;
     let mut by_col: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for r in refs {
@@ -485,7 +486,7 @@ pub(crate) async fn fetch(
         } else {
             (CALDAV, "calendar-data", MediaType::Calendar)
         };
-        for chunk in objects.chunks(MAX_BATCH as usize) {
+        for chunk in objects.chunks(p.net.profile.max_batch() as usize) {
             let wanted: HashSet<&str> = chunk.iter().copied().collect();
             let r = send(&s, "REPORT", &t.url, None, xml::multiget(card, chunk)).await?;
             let ms = multistatus(&s, &r)?;
@@ -539,6 +540,9 @@ mod tests {
             "/",
             "https://evil/cal/x.ics",
             "http://h/cal/x.ics",
+            // Another iCloud partition may get the password, but holds none
+            // of this collection's objects.
+            "https://p52-contacts.icloud.com/cal/x.ics",
         ] {
             assert_eq!(key(out), None, "{out}");
         }

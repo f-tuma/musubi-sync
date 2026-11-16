@@ -346,7 +346,8 @@ listed here.
   is a server-wide change counter, not a per-collection one: a change in
   another collection moves every collection's current token. A token is valid while `n` is not older
   than the last `expire_sync_tokens`. Expired, foreign and malformed tokens
-  answer `403` with `D:valid-sync-token` (RFC 6578 3.2). A request with a
+  answer `403` with `D:valid-sync-token` (RFC 6578 3.2), or `412` on an icloud
+  address book. A request with a
   Depth other than `0`, or without `D:sync-level`, answers `400`. Some servers answer
   `409` instead; `Fault::InvalidSyncToken { status: 409 }` covers that.
 - **Truncation (RFC 6578 3.6)** ends the multistatus with a `507` response
@@ -365,13 +366,30 @@ listed here.
 - **ETags** are `"e{n}"` per object version; `Quirk::WeakEtag` makes them
   `W/"e{n}"`, and `Quirk::NoEtag` leaves them out of `PROPFIND`, `REPORT` and
   `GET`.
-- **Profile `icloud`:** home sets are absolute URLs on the partition hosts.
-  The CalDAV entry's principal reports only `calendar-home-set` and the
-  CardDAV entry's only `addressbook-home-set`. `current-user-privilege-set`
-  is left out, and `supported-address-data` is vCard 3.0 only. `put` of a
-  vCard that is not 3.0 panics: the fixture is wrong, not the adapter. The
-  calendar home has a `CS:notification` collection. Address books advertise
-  and answer `sync-collection` like calendars, though nothing shows iCloud
-  CardDAV does (providers.md I1); `Quirk::NoSync` models the opposite.
-  *Unverified until T11 measures iCloud.*
+- **Profile `icloud`** follows T11 (`docs/research/phase2/live-icloud.md`,
+  fixtures in `fixtures/dav/icloud-t11/`):
+  - Home sets are absolute URLs on the partition hosts. The CalDAV entry's
+    principal reports only `calendar-home-set` and the CardDAV entry's only
+    `addressbook-home-set`. The calendar home has a `CS:notification`
+    collection.
+  - `current-user-privilege-set` is T11's: calendars `read`, `write`,
+    `write-content`, `write-properties`, `bind`, `unbind`, `read-free-busy`;
+    notifications `read`, `unbind`; address books `read`, `write`, `bind`,
+    `read-acl` (each plus `read-current-user-privilege-set`).
+    `supported-address-data` is a `404`. `put` of a vCard that is not 3.0
+    panics: the fixture is wrong, not the adapter.
+  - An initial `sync-collection` lists the collection itself with `200` and a
+    `getetag`, calendars with the trailing slash, address books without it.
+    A bad token is `412` with `D:valid-sync-token` on address books and
+    `403` on calendars. An `addressbook-multiget` naming the collection
+    answers `400` for the whole request (one T11 sample).
+  - Differs from iCloud: paths are the fake's (`/principals/alice/`, not
+    `/DSID/principal/`), the hosts are `http://127.0.0.1`, so no home set
+    carries an explicit `:443`, and well-known answers `301` to `/` (T11 did
+    not try it; iCloud's root answers `current-user-principal` directly,
+    which the fake's root does too). Report sets match T11 (no
+    `addressbook-query`); a calendar's components come from the seed, so the
+    fixture decides whether VEVENT and VTODO are split as on iCloud.
+  - Not measured by T11, so the fake keeps its usual behaviour: `multiget`
+    size limits, `507` truncation, `PUT`/`If-Match`, deltas after a change.
 - **Plain HTTP/1.1 on 127.0.0.1**, Basic auth only, no TLS, no gzip.

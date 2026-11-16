@@ -1,5 +1,5 @@
-//! CalDAV and CardDAV [`musubi_model::Provider`], profile `generic`
-//! (docs/plan/phase2.md, chapters 5.1–5.3 and 5.5).
+//! CalDAV and CardDAV [`musubi_model::Provider`], profiles `generic` and
+//! `icloud` ([`Profile`]; docs/plan/phase2.md, chapters 5.1–5.5).
 //!
 //! - Discovery after RFC 6764 (well-known), RFC 4791 and RFC 6352, separately
 //!   for CalDAV and CardDAV ([`DavProvider::connect`]).
@@ -15,6 +15,7 @@
 
 mod discover;
 mod net;
+mod profile;
 mod state;
 mod sync;
 mod xml;
@@ -32,12 +33,11 @@ use musubi_model::{
     ProviderDescriptor, ReauthReason, RemoteObject, SyncError,
 };
 
+pub use profile::Profile;
 pub use state::{DavSetup, Principals};
 
 /// Largest page of [`Provider::changes`].
 const MAX_PAGE: u32 = 500;
-/// References per `multiget` (plan, chapter 3.4).
-const MAX_BATCH: u32 = 50;
 
 /// Instance configuration.
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,11 +86,17 @@ pub struct DavProvider {
 }
 
 impl DavProvider {
-    /// Builds the HTTP clients. Installs the ring rustls provider as the
-    /// process default if none is installed yet.
+    /// A `generic` instance, see [`DavProvider::with_profile`].
     pub fn new(config: DavConfig) -> Result<Self, BoxError> {
+        Self::with_profile(config, Profile::Generic)
+    }
+
+    /// Builds the HTTP clients. Installs the ring rustls provider as the
+    /// process default if none is installed yet. The instance reads only
+    /// endpoints of `profile` ([`DavSetup::endpoint_for`]).
+    pub fn with_profile(config: DavConfig, profile: Profile) -> Result<Self, BoxError> {
         Ok(Self {
-            net: net::Net::new(config.allow_private)?,
+            net: net::Net::new(config.allow_private, profile)?,
             descents: Mutex::new(HashMap::new()),
         })
     }
@@ -121,9 +127,10 @@ impl Provider for DavProvider {
         .map(|k| KindCapabilities::new(k, DeltaSupport::SyncToken, PushSupport::None))
         .collect();
         let mut limits = Limits::new(MAX_PAGE);
-        limits.max_batch = Some(MAX_BATCH);
+        let profile = self.net.profile;
+        limits.max_batch = Some(profile.max_batch());
         limits.max_concurrency_per_account = Some(2);
-        ProviderDescriptor::new(ProviderId("dav".into()), kinds, limits)
+        ProviderDescriptor::new(ProviderId(profile.provider_id().into()), kinds, limits)
     }
 
     async fn discover(&self, cx: &AccountCx) -> Result<Discovery, SyncError> {
