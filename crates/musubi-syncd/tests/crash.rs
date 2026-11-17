@@ -242,15 +242,11 @@ async fn settle(w: &World, followers: &[Follower]) -> Vec<musubi_model::Change> 
             return j;
         }
         if Instant::now() >= deadline {
-            let stalled: Vec<_> = followers
-                .iter()
-                .filter(|f| !f.at(h))
-                .map(Follower::state)
-                .collect();
+            let states: Vec<_> = followers.iter().map(Follower::state).collect();
             panic!(
-                "followers not at head {h} after 30 s (journal {}):\n{}\n{}",
+                "followers not settled at head {h} in 30 s (journal {}):\n{}\n{}",
                 if h == last { "still" } else { "moving" },
-                stalled.join("\n"),
+                states.join("\n"),
                 w.node().tail(40)
             );
         }
