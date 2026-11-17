@@ -467,6 +467,127 @@ async fn simultaneous_first_connects_make_one_account() {
     }
 }
 
+/// What each Google call takes while a tenant deletion runs.
+const SLOW: Duration = Duration::from_secs(2);
+
+/// Starts deleting `t`, whose Google account has two push channels: each
+/// channel stop takes [`SLOW`], so the deletion runs for at least twice
+/// that. The client gives up at once; the deletion goes on.
+async fn start_deletion(n: &Node, t: &Tenant) -> Instant {
+    until("both channels", async || {
+        n.app.engine().run_until_idle().await.expect("jobs");
+        (n.google.channels().len() == 2).then_some(())
+    })
+    .await;
+    n.google.set_latency(SLOW);
+    let started = Instant::now();
+    let gave_up = n
+        .http
+        .delete(n.url(&format!("/v1/admin/tenants/{}", t.id)))
+        .bearer_auth(common::ADMIN_KEY)
+        .timeout(Duration::from_millis(300))
+        .send()
+        .await;
+    assert!(gave_up.is_err(), "the client gives up first: {gave_up:?}");
+    started
+}
+
+/// A Google account with two calendars, so its removal stops two channels.
+async fn slow_google_account(n: &Node, t: &Tenant) -> AccountId {
+    n.google
+        .apply(&musubi_testkit::google::Change::AddCalendar {
+            entry: json!({ "id": "second" }),
+        });
+    google_account(n, t).await.parse().expect("id")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tenant_being_deleted_gets_no_dav_account_and_no_reconnect() {
+    let n = private_node().await;
+    let d = dav(DavConfig::default()).await;
+    let other = dav(DavConfig::default()).await;
+    let t = tenant(&n).await;
+    slow_google_account(&n, &t).await;
+    // Accounts are removed in id order: this one after the Google account,
+    // so it still exists while the deletion stops the channels.
+    let id = AccountId::from_u128(u128::MAX);
+    n.app
+        .control()
+        .upsert_account(&AccountRecord {
+            id,
+            tenant: t.id,
+            provider: ProviderId("dav".into()),
+            subject: format!("{}{}", d.url(Host::Caldav), d.principal()),
+            state: AccountState::Connecting,
+        })
+        .expect("row");
+    let (s, v) = connect(&n, &t, generic(&d, "secret")).await;
+    assert_eq!((s, &v["id"]), (200, &json!(id)), "{v}");
+
+    let started = start_deletion(&n, &t).await;
+    // Discovery works for both; the handler refuses only because of the deletion.
+    let (s, v) = connect(&n, &t, generic(&other, "secret")).await;
+    assert_eq!(s, 404, "a tenant being deleted gets no account: {v}");
+    d.set_password("changed");
+    let mut body = generic(&d, "changed");
+    body["account"] = json!(id);
+    let (s, v) = connect(&n, &t, body).await;
+    assert_eq!(s, 404, "a tenant being deleted gets no reconnect: {v}");
+
+    let accounts = n.app.control().accounts(t.id).expect("accounts");
+    assert!(
+        accounts
+            .iter()
+            .all(|a| !a.subject.contains(&other.url(Host::Caldav))),
+        "{accounts:?}"
+    );
+    match n.app.vault().load(id).expect("load") {
+        Some(Credentials::Basic { password, .. }) => {
+            assert_eq!(password.expose_secret(), "secret");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(started.elapsed() < SLOW * 2, "the deletion ended first");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tenant_being_deleted_gets_no_google_reconnect() {
+    let n = Node::start().await;
+    let t = tenant(&n).await;
+    let id = slow_google_account(&n, &t).await;
+    let (s, v) = n
+        .call(
+            "POST",
+            "/v1/accounts",
+            Some(&t.admin),
+            Some(json!({ "provider": "google", "account": id })),
+        )
+        .await;
+    assert_eq!(s, 201, "{v}");
+    let consent = n
+        .http
+        .get(v["authorization_url"].as_str().expect("url"))
+        .send()
+        .await
+        .expect("consent");
+    let callback = consent.headers()["location"]
+        .to_str()
+        .expect("ascii")
+        .to_owned();
+    let before = tokens(&n, id);
+
+    let started = start_deletion(&n, &t).await;
+    // The callback redeems its code (one slow call) before it stores anything.
+    let (s, v) = n.call("GET", &callback, None, None).await;
+    assert_eq!(s, 404, "a tenant being deleted gets no reconnect: {v}");
+    let after = tokens(&n, id);
+    assert_eq!(
+        (after.access.expose_secret(), after.access_until),
+        (before.access.expose_secret(), before.access_until)
+    );
+    assert!(started.elapsed() < SLOW * 2, "the deletion ended first");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn only_post_interest_raises_the_interest_level() {
     let n = private_node().await;
