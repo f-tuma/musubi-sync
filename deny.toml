@@ -11,7 +11,7 @@ all-features = true
 yanked = "deny"
 # K6 signs tokens with Ed25519 from `ring` directly, so neither
 # `rsa` (RUSTSEC-2023-0071) nor `crypto-bigint` 0.5 (RUSTSEC-2026-0387) is in the tree.
-# chrono and chrono-tz were declared unmaintained on 2026-11-17 (no vulnerability,
+# chrono and chrono-tz unmaintained advisories, published 2026-11-17 (no vulnerability,
 # no safe upgrade). chrono comes from calcard (musubi-ical) and musubi-recurrence,
 # chrono-tz only from calcard. Review by 2027-02-17: move musubi-recurrence off
 # chrono and follow calcard upstream.
