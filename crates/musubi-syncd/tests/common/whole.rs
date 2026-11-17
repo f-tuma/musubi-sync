@@ -381,17 +381,62 @@ pub struct Follower {
 
 #[derive(Default)]
 pub struct Seen {
+    /// `polling` or `sse`, for log lines.
+    kind: &'static str,
     pub cursor: u64,
     pub log: BTreeMap<u64, Change>,
     pub errors: Vec<String>,
     /// The last head the stream announced and the client read up to.
     pub announced: u64,
+    /// `/v1/changes` reads failed in a row (node down, 503, timeout).
+    pub page_failures: u64,
+    /// Streams failed in a row (connect error, 503, no answer, silence).
+    pub stream_failures: u64,
+    /// Requests given up on and silent streams, over the whole run.
+    pub timeouts: u64,
+    /// The most recent failure, possibly long past.
+    pub last_failure: String,
 }
+
+impl Seen {
+    fn new(kind: &'static str) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            kind,
+            ..Self::default()
+        }))
+    }
+
+    fn failed(&mut self, stream: bool, what: String) {
+        if stream {
+            self.stream_failures += 1;
+        } else {
+            self.page_failures += 1;
+        }
+        self.last_failure = what;
+    }
+
+    /// A failure the client gave up waiting on; logged, so that a passing
+    /// run still shows the node hanging.
+    fn timed_out(&mut self, stream: bool, what: String, started: Instant) {
+        self.timeouts += 1;
+        let (kind, seq, took) = (self.kind, self.cursor, started.elapsed());
+        eprintln!("follower: {kind} at seq {seq}: {what}, gave up after {took:?}");
+        self.failed(stream, what);
+    }
+}
+
+/// Bound of one `/v1/changes` request or stream connect, well below the
+/// tests' settle windows and the node's 30 s `REQUEST_TIMEOUT`: a hung
+/// request is dropped and retried instead of eating the window.
+const REQUEST: Duration = Duration::from_secs(5);
+/// Longest silence on a stream before it reconnects: above the node's 15 s
+/// SSE keep-alive.
+const STREAM_IDLE: Duration = Duration::from_secs(20);
 
 impl Follower {
     /// Polls `/v1/changes`.
     pub fn spawn(api: Api, key: String) -> Self {
-        let seen = Arc::new(Mutex::new(Seen::default()));
+        let seen = Seen::new("polling");
         let s = seen.clone();
         let task = tokio::spawn(async move {
             loop {
@@ -410,7 +455,7 @@ impl Follower {
     /// Follows `/v1/stream`, reconnecting with `Last-Event-ID` after every
     /// crash, and reads `/v1/changes` up to each announced head.
     pub fn sse(api: Api, key: String) -> Self {
-        let seen = Arc::new(Mutex::new(Seen::default()));
+        let seen = Seen::new("sse");
         let s = seen.clone();
         let task = tokio::spawn(async move {
             loop {
@@ -455,8 +500,28 @@ impl Follower {
         s.cursor == head && (!self.sse || s.announced == head)
     }
 
-    pub fn cursor(&self) -> u64 {
-        self.seen.lock().expect("seen").cursor
+    /// Where the client is, why it may not be further, and its timeouts so
+    /// far: for a stall message and the end of a run.
+    pub fn state(&self) -> String {
+        let s = self.seen.lock().expect("seen");
+        let n = |n: u64, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+        let mut out = format!("{} follower at seq {}", s.kind, s.cursor);
+        if self.sse {
+            out += &format!(", announced {}", s.announced);
+        }
+        out += &format!(", {} in a row", n(s.page_failures, "failed page read"));
+        if self.sse {
+            out += &format!(", {} in a row", n(s.stream_failures, "failed stream"));
+        }
+        let last = if s.last_failure.is_empty() {
+            "none"
+        } else {
+            &s.last_failure
+        };
+        out + &format!(
+            ", {} in the run, last failure: {last}",
+            n(s.timeouts, "timeout")
+        )
     }
 }
 
@@ -470,10 +535,17 @@ impl Drop for Follower {
 /// follow, `None` while the node is down.
 async fn read_page(api: &Api, key: &str, s: &Mutex<Seen>) -> Option<bool> {
     let since = s.lock().expect("seen").cursor;
-    match api.changes(key, since, 1000).await {
-        Ok((200, v)) => {
+    let failed = |what: String| {
+        s.lock()
+            .expect("seen")
+            .failed(false, format!("changes since {since}: {what}"))
+    };
+    let started = Instant::now();
+    match tokio::time::timeout(REQUEST, api.changes(key, since, 1000)).await {
+        Ok(Ok((200, v))) => {
             let page: ChangesPage = serde_json::from_value(v).expect("changes page");
             let mut s = s.lock().expect("seen");
+            s.page_failures = 0;
             for c in page.changes {
                 if c.seq.0 <= s.cursor {
                     let e = format!("seq {} after cursor {}", c.seq.0, s.cursor);
@@ -484,13 +556,25 @@ async fn read_page(api: &Api, key: &str, s: &Mutex<Seen>) -> Option<bool> {
             }
             Some(page.more)
         }
-        Ok((status, v)) if status != 503 => {
+        Ok(Ok((status, v))) if status != 503 => {
             let e = format!("since {since}: {status} {v}");
             s.lock().expect("seen").errors.push(e);
             Some(false)
         }
-        // The node is down or restarting.
-        _ => None,
+        // The node is down, restarting or busy: retried.
+        Ok(Ok((status, v))) => {
+            failed(format!("{status} {v}"));
+            None
+        }
+        Ok(Err(e)) => {
+            failed(e.to_string());
+            None
+        }
+        Err(_) => {
+            let what = format!("changes since {since}: no answer");
+            s.lock().expect("seen").timed_out(false, what, started);
+            None
+        }
     }
 }
 
@@ -505,16 +589,36 @@ async fn follow_stream(api: &Api, key: &str, s: &Mutex<Seen>) {
     if last > 0 {
         req = req.header("last-event-id", last.to_string());
     }
-    let Ok(mut resp) = req.send().await else {
-        return;
+    let failed = |what: &str| {
+        s.lock()
+            .expect("seen")
+            .failed(true, format!("stream after {last}: {what}"))
+    };
+    let timed_out = |what: &str, started| {
+        s.lock()
+            .expect("seen")
+            .timed_out(true, format!("stream after {last}: {what}"), started)
+    };
+    let started = Instant::now();
+    let mut resp = match tokio::time::timeout(REQUEST, req.send()).await {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => return failed(&e.to_string()),
+        Err(_) => return timed_out("no answer", started),
     };
     match resp.status().as_u16() {
-        200 => {}
-        503 => return,
+        200 => s.lock().expect("seen").stream_failures = 0,
+        503 => return failed("503"),
         status => return error(format!("stream after {last}: {status}")),
     }
     let mut buf = String::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
+    loop {
+        let started = Instant::now();
+        let chunk = match tokio::time::timeout(STREAM_IDLE, resp.chunk()).await {
+            Ok(Ok(Some(chunk))) => chunk,
+            // The node dropped the connection.
+            Ok(_) => return,
+            Err(_) => return timed_out("silent, reconnecting", started),
+        };
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(i) = buf.find("\n\n") {
             let ev: String = buf.drain(..i + 2).collect();

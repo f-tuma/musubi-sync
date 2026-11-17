@@ -419,14 +419,15 @@ async fn run(seed: u64) -> (u64, u64) {
         while !follower.at(head(&j)) {
             assert!(
                 Instant::now() < deadline,
-                "follower at {} of {}",
-                follower.cursor(),
+                "{} of {}",
+                follower.state(),
                 head(&j)
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         follower.check(&j);
     }
+    println!("crash_dav: seed {seed}: {}", follower.state());
     assert!(
         between > 0,
         "seed {seed}: no kill landed between two committed pages in {ROUNDS} rounds"

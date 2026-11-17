@@ -27,6 +27,9 @@ use serde_json::json;
 /// fake to replace a stored channel.
 const POINTS: [&str; 4] = ["apply-page", "truncate", "commit-sse", "backup"];
 
+/// How long the followers get to read up to a quiet journal after a restart.
+const SETTLE: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, Copy)]
 enum Kill {
     /// After this many milliseconds of load.
@@ -228,12 +231,15 @@ async fn run(
             f.check(&journal);
         }
     }
+    for f in &followers {
+        println!("crash: seed {seed}: {}", f.state());
+    }
 }
 
 /// Waits until the followers have read the whole journal and the journal
 /// stood still for a moment; returns the journal.
 async fn settle(w: &World, followers: &[Follower]) -> Vec<musubi_model::Change> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + SETTLE;
     let mut last = 0;
     loop {
         let j = w.journal();
@@ -241,12 +247,15 @@ async fn settle(w: &World, followers: &[Follower]) -> Vec<musubi_model::Change> 
         if h == last && followers.iter().all(|f| f.at(h)) {
             return j;
         }
-        let at: Vec<_> = followers.iter().map(Follower::cursor).collect();
-        assert!(
-            Instant::now() < deadline,
-            "followers at {at:?} of {h}\n{}",
-            w.node().tail(40)
-        );
+        if Instant::now() >= deadline {
+            let states: Vec<_> = followers.iter().map(Follower::state).collect();
+            panic!(
+                "followers not settled at head {h} in {SETTLE:?} (journal {}):\n{}\n{}",
+                if h == last { "still" } else { "moving" },
+                states.join("\n"),
+                w.node().tail(40)
+            );
+        }
         last = h;
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
