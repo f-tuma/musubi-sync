@@ -1,4 +1,4 @@
-//! Benchmarks B1–B7 of plan 6.5 and D1, D2 and D4 of phase 2 plan 11.2: the
+//! Benchmarks B1–B7 (and B7n) of plan 6.5 and D1, D2 and D4 of phase 2 plan 11.2: the
 //! release `musubi-syncd` binary as a child process over the fake Google or
 //! DAV server, measured from the client side (HTTP over loopback included).
 //! B8/B9 and D3 are crate benches (`musubi-google`, `musubi-recurrence`,
@@ -566,23 +566,48 @@ async fn b6(o: &Opts) -> Vec<Row> {
     ]
 }
 
-/// B7: RSS per sleeping account, one tenant per account.
-async fn b7(o: &Opts) -> Vec<Row> {
+/// Most threads the node may have at any moment of B7 and B7n, whatever the
+/// account count: runtime workers, the blocking pool in use (store and control
+/// calls of at most `sync_concurrency + background_concurrency` jobs plus the
+/// API) and the fixed threads (checkpointer, signals).
+const THREAD_CEILING: u64 = 128;
+
+/// B7: RSS per account and the node's threads, one tenant per account.
+/// Without `normal` the accounts sleep. A tenant sleeps 7 days after its last
+/// interest; the run puts the engine's sleeping bounds (plan 7.2) in place of
+/// the normal ones instead of waiting, as D2 does. B7n (`normal`) polls every
+/// account at the floor of the normal bounds, every 120 s (smoke 2 s), and
+/// each poll writes its tenant's collection state: the worst case for writer
+/// threads, which grew with the account count until writers shared the
+/// runtime's blocking pool.
+async fn b7(o: &Opts, normal: bool) -> Vec<Row> {
     let accounts: usize = if o.smoke { 20 } else { 10_000 };
-    // A tenant sleeps 7 days after its last interest; the run puts the
-    // engine's sleeping bounds (plan 7.2) in place of the normal ones instead
-    // of waiting, as D2 does. At the normal ones People (no push) is first
-    // polled about 480 s after its account connected, while 10 000 accounts
-    // take 400 s to 750 s to connect on CI: each poll's write wakes its
-    // tenant's writer for `writer_idle`, and the count below found them.
+    let id = if normal { "B7n" } else { "B7" };
+    let every = if o.smoke { 2.0 } else { 120.0 };
+    let bounds = if normal {
+        json!({ "min": every, "max": every })
+    } else {
+        json!({ "min": 3600.0, "max": 21_600.0 })
+    };
     let n = Arc::new(
         Node::start_with(&o.syncd, google::Config::default(), |c| {
-            c["sync"] = json!({ "normal": { "min": 3600.0, "max": 21_600.0 } });
+            c["sync"] = json!({ "normal": bounds });
         })
         .await,
     );
     tokio::time::sleep(Duration::from_secs(1)).await;
     let (base_rss, base_threads) = (n.proc_status("VmRSS:"), n.proc_status("Threads:"));
+    // The highest thread count over the whole run, not just at its end.
+    let peak = Arc::new(AtomicU64::new(base_threads));
+    let sampler = {
+        let (n, peak) = (n.clone(), peak.clone());
+        tokio::spawn(async move {
+            loop {
+                peak.fetch_max(n.proc_status("Threads:"), Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+    };
     let t0 = Instant::now();
     let mut set = tokio::task::JoinSet::new();
     for _ in 0..accounts {
@@ -598,7 +623,7 @@ async fn b7(o: &Opts) -> Vec<Row> {
     while let Some(r) = set.join_next().await {
         r.expect("connect");
     }
-    // Asleep: every account has synced and holds its channel.
+    // Every account has synced and holds its channel.
     let deadline = Instant::now() + Duration::from_secs(1800);
     while n.fake.channels().len() < accounts {
         assert!(
@@ -609,37 +634,51 @@ async fn b7(o: &Opts) -> Vec<Row> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let connect = t0.elapsed();
-    // Asleep for real: past the engine's writer idle stop (30 s) and tokio's
-    // blocking-pool keep-alive (10 s).
-    tokio::time::sleep(Duration::from_secs(40)).await;
+    let polls = |n: &Node| {
+        let r = n.fake.requests();
+        r.iter().filter(|r| r.contains("/connections")).count()
+    };
+    let (mark, window) = (polls(&n), Instant::now());
+    // Normal: two and a half poll intervals. Asleep: past the engine's writer
+    // idle stop (30 s) and tokio's blocking-pool keep-alive (10 s).
+    let wait = if normal { every * 2.5 } else { 40.0 };
+    tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+    let rate = (polls(&n) - mark) as f64 / window.elapsed().as_secs_f64();
     let (rss, threads) = (n.proc_status("VmRSS:"), n.proc_status("Threads:"));
+    sampler.abort();
+    let peak = peak.load(Ordering::Relaxed).max(threads);
     let per = rss.saturating_sub(base_rss) as f64 / accounts as f64;
-    // Sleeping tenants hold no writer thread; the rest is the runtime's
-    // workers and blocking pool (at most 512), whatever the account count.
+    // Smoke: 20 accounts make the per-account figure noise; 10× as elsewhere.
+    let budget = RSS_BUDGET_KIB * if o.smoke { 10 } else { 1 };
     let mut names = std::collections::BTreeMap::<String, usize>::new();
     let tasks = std::fs::read_dir(format!("/proc/{}/task", n.daemon.pid())).expect("/proc");
     for t in tasks.flatten() {
         let comm = std::fs::read_to_string(t.path().join("comm")).unwrap_or_default();
         *names.entry(comm.trim().to_owned()).or_default() += 1;
     }
-    let writers: usize = names
-        .iter()
-        .filter(|(k, _)| k.starts_with("musubi-writer"))
-        .map(|(_, v)| v)
-        .sum();
+    let level = if normal {
+        format!("polled every {every} s ({rate:.1} People polls/s)")
+    } else {
+        "sleeping".into()
+    };
     vec![Row {
-        id: "B7",
+        id,
         what: format!(
-            "RSS per sleeping account, {accounts} accounts ({} → {} MiB, threads {base_threads} → {threads}, connected in {:.0} s)",
+            "RSS per account, {accounts} accounts {level} ({} → {} MiB, threads {base_threads} → {threads}, peak {peak}, connected in {:.0} s)",
             base_rss / 1024,
             rss / 1024,
             connect.as_secs_f64()
         ),
         value: format!("{per:.1} KiB"),
-        budget: format!("report; no writer thread left (found {writers}), threads {names:?}"),
-        ok: writers == 0,
+        budget: format!(
+            "under {budget} KiB; threads at most {THREAD_CEILING} at any moment, now {names:?}"
+        ),
+        ok: per < budget as f64 && peak <= THREAD_CEILING,
     }]
 }
+
+/// Plan 6.5, B7: RSS per account.
+const RSS_BUDGET_KIB: u64 = 512;
 
 /// A node allowing private DAV servers, its `sync` section set to `sync`,
 /// and a fresh tenant on it.
@@ -945,7 +984,10 @@ async fn main() {
         rows.extend(b6(&o).await);
     }
     if want("B7") {
-        rows.extend(b7(&o).await);
+        rows.extend(b7(&o, false).await);
+    }
+    if want("B7n") {
+        rows.extend(b7(&o, true).await);
     }
     if want("D1") {
         rows.extend(d1(&o).await);
