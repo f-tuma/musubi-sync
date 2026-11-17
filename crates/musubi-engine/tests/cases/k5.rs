@@ -951,6 +951,28 @@ async fn discovery_does_not_store_its_endpoint_over_a_reconnect() {
 }
 
 #[tokio::test]
+async fn discovery_does_not_activate_an_account_over_a_reconnect() {
+    // The first discovery of a `connecting` account waits on the provider
+    // while the same principal connects again (plan 5.5: a connect cut short).
+    let h = H::new();
+    h.fake.hold(Op::Discover);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().discover == 1).await;
+    reconnect(&h, "new", None);
+    h.fake.release(Op::Discover);
+    run.await.unwrap().unwrap();
+    let state = || h.control.account(ACCOUNT).unwrap().unwrap().state;
+    assert_eq!(state(), AccountState::Connecting);
+
+    // The reconnect's own discovery activates it.
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(state(), AccountState::Active);
+}
+
+#[tokio::test]
 async fn read_stores_neither_tokens_nor_reauth_over_a_reconnect() {
     let h = H::new();
     h.connect_and_sync().await;
