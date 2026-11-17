@@ -1,6 +1,6 @@
 # Fáze 1: živá kontrola proti Google (K8)
 
-Stav: hotovo kromě obnovy kanálu (viz 9) · datum: 2026-11-12 · plán: [§6.6](../../plan/phase1.md#66-živá-kontrola-k8) · fixtures: [`crates/musubi-google/tests/fixtures/live/`](../../../crates/musubi-google/tests/fixtures/live/)
+Stav: hotovo · datum: 2026-11-12, obnova kanálu 2026-11-17 · plán: [§6.6](../../plan/phase1.md#66-živá-kontrola-k8) · fixtures: [`crates/musubi-google/tests/fixtures/live/`](../../../crates/musubi-google/tests/fixtures/live/)
 
 ## 1. Otázka
 
@@ -76,9 +76,21 @@ Pojistka z K8a držela: po třech úplných čteních odklad 300 s, zdvojovaný 
 - Nově odebíraný kalendář se objeví až při dalším zjišťování, výchozí interval je 6 h.
 - Restart (SIGTERM, stop a start) proběhl čistě; klienti SSE se znovu připojili.
 
-## 9. Ještě otevřené
+## 9. Obnova kanálu (krok 6)
 
-- **Obnova kanálu 17. 11.** (krok 6 plánu). Výsledek doplní koordinátor.
+Server běžel od 12. 11. bez zásahu, 16. 11. ho restartoval reboot stroje.
+
+- Kanál primárního kalendáře se **17. 11. v 05:25:50** obnovil podle plánu (dvě třetiny ze 7 dní): engine zřídil nový kanál a v `control.db` zůstal jen jeho řádek. Nový kanál dostal opět 7 dní (do 24. 11. 05:25:50) a engine hned naplánoval další obnovu na 21. 11. 21:25:50.
+- Od 12. 11. se v kalendáři nic neměnilo, takže ztrátu přes noc nebylo čím ověřit. Proto po obnově jedna změna v UI (testovací účet):
+
+| Krok | Od kliknutí v UI po událost SSE |
+| --- | --- |
+| vytvoření události | 8,9 s |
+| smazání téže události | 8,4 s |
+
+- Obě změny přišly pushem, ne dotazováním: kolekce se synchronizovala v 09:01:52 a 09:03:21, kdežto další pravidelný dotaz (každou hodinu) byl až v 09:36. Obě změny jsou v logu změn.
+- Časy jsou delší než v kapitole 5 (3,0–7,5 s), protože začínají kliknutím v prohlížeči řízeném skriptem, ne uložením v UI. Jeden vzorek na krok.
+- Po kontrole se server i tunel vypnuly. Kanál u Googlu tím nezanikl; vyprší 24. 11. a do té doby Google oznámení nedoručí.
 
 ## 10. Odchylky a co se opravilo (K8b)
 
