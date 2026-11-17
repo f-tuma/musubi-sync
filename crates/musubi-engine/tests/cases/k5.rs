@@ -880,21 +880,31 @@ async fn kind_both_unauthorized_and_incomplete_is_unauthorized() {
 
 #[tokio::test]
 async fn rediscover_keeps_the_collection_poll_job_when_discovery_fails() {
-    let h = H::new();
-    h.fake.add_collection(polled("poll"));
-    h.connect_and_sync().await;
-    settle(&h).await;
+    // A discovery that fails for now or for good: the collection is polled again.
+    for permanent in [false, true] {
+        let h = H::new();
+        h.fake.add_collection(polled("poll"));
+        h.connect_and_sync().await;
+        settle(&h).await;
 
-    h.fake.fail(Op::Page, SyncError::Rediscover);
-    for _ in 0..100 {
-        h.fake.fail(Op::Discover, SyncError::Transient("down".into()));
+        h.fake.fail(Op::Page, SyncError::Rediscover);
+        for _ in 0..100 {
+            h.fake.fail(
+                Op::Discover,
+                if permanent {
+                    SyncError::Permanent("gone".into())
+                } else {
+                    SyncError::Transient("down".into())
+                },
+            );
+        }
+        let due = h.sync_due("poll").unwrap();
+        h.advance(Duration::try_from(due - h.clock_now()).unwrap());
+        h.engine.run_until_idle().await.unwrap();
+        let next = h.sync_due("poll").expect("the poll job stays");
+        let wait = Duration::try_from(next - h.clock_now()).unwrap();
+        assert_eq!(wait, Duration::from_secs(15 * 60), "permanent: {permanent}");
     }
-    let due = h.sync_due("poll").unwrap();
-    h.advance(Duration::try_from(due - h.clock_now()).unwrap());
-    h.engine.run_until_idle().await.unwrap();
-    let next = h.sync_due("poll").expect("the poll job stays");
-    let wait = Duration::try_from(next - h.clock_now()).unwrap();
-    assert!(wait <= Duration::from_secs(15 * 60), "{wait:?}");
 }
 
 /// The account writes of a reconnect (`POST /v1/accounts/dav` with
@@ -948,6 +958,28 @@ async fn discovery_does_not_store_its_endpoint_over_a_reconnect() {
     h.fake.release(Op::Discover);
     run.await.unwrap().unwrap();
     assert_eq!(h.control.endpoint(ACCOUNT).unwrap(), Some(new));
+}
+
+#[tokio::test]
+async fn discovery_does_not_activate_an_account_over_a_reconnect() {
+    // The first discovery of a `connecting` account waits on the provider
+    // while the same principal connects again (plan 5.5: a connect cut short).
+    let h = H::new();
+    h.fake.hold(Op::Discover);
+    h.engine.connect(ACCOUNT).await.unwrap();
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_until_idle().await });
+    until(|| h.fake.calls().discover == 1).await;
+    reconnect(&h, "new", None);
+    h.fake.release(Op::Discover);
+    run.await.unwrap().unwrap();
+    let state = || h.control.account(ACCOUNT).unwrap().unwrap().state;
+    assert_eq!(state(), AccountState::Connecting);
+
+    // The reconnect's own discovery activates it.
+    h.engine.connect(ACCOUNT).await.unwrap();
+    h.engine.run_until_idle().await.unwrap();
+    assert_eq!(state(), AccountState::Active);
 }
 
 #[tokio::test]

@@ -670,9 +670,12 @@ impl<S: Storage + 'static> Engine<S> {
             };
             self.drop_collection(tenant, cx, col).await?;
         }
+        // A reconnect since the job started activates it by its own discovery.
         if state == Some(AccountState::Connecting) {
-            self.ctl(move |c| c.set_account_state(account, AccountState::Active))
-                .await?;
+            self.write_account(account, cx.rev, move |c, _| {
+                c.set_account_state(account, AccountState::Active)
+            })
+            .await?;
         }
         let now = self.now();
         for col in cols.iter().filter(|c| !c.gone) {
