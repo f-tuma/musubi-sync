@@ -880,21 +880,31 @@ async fn kind_both_unauthorized_and_incomplete_is_unauthorized() {
 
 #[tokio::test]
 async fn rediscover_keeps_the_collection_poll_job_when_discovery_fails() {
-    let h = H::new();
-    h.fake.add_collection(polled("poll"));
-    h.connect_and_sync().await;
-    settle(&h).await;
+    // A discovery that fails for now or for good: the collection is polled again.
+    for permanent in [false, true] {
+        let h = H::new();
+        h.fake.add_collection(polled("poll"));
+        h.connect_and_sync().await;
+        settle(&h).await;
 
-    h.fake.fail(Op::Page, SyncError::Rediscover);
-    for _ in 0..100 {
-        h.fake.fail(Op::Discover, SyncError::Transient("down".into()));
+        h.fake.fail(Op::Page, SyncError::Rediscover);
+        for _ in 0..100 {
+            h.fake.fail(
+                Op::Discover,
+                if permanent {
+                    SyncError::Permanent("gone".into())
+                } else {
+                    SyncError::Transient("down".into())
+                },
+            );
+        }
+        let due = h.sync_due("poll").unwrap();
+        h.advance(Duration::try_from(due - h.clock_now()).unwrap());
+        h.engine.run_until_idle().await.unwrap();
+        let next = h.sync_due("poll").expect("the poll job stays");
+        let wait = Duration::try_from(next - h.clock_now()).unwrap();
+        assert_eq!(wait, Duration::from_secs(15 * 60), "permanent: {permanent}");
     }
-    let due = h.sync_due("poll").unwrap();
-    h.advance(Duration::try_from(due - h.clock_now()).unwrap());
-    h.engine.run_until_idle().await.unwrap();
-    let next = h.sync_due("poll").expect("the poll job stays");
-    let wait = Duration::try_from(next - h.clock_now()).unwrap();
-    assert!(wait <= Duration::from_secs(15 * 60), "{wait:?}");
 }
 
 /// The account writes of a reconnect (`POST /v1/accounts/dav` with
