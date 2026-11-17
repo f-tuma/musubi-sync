@@ -162,7 +162,7 @@ pub struct Config {
     pub background_concurrency: usize,
     /// How often an idle scheduler looks for due jobs.
     pub tick: Duration,
-    /// A tenant writer without a write for this long stops its thread.
+    /// A tenant writer without a write for this long drops its store handle.
     pub writer_idle: Duration,
     /// Adaptive polling (plan 7.2) of a collection without an open push
     /// channel while its tenant is active (touched in the last
@@ -547,8 +547,8 @@ impl<S: Storage + 'static> Engine<S> {
         self.writers().remove(&tenant);
     }
 
-    /// Tenants with a running writer thread; an idle one stops after
-    /// [`Config::writer_idle`].
+    /// Tenants with a writer (an open store handle); an idle one is dropped
+    /// after [`Config::writer_idle`].
     pub fn active_writers(&self) -> usize {
         self.writers().len()
     }
@@ -749,55 +749,56 @@ impl<S: Storage + 'static> Engine<S> {
         tenant: TenantId,
         f: impl FnOnce(&mut S::Tenant) -> Result<R, StoreError> + Send + 'static,
     ) -> Result<R, EngineError> {
-        let writer = self.writer(tenant).await?;
-        let res = writer.run(f).await;
-        if matches!(res, Err(EngineError::Stopped)) {
-            // The thread died (a panic in the store); the next write starts a
-            // new one, unless another caller already replaced it.
-            let mut writers = self.writers();
-            if writers
-                .get(&tenant)
-                .is_some_and(|w| Arc::ptr_eq(w, &writer))
-            {
-                writers.remove(&tenant);
-            }
-        }
-        res
+        let storage = self.inner.storage.clone();
+        let open = move || storage.open(tenant);
+        writer::run(
+            self.writer(tenant),
+            tenant,
+            open,
+            self.inner.sink.clone(),
+            f,
+        )
+        .await
     }
 
-    async fn writer(&self, tenant: TenantId) -> Result<Arc<Writer<S::Tenant>>, EngineError> {
-        if let Some(w) = self.writers().get(&tenant) {
-            return Ok(w.clone());
-        }
-        // Opened without holding the map: other tenants' writes go on meanwhile.
-        let storage = self.inner.storage.clone();
-        let store = blocking(move || Ok(storage.open(tenant)?)).await?;
+    /// The tenant's writer; a new one is dropped after [`Config::writer_idle`]
+    /// without a write.
+    fn writer(&self, tenant: TenantId) -> Arc<Writer<S::Tenant>> {
         let mut writers = self.writers();
         if let Some(w) = writers.get(&tenant) {
-            // Another caller won the race; this handle is dropped unused.
-            return Ok(w.clone());
+            return w.clone();
         }
-        let inner = Arc::downgrade(&self.inner);
-        let retire = move |id| {
-            let Some(inner) = inner.upgrade() else { return };
-            let mut writers = inner.writers.lock().unwrap_or_else(|e| e.into_inner());
-            // Only the map holds it: no write is between getting it and its reply
-            // (a queued command holds a handle too, even if its caller was
-            // cancelled), and the next one must take this lock to get it.
-            if writers
-                .get(&tenant)
-                .is_some_and(|w| w.id == id && Arc::strong_count(w) == 1)
-            {
-                writers.remove(&tenant);
-            }
-        };
-        let idle = self.inner.config.writer_idle;
-        let w = Arc::new(
-            Writer::spawn(tenant, store, self.inner.sink.clone(), idle, retire)
-                .map_err(StoreError::Io)?,
-        );
+        let w = Arc::new(writer::new());
         writers.insert(tenant, w.clone());
-        Ok(w)
+        let (inner, weak) = (Arc::downgrade(&self.inner), Arc::downgrade(&w));
+        let idle = self.inner.config.writer_idle;
+        tokio::spawn(async move {
+            let mut wait = idle;
+            loop {
+                tokio::time::sleep(wait).await;
+                let (Some(inner), Some(w)) = (inner.upgrade(), weak.upgrade()) else {
+                    return;
+                };
+                let mut writers = inner.writers.lock().unwrap_or_else(|e| e.into_inner());
+                if !writers.get(&tenant).is_some_and(|m| Arc::ptr_eq(m, &w)) {
+                    return; // forgotten
+                }
+                // Only the map and `w` hold it: no write holds or awaits it, and
+                // the next one must take the map lock to get it.
+                wait = match w.try_lock() {
+                    Ok(st) if Arc::strong_count(&w) == 2 => idle.saturating_sub(st.used.elapsed()),
+                    _ => idle,
+                };
+                if wait.is_zero() {
+                    writers.remove(&tenant);
+                    drop(writers);
+                    // Closing the last handle of a tenant may checkpoint its WAL.
+                    tokio::task::spawn_blocking(move || drop(w));
+                    return;
+                }
+            }
+        });
+        w
     }
 
     fn writers(&self) -> std::sync::MutexGuard<'_, HashMap<TenantId, Arc<Writer<S::Tenant>>>> {
@@ -882,19 +883,62 @@ mod tests {
         )
     }
 
-    /// Writes cancelled at random moments while the writer keeps retiring:
-    /// never two writer threads at once, heads only go up, nothing confirmed
-    /// is lost.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn idle_writer_retiring_under_cancelled_writes_stays_single() {
-        let dir = std::env::temp_dir().join(format!(
-            "musubi-writer-race-{}-{}",
+    /// A fresh store directory under the temp dir.
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "musubi-{name}-{}-{}",
             std::process::id(),
             Timestamp::now().as_nanosecond()
-        ));
+        ))
+    }
+
+    /// An engine over `storage` whose writers are dropped after 1 ms idle.
+    fn engine(
+        dir: &std::path::Path,
+        storage: Arc<SqliteStorage>,
+        sink: CommitSink,
+    ) -> Engine<SqliteStorage> {
+        let control = Arc::new(SqliteControl::open(&dir.join("control.db")).unwrap());
+        let codecs = Codecs {
+            event: Some(DecodeFn::of::<CanonicalCodec>()),
+            ..Codecs::default()
+        };
+        Engine::new(
+            storage,
+            Providers::new().with(Arc::new(FakeProvider::new()), codecs),
+            control,
+            Arc::new(MemoryVault::default()),
+            Arc::new(ManualClock::new(Timestamp::now())),
+            sink,
+            Config {
+                writer_idle: Duration::from_millis(1),
+                ..Config::default()
+            },
+        )
+    }
+
+    fn discovered(name: String) -> DiscoveryWrite {
+        DiscoveryWrite {
+            account: AccountId::from_u128(1),
+            collections: vec![collection(name)],
+            complete: false,
+        }
+    }
+
+    fn names(storage: &SqliteStorage, tenant: TenantId) -> std::collections::HashSet<String> {
+        let store = storage.open(tenant).unwrap();
+        let cols = store.collections().unwrap();
+        cols.into_iter().map(|c| c.remote.remote.0).collect()
+    }
+
+    /// Writes cancelled at random moments while the writer keeps retiring:
+    /// never two writes of a tenant at once, heads only go up, nothing
+    /// confirmed is lost.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn idle_writer_retiring_under_cancelled_writes_stays_single() {
+        let dir = temp_dir("writer-race");
         let storage = Arc::new(SqliteStorage::new(&dir.join("tenants"), 4).unwrap());
         storage.create_tenant(TENANT).unwrap();
-        let control = Arc::new(SqliteControl::open(&dir.join("control.db")).unwrap());
         let (last, backwards) = (
             Arc::new(AtomicU64::new(0)),
             Arc::new(AtomicBool::new(false)),
@@ -907,22 +951,7 @@ mod tests {
                 }
             })
         };
-        let codecs = Codecs {
-            event: Some(DecodeFn::of::<CanonicalCodec>()),
-            ..Codecs::default()
-        };
-        let engine: Engine<SqliteStorage> = Engine::new(
-            storage.clone(),
-            Providers::new().with(Arc::new(FakeProvider::new()), codecs),
-            control,
-            Arc::new(MemoryVault::default()),
-            Arc::new(ManualClock::new(Timestamp::now())),
-            sink,
-            Config {
-                writer_idle: Duration::from_millis(1),
-                ..Config::default()
-            },
-        );
+        let engine = engine(&dir, storage.clone(), sink);
         static INSIDE: AtomicUsize = AtomicUsize::new(0);
         static OVERLAP: AtomicBool = AtomicBool::new(false);
         let put = |name: String, slow: bool| {
@@ -934,11 +963,7 @@ mod tests {
                     // Still running when a second writer would start.
                     std::thread::sleep(Duration::from_millis(2));
                 }
-                let out = s.apply_discovery(&DiscoveryWrite {
-                    account: AccountId::from_u128(1),
-                    collections: vec![collection(name)],
-                    complete: false,
-                });
+                let out = s.apply_discovery(&discovered(name));
                 INSIDE.fetch_sub(1, Ordering::SeqCst);
                 out
             })
@@ -967,17 +992,92 @@ mod tests {
             !backwards.load(Ordering::SeqCst),
             "a commit head went backwards"
         );
-        let have: std::collections::HashSet<String> = storage
-            .open(TENANT)
-            .unwrap()
-            .collections()
-            .unwrap()
-            .into_iter()
-            .map(|c| c.remote.remote.0)
-            .collect();
+        let have = names(&storage, TENANT);
         for name in &confirmed {
             assert!(have.contains(name), "{name} confirmed but lost");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 64 tenants on a blocking pool of two threads: every write runs on that
+    /// pool (no thread per tenant), each tenant's writes run in the order they
+    /// asked, each commit is notified once in order, and none is lost while
+    /// idle writers keep being dropped.
+    #[test]
+    fn writes_of_many_tenants_keep_order_on_a_bounded_pool() {
+        const POOL: usize = 2;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .max_blocking_threads(POOL)
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = temp_dir("writer-pool");
+        let storage = Arc::new(SqliteStorage::new(&dir.join("tenants"), 4).unwrap());
+        let tenants: Vec<TenantId> = (1..=64).map(TenantId::from_u128).collect();
+        for &t in &tenants {
+            storage.create_tenant(t).unwrap();
+        }
+        type Log<V> = Arc<Mutex<HashMap<TenantId, Vec<V>>>>;
+        let (notified, ran): (Log<u64>, Log<usize>) = Default::default();
+        let sink: CommitSink = {
+            let notified = notified.clone();
+            Arc::new(move |t, head: Seq| {
+                notified.lock().unwrap().entry(t).or_default().push(head.0)
+            })
+        };
+        let threads = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let engine = engine(&dir, storage.clone(), sink);
+        let put = |t: TenantId, i: usize| {
+            let (ran, threads) = (ran.clone(), threads.clone());
+            Box::pin(engine.write(t, move |s| {
+                threads.lock().unwrap().insert(std::thread::current().id());
+                ran.lock().unwrap().entry(t).or_default().push(i);
+                s.apply_discovery(&discovered(format!("c{i}")))
+            }))
+        };
+        const ROUNDS: usize = 5;
+        const PER_ROUND: usize = 20;
+        rt.block_on(async {
+            for round in 0..ROUNDS {
+                // Polled once in this order, each write asks for its tenant's
+                // writer in index order before any of them is awaited.
+                let mut pending = Vec::new();
+                for i in round * PER_ROUND..(round + 1) * PER_ROUND {
+                    for &t in &tenants {
+                        let mut w = put(t, i);
+                        match futures_util::FutureExt::now_or_never(w.as_mut()) {
+                            Some(r) => r.unwrap(),
+                            None => pending.push(w),
+                        }
+                    }
+                }
+                for r in futures_util::future::join_all(pending).await {
+                    r.unwrap();
+                }
+                // Idle writers are dropped between rounds.
+                while engine.active_writers() > 0 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        });
+        let used = threads.lock().unwrap().len();
+        assert!(used <= POOL, "writes ran on {used} threads");
+        let (ran, notified) = (ran.lock().unwrap(), notified.lock().unwrap());
+        let want: Vec<usize> = (0..ROUNDS * PER_ROUND).collect();
+        for t in &tenants {
+            assert_eq!(ran[t], want, "{t}: writes ran out of order");
+            let heads = &notified[t];
+            assert!(heads.windows(2).all(|w| w[0] < w[1]), "{t}: {heads:?}");
+            let head = storage.open(*t).unwrap().head().unwrap();
+            assert_eq!(heads.last(), Some(&head.0), "{t}: last commit not notified");
+            let have = names(&storage, *t);
+            assert!(
+                want.iter().all(|i| have.contains(&format!("c{i}"))),
+                "{t}: a write was lost"
+            );
+        }
+        drop(rt);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
