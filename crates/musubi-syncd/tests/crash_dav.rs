@@ -419,8 +419,8 @@ async fn run(seed: u64) -> (u64, u64) {
         while !follower.at(head(&j)) {
             assert!(
                 Instant::now() < deadline,
-                "follower at {} of {}",
-                follower.cursor(),
+                "{} of {}",
+                follower.state(),
                 head(&j)
             );
             tokio::time::sleep(Duration::from_millis(50)).await;

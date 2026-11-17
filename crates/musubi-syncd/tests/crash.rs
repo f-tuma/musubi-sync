@@ -241,12 +241,19 @@ async fn settle(w: &World, followers: &[Follower]) -> Vec<musubi_model::Change> 
         if h == last && followers.iter().all(|f| f.at(h)) {
             return j;
         }
-        let at: Vec<_> = followers.iter().map(Follower::cursor).collect();
-        assert!(
-            Instant::now() < deadline,
-            "followers at {at:?} of {h}\n{}",
-            w.node().tail(40)
-        );
+        if Instant::now() >= deadline {
+            let stalled: Vec<_> = followers
+                .iter()
+                .filter(|f| !f.at(h))
+                .map(Follower::state)
+                .collect();
+            panic!(
+                "followers not at head {h} after 30 s (journal {}):\n{}\n{}",
+                if h == last { "still" } else { "moving" },
+                stalled.join("\n"),
+                w.node().tail(40)
+            );
+        }
         last = h;
         tokio::time::sleep(Duration::from_millis(300)).await;
     }

@@ -386,7 +386,26 @@ pub struct Seen {
     pub errors: Vec<String>,
     /// The last head the stream announced and the client read up to.
     pub announced: u64,
+    /// Requests failed in a row (node down, 503, timeout) and the last
+    /// failure, to tell a stalled client from a dead node.
+    pub failures: u64,
+    pub last_failure: String,
 }
+
+impl Seen {
+    fn failed(&mut self, what: String) {
+        self.failures += 1;
+        self.last_failure = what;
+    }
+}
+
+/// Bound of one `/v1/changes` request or stream connect, well below the
+/// tests' settle windows and the node's 30 s `REQUEST_TIMEOUT`: a hung
+/// request is dropped and retried instead of eating the window.
+const REQUEST: Duration = Duration::from_secs(5);
+/// Longest silence on a stream before it reconnects: above the node's 15 s
+/// SSE keep-alive.
+const STREAM_IDLE: Duration = Duration::from_secs(20);
 
 impl Follower {
     /// Polls `/v1/changes`.
@@ -455,8 +474,21 @@ impl Follower {
         s.cursor == head && (!self.sse || s.announced == head)
     }
 
-    pub fn cursor(&self) -> u64 {
-        self.seen.lock().expect("seen").cursor
+    /// Where the client is and why it is not further, for a stall message.
+    pub fn state(&self) -> String {
+        let s = self.seen.lock().expect("seen");
+        let kind = if self.sse { "sse" } else { "polling" };
+        format!(
+            "{kind} follower at seq {} (announced {}), {} failures in a row, last: {}",
+            s.cursor,
+            s.announced,
+            s.failures,
+            if s.last_failure.is_empty() {
+                "none"
+            } else {
+                &s.last_failure
+            }
+        )
     }
 }
 
@@ -470,10 +502,16 @@ impl Drop for Follower {
 /// follow, `None` while the node is down.
 async fn read_page(api: &Api, key: &str, s: &Mutex<Seen>) -> Option<bool> {
     let since = s.lock().expect("seen").cursor;
-    match api.changes(key, since, 1000).await {
-        Ok((200, v)) => {
+    let failed = |what: String| {
+        s.lock()
+            .expect("seen")
+            .failed(format!("since {since}: {what}"))
+    };
+    match tokio::time::timeout(REQUEST, api.changes(key, since, 1000)).await {
+        Ok(Ok((200, v))) => {
             let page: ChangesPage = serde_json::from_value(v).expect("changes page");
             let mut s = s.lock().expect("seen");
+            s.failures = 0;
             for c in page.changes {
                 if c.seq.0 <= s.cursor {
                     let e = format!("seq {} after cursor {}", c.seq.0, s.cursor);
@@ -484,13 +522,24 @@ async fn read_page(api: &Api, key: &str, s: &Mutex<Seen>) -> Option<bool> {
             }
             Some(page.more)
         }
-        Ok((status, v)) if status != 503 => {
+        Ok(Ok((status, v))) if status != 503 => {
             let e = format!("since {since}: {status} {v}");
             s.lock().expect("seen").errors.push(e);
             Some(false)
         }
-        // The node is down or restarting.
-        _ => None,
+        // The node is down, restarting or busy: retried.
+        Ok(Ok((status, v))) => {
+            failed(format!("{status} {v}"));
+            None
+        }
+        Ok(Err(e)) => {
+            failed(e.to_string());
+            None
+        }
+        Err(_) => {
+            failed(format!("no answer in {REQUEST:?}"));
+            None
+        }
     }
 }
 
@@ -505,16 +554,23 @@ async fn follow_stream(api: &Api, key: &str, s: &Mutex<Seen>) {
     if last > 0 {
         req = req.header("last-event-id", last.to_string());
     }
-    let Ok(mut resp) = req.send().await else {
-        return;
+    let failed = |what: String| {
+        s.lock()
+            .expect("seen")
+            .failed(format!("stream after {last}: {what}"))
+    };
+    let mut resp = match tokio::time::timeout(REQUEST, req.send()).await {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => return failed(e.to_string()),
+        Err(_) => return failed(format!("no answer in {REQUEST:?}")),
     };
     match resp.status().as_u16() {
-        200 => {}
-        503 => return,
+        200 => s.lock().expect("seen").failures = 0,
+        503 => return failed("503".into()),
         status => return error(format!("stream after {last}: {status}")),
     }
     let mut buf = String::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
+    while let Ok(Ok(Some(chunk))) = tokio::time::timeout(STREAM_IDLE, resp.chunk()).await {
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(i) = buf.find("\n\n") {
             let ev: String = buf.drain(..i + 2).collect();
