@@ -36,12 +36,15 @@ Sekundy od změny u poskytovatele do záznamu v deníku. Vzorků je málo, proto
 - Zpoždění propsání u People se od zpoždění dotazu oddělit nedá; minimum 0,6 s ukazuje, že je pod sekundou, ve shodě s T10 (0,1–0,2 s).
 - iCloud přijal `PUT` s `If-None-Match: *` (vytvoření) i `DELETE` bez podmínky. `PUT` s `If-Match` (vdirsyncer #1145) zůstává neověřený, protože syncd do poskytovatele zatím nezapisuje.
 
-## 5. Zbývá (nejdřív 2026-11-24)
+## 5. Kvóta Tasks API (otevřená otázka 7)
+
+Cloud Console projektu `musubi-sync-test`, 2026-11-22: **50 000 dotazů za den na projekt** (upravitelná, ten den využito 263) a 60 000 000 dotazů za minutu na uživatele. Podle D2 stojí seznam úkolů beze změn 60 dotazů za hodinu v aktivní úrovni, 5 v běžné a 1 ve spící, tedy 1 440, 120 a 24 za den. Denní kvóta tak pokryje zhruba 400 seznamů trvale v běžné úrovni, ale jen asi 35 trvale v aktivní. Pro jednoho uživatele i malé nasazení meze stačí. Větší nasazení potřebuje vyšší kvótu nebo delší `min` aktivní úrovně pro Tasks; kontrakt se tím nemění.
+
+## 6. Zbývá (nejdřív 2026-11-24)
 
 - Delta People s tokenem A a s posledním tokenem řetězu B (kapitola 6.3) a tvar chyby vypršeného tokenu (otevřená otázka 3).
 - Vypršení kanálu push kalendáře Google 24. 11.
-- Kvóta Tasks API (otevřená otázka 7).
 
-## 6. Dopad
+## 7. Dopad
 
 Žádná odchylka neměnila kontrakt; K10 zatím nenašla nic, co by blokovalo K11. Meze dotazování zůstávají. D4 může u People nahradit odhad „několik minut“ naměřeným: propsání pod sekundu.
