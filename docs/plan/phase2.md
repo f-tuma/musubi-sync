@@ -767,6 +767,22 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 
 Měření K9: D1, D2 a D4 měří binárka `crates/musubi-testkit/src/bin/bench.rs` (`musubi-syncd` jako proces nad falešným DAV), D3 je `cargo bench -p musubi-ical`. D2 zrychlí čas 20× (v `bench-smoke` 60×): všechny meze vydělí stejným číslem a hodinu zkrátí na 180 s. Spící úroveň nastane až po 7 dnech bez zájmu, proto D2 dá spící meze na místo běžných. Čísla jsou z jednoho běhu na Intel Core Ultra 7 265K.
 
+**B3t (K12d), rozsah nad událostmi a úkoly.** Měří binárka `bench.rs` (`b3t`) nad falešným DAV: 4 950 událostí a 50 týdenních sérií jako B3 (kapitola 6.5 plánu fáze 1), k tomu 5 000 úkolů (250 denních a 250 týdenních otevřených sérií, 1 000 bez data, 1 000 dokončených, zbytek jednorázové). Každý dotaz čte všechny stránky po 1 000 výskytech s kanonickým JSON, p99 z 500 dotazů v náhodných oknech za ±2,5 roku. Hodnoty jsou ze dvou běhů release na Intel Core Ultra 7 265K. B3 ve stejných bězích dává 7 dní 1,0–1,2 ms a 30 dní 3,7–3,9 ms, sloupec „bez úkolů" je B3t s 0 úkoly.
+
+| Dotaz | Výskytů | p99 bez úkolů | p99 s úkoly | Cíl |
+| --- | --- | --- | --- | --- |
+| 7 dní `kind=event` | ~44 | 1,1 ms | 0,9 / 1,0 ms | ≤ 10 ms, bez zhoršení proti B3 |
+| 7 dní `kind=event,task` | ~1 100 | 0,9 ms | 19,0 / 20,3 ms | měří se |
+| 7 dní `kind=event,task`, jen id | ~1 100 | 0,4 ms | 9,4 / 9,3 ms | měří se |
+| 7 dní `kind=task&done=false` | ~1 020 | 0,2 ms | 17,7 / 18,4 ms | měří se |
+| 30 dní `kind=event` | ~196 | 2,8 ms | 2,9 / 3,1 ms | ≤ 10 ms, bez zhoršení proti B3 |
+| 30 dní `kind=event,task` | ~4 700 | 2,6 ms | 76,8 / 79,4 ms | měří se |
+| 30 dní `kind=event,task`, jen id | ~4 650 | 1,2 ms | 34,0 / 37,0 ms | měří se |
+| 30 dní `kind=task&done=false` | ~4 440 | 0,1 ms | 73,9 / 75,4 ms | měří se |
+| velikost `main.db` | | 11,0 MB | 137,0 MB (WAL 4,2 MB) | měří se |
+
+`kind=event` stojí stejně s úkoly i bez nich, protože jde přes index `occurrences_kind_time` (12.4, R1). Dotazy přes úkoly vracejí tisíce výskytů: polovinu času tvoří kanonický JSON (verze jen s id je zhruba dvakrát rychlejší) a zbytek je asi 8 µs na výskyt v pěti stránkách HTTP. Malé měřítko (495 + 5 událostí, 500 úkolů) běží v `bench-smoke` (`bench --smoke`) se smoke mezí 10× pro `kind=event`, jako ostatní časové řádky.
+
 Latence u DAV, Tasks a People je omezená dotazováním. Cíl „do 500 ms od oznámení" pro ně neplatí, protože oznámení neexistuje. D4 to ukáže čísly (riziko 11 v kapitole 11.3 návrhu).
 
 ### 11.3 Mimo rozsah fáze 2
@@ -848,13 +864,16 @@ Jedna nová migrace v `MAIN_MIGRATIONS` (`schema.rs:13`), líná při otevření
 
 ```sql
 ALTER TABLE occurrences ADD COLUMN done INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE occurrences ADD COLUMN kind TEXT NOT NULL DEFAULT 'event';
+CREATE INDEX occurrences_kind_time ON occurrences(kind, start, entity, rid);
+CREATE INDEX occurrences_kind_long ON occurrences(kind, end) WHERE end - start > 604800000000;
 -- Vynutí jednorázový přepočet úkolů (kapitola 10, bod 1), který jim spočítá výskyty.
 UPDATE items SET schema_version = 0 WHERE kind = 'task' AND tombstone = 0;
-DELETE FROM meta WHERE k LIKE 'mapping:%:task:schema' OR k LIKE 'mapping:%:task:mapping';
+DELETE FROM meta WHERE k GLOB 'mapping:*:task:schema' OR k GLOB 'mapping:*:task:mapping';
 ```
 
 - **Proč ne `Task::SCHEMA_VERSION = 2`:** kanonický JSON úkolu se nemění. `SCHEMA_VERSION` je v hashovaném modulu `kind` a zvýšení by bylo změnou kontraktu bez důvodu. Index je odvozená data. Přepočet spustí migrace tak, že úkoly označí jako zastaralé (`stale_items` hledá `schema_version <> ?`, `tenant.rs:1092`) a smaže meta řádky, které `redecoded` čte (`redecode.rs:55–60`). Při startu pak engine přes `redecode_write` → `item_write` přepočítá všechny úkoly ze surové vrstvy a `redecode` v úložišti zapíše jejich řádky (`tenant.rs:679–691`).
-- **Bez sloupce `kind` v `occurrences`:** filtr druhu je `i.kind IN (…)` nad `items`, které dotaz na rozsah už spojuje kvůli `observed` (`tenant.rs:760`). Cenu ověří K12a (riziko R1). Kdyby test nevyšel, sloupec a index s druhem na začátku přijdou do téhož `MAIN_V3` ještě před vydáním. Po vydání se `MAIN_V3` nemění.
+- **Sloupec `kind` v `occurrences`:** druh položky výskytu, hodnoty jen z `EntityKind::as_str`. Řádky před `MAIN_V3` jsou všechny události (úkoly řádky neměly), proto výchozí `'event'`. `insert_occurrences` bere druh z `items.kind` položky, takže ho zapisují `apply_page`, `redecode` i `extend_occurrences` bez změny `OccurrenceRow`. Indexy `occurrences_kind_time` a `occurrences_kind_long` jsou dvojčata `occurrences_time` a `occurrences_long` s druhem na začátku. Dotaz na jeden druh jde přes ně a řádků jiného druhu se nedotkne (riziko R1, K12d). Původní indexy zůstávají pro dotaz přes všechny druhy. Po vydání se `MAIN_V3` nemění.
 - `ADD COLUMN` s konstantní výchozí hodnotou je v SQLite O(1). `UPDATE` sáhne jen na řádky úkolů, a to v transakci migrace.
 
 **Změny `musubi-model::store`** (mimo kontrakt):
@@ -866,7 +885,7 @@ DELETE FROM meta WHERE k LIKE 'mapping:%:task:schema' OR k LIKE 'mapping:%:task:
 | `RangeQuery` | `kinds: Vec<EntityKind>` (neprázdné; jen druhy s výskyty), `done: Option<bool>` (`None` = vše) |
 | `list_entities` | dokumentace už neříká „druhy bez výskytů"; chování beze změny |
 
-**`range`** (`tenant.rs:702`) přidá do obou polovin `UNION ALL` podmínku `AND i.kind IN (…)`, při `done` i `AND o.done = 0` nebo `1`. Část `unindexed` filtruje druh v `EXISTS (SELECT 1 FROM items i …)` (`tenant.rs:827`). Klíč stránkování `(start, entity, rid)` se nemění; `kinds` a `done` musí být na všech stránkách stejné, stejně jako dnes `collections`. `series_to_extend` a `extend_occurrences` se nemění: série úkolů jsou řádky `entities` se stejnými sloupci `series_first`, `series_last` a `indexed_until`.
+**`range`** (`tenant.rs`) při dotazu na všechny druhy s výskyty (událost i úkol) druh nefiltruje a obě poloviny `UNION ALL` jdou přes `occurrences_time` a `occurrences_long` v pořadí stránek. Při jednom druhu dají obě poloviny `AND o.kind IN (…)` a jdou přes `occurrences_kind_time` a `occurrences_kind_long` (`INDEXED BY`). Při `done` přibude `AND o.done = 0` nebo `1`. Část `unindexed` filtruje druh v `EXISTS (SELECT 1 FROM items i …)` (`tenant.rs:827`). Klíč stránkování `(start, entity, rid)` se nemění; `kinds` a `done` musí být na všech stránkách stejné, stejně jako dnes `collections`. `series_to_extend` a `extend_occurrences` se nemění: série úkolů jsou řádky `entities` se stejnými sloupci `series_first`, `series_last` a `indexed_until`.
 
 **Přechod a návrat** (pravidla 4.4 platí beze změny):
 - Před přechodem záloha binárkou K11.
@@ -913,10 +932,10 @@ DELETE FROM meta WHERE k LIKE 'mapping:%:task:schema' OR k LIKE 'mapping:%:task:
   - `extension(Task, …)` od horizontu dává totéž co čerstvé rozbalení (vzor `custom_zone_indexes_and_extends_like_its_iana_zone`).
   - Golden snímky `codec_golden__tasks__{recurring,completed}.snap` přes pomocnou funkci podle `ical_rows` (`ingest.rs:725`), bez závislosti na `musubi-ical`.
 - **Úložiště (`musubi-store-sqlite`):**
-  - test migrace: soubor `MAIN_V2` s úkolem a meta `mapping:…:task:*` → `MAIN_V3`, úkol má `schema_version = 0`, meta řádky jsou pryč, události a jejich řádky beze změny, `done = 0`;
+  - test migrace: soubor `MAIN_V2` s úkolem a meta `mapping:…:task:*` → `MAIN_V3`, úkol má `schema_version = 0`, meta řádky jsou pryč, události a jejich řádky beze změny, `done = 0`, `kind = 'event'`;
   - `range` s `kinds` a `done` přes stránky (bez duplicit, bez děr);
   - `unindexed` jen pro požadované druhy;
-  - test počtu VM kroků (vzor `long_occurrence_does_not_widen_the_range_scan`, `tenant.rs:1451`): dotaz jen na události v okně s N řádky úkolů. Výsledek rozhodne R1.
+  - test počtu VM kroků (`task_rows_in_the_window_cost_an_event_range_nothing`, vzor `long_occurrence_does_not_widen_the_range_scan`): dotaz jen na události v okně s 1 500 a 15 000 řádky úkolů stojí stejně jako bez nich (odchylka pod 16 kroků celkem), dotaz na oba druhy projde po stránkách všechny řádky jednou a v pořadí.
 - **Engine (`crates/musubi-engine/tests/cases`):**
   - `FakeProvider` s VTODO JSON přes testovací kodek → rozsah vrací úkoly;
   - změna `progress` přepíše `done`;
@@ -992,9 +1011,12 @@ K11 ─ K12a úložiště ─┬─ K12b engine ─┬─ K12d důkaz
 **Rizika**
 
 - **R1, cena filtru druhu.** Dotaz jen na události projde i řádky úkolů v okně. Při stovkách denních úkolů to může přerazit p99 10 ms. Měří K12a (VM kroky) a K12d (B3t). Náprava je sloupec `occurrences.kind` s indexem s druhem na začátku, pouze uvnitř nevydaného `MAIN_V3`.
-  - **Výsledek K12a** (`task_rows_in_the_window_cost_an_event_range`, `tenant.rs`): okno 30 dní s 240 událostmi stojí 7 841 VM kroků. Každý řádek úkolu v okně přidá 14 kroků (krok indexu, řádek a jeho položka), lineárně. 1 500 řádků úkolů (50 denních úkolů za měsíc, 12.6) dá 28 746 kroků a asi 0,24 ms, 15 000 řádků 217 746 kroků a asi 1,6 ms (release, databáze v paměti, nejlepší z 50 běhů; čtení všech 15 240 řádků obou druhů asi 2,8 ms). **Rozhodnutí:** filtr přes `items` stačí, `MAIN_V3` sloupec `kind` nedostane. Test hlídá mez 16 kroků na řádek úkolu. Konečné p99 ze souboru na disku změří B3t (K12d).
+  - **Výsledek K12a:** s filtrem přes `items` přidal každý řádek úkolu v okně dotazu jen na události 14 VM kroků, v paměti asi 1,6 ms na 15 000 řádků.
+  - **Výsledek K12d (B3t, soubor na disku):** s filtrem přes `items` stál `kind=event` za 30 dní 9,0–9,1 ms p99 proti 2,5 ms bez úkolů a za 7 dní 3,1 ms proti 0,8 ms. To je pod 10 ms, ale trojnásobné zhoršení proti B3. Okno 30 dní obsahuje asi 4 500 řádků úkolů z otevřených denních sérií.
+  - **Rozhodnutí:** `MAIN_V3` dostane sloupec `occurrences.kind` a indexy s druhem na začátku (12.4). Dotaz jen na události pak řádky úkolů neprochází: test VM kroků ukazuje stejný počet kroků s 0, 1 500 i 15 000 řádky úkolů v okně a B3t dává `kind=event` za 7 dní 0,9–1,0 ms a za 30 dní 2,9–3,1 ms, stejně jako bez úkolů (11.2).
 - **R6, pořadí K12a a K12b.** Binárka s `MAIN_V3` bez výpočtu výskytů úkolů (K12a bez K12b) by přepočet po migraci spotřebovala naprázdno a úkoly by zůstaly bez řádků, dokud se u poskytovatele nezmění. K12a a K12b se proto mergují hned po sobě, K12b na větvi K12a, a mezi nimi neběží build z `main` proti skutečnému tenantovi.
 - **R2, velikost indexu.** Otevřené denní série mají tisíce řádků za 5 let horizontu, stejně jako události. Kratší horizont pro úkoly by porušil rozhodnutí „stejně jako události", proto se jen měří (B3t, velikost `main.db`).
+  - **Výsledek K12d (B3t):** 250 denních a 250 týdenních otevřených sérií úkolů dá 536 149 řádků výskytů proti 18 456 řádkům událostí. `main.db` má 137,0 MB proti 11,0 MB bez úkolů. Z toho asi 32 MB připadá na sloupec `kind` a indexy z R1 (105 MB před nimi). Rozsah `kind=event` tím nezpomalí (11.2).
 - **R3, přepočet při přechodu.** Do konce přepočtu po startu `kind=task` neukáže všechno a nic to nesignalizuje (jen log). Dekódování VTODO zvládá asi 82 MB/s (D3), takže tisíce úkolů jsou otázka sekund.
 - **R4, žádný záznam v žurnálu.** Když se změní jen index (kanonický tvar je stejný), `redecode` nic nežurnáluje (`tenant.rs:667`). Klient, který si drží rozsahy v mezipaměti, se o nových výskytech úkolů po přechodu nedozví ze SSE. Provozní poznámka: po přechodu načíst rozsahy znovu.
 - **R5, různé chování klientů při dokončení opakovaného úkolu.** Thunderbird zapisuje výjimku s `RECURRENCE-ID`, Apple posouvá `DTSTART` předlohy. Index ukazuje to, co je v datech; úkoly iCloudu ve v1 nejsou.
