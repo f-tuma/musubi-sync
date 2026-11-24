@@ -14,7 +14,8 @@ use musubi_model::control::{
 };
 use musubi_model::provider::{ChannelId, Subscription};
 use musubi_model::{
-    AccountId, CollectionRef, ControlStore, Storage, StoreError, TenantId, TenantStore, TokenVault,
+    AccountId, CollectionRef, ControlStore, EntityKind, Storage, StoreError, TenantId, TenantStore,
+    TokenVault,
 };
 use musubi_syncd::crypto::Claims;
 use secrecy::ExposeSecret;
@@ -905,4 +906,125 @@ async fn stream_resumed_one_before_the_head_gets_the_head_and_what_follows() {
         None,
         "nothing twice"
     );
+}
+
+/// A one-hour task occurrence at hour `h`, as the engine indexes it (K12b).
+fn task(key: &str, h: i64, done: bool) -> musubi_model::store::ItemWrite {
+    let mut w = event(key, "1", h);
+    w.kind = EntityKind::Task;
+    w.occurrences.rows[0].done = done;
+    w
+}
+
+/// `(canonical id, kind, done)` of each occurrence of a range page.
+fn rows(v: &Value) -> Vec<(String, String, bool)> {
+    v["occurrences"]
+        .as_array()
+        .unwrap_or_else(|| panic!("occurrences: {v}"))
+        .iter()
+        .map(|o| {
+            (
+                o["canonical"]["id"].as_str().expect("id").to_owned(),
+                o["kind"].as_str().expect("kind").to_owned(),
+                o["done"].as_bool().expect("done"),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_range_reads_events_and_tasks_by_kind_and_done() {
+    let n = Node::start().await;
+    let a = n.tenant().await;
+    let (key, _) = n.key(a, "read").await;
+    let acc = account(&n, a, 9);
+    n.write(
+        a,
+        acc,
+        "cal",
+        vec![
+            event("e1", "1", 1),
+            task("t1", 2, false),
+            event("e2", "1", 3),
+            task("t2", 4, true),
+        ],
+    );
+    let window = "from=2026-01-05T00:00:00Z&to=2026-01-06T00:00:00Z";
+    let get = async |q: &str| {
+        let (s, v) = n.get(&format!("/v1/entities?{q}"), &key).await;
+        assert_eq!(s, 200, "{q}: {v}");
+        v
+    };
+    let r = |id: &str, kind: &str, done| (id.to_owned(), kind.to_owned(), done);
+    let (e1, t1, e2, t2) = (
+        r("e1", "event", false),
+        r("t1", "task", false),
+        r("e2", "event", false),
+        r("t2", "task", true),
+    );
+
+    let all = vec![e1.clone(), t1.clone(), e2.clone(), t2.clone()];
+    assert_eq!(rows(&get(window).await), all, "default: every kind");
+    let both = get(&format!("{window}&kind=task,event")).await;
+    assert_eq!(rows(&both), all);
+    assert_eq!(both["unindexed"], json!([]));
+    let events = get(&format!("{window}&kind=event")).await;
+    assert_eq!(rows(&events), vec![e1.clone(), e2.clone()]);
+    assert_eq!(events["occurrences"][0]["start"], "2026-01-05T01:00:00Z");
+    assert_eq!(events["occurrences"][0]["end"], "2026-01-05T02:00:00Z");
+    assert_eq!(events["occurrences"][0]["floating"], false);
+    assert_eq!(events["occurrences"][0]["recurrence_id"], Value::Null);
+    assert_eq!(
+        rows(&get(&format!("{window}&kind=task")).await),
+        vec![t1.clone(), t2.clone()]
+    );
+    assert_eq!(
+        rows(&get(&format!("{window}&done=false")).await),
+        vec![e1.clone(), t1.clone(), e2.clone()]
+    );
+    assert_eq!(rows(&get(&format!("{window}&done=true")).await), vec![t2]);
+    assert_eq!(
+        rows(&get(&format!("{window}&kind=task&done=false")).await),
+        vec![t1]
+    );
+    let ids = get(&format!("{window}&ids_only=true&kind=event,task")).await;
+    assert_eq!(ids["occurrences"].as_array().map(Vec::len), Some(4));
+    assert_eq!(ids["occurrences"][1]["kind"], "task");
+    assert_eq!(ids["occurrences"][1]["canonical"], Value::Null);
+
+    // One order over both kinds; the cursor pages it without gaps or repeats.
+    let mut paged = Vec::new();
+    let mut after = String::new();
+    loop {
+        let v = get(&format!("{window}&kind=event,task&limit=1{after}")).await;
+        paged.extend(rows(&v));
+        match v["next"].as_str() {
+            Some(next) => after = format!("&after={next}"),
+            None => break,
+        }
+    }
+    assert_eq!(paged, all);
+
+    // Listing by kind is unchanged: one kind, events only by range.
+    let (s, v) = n.get("/v1/entities?kind=task", &key).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["entities"].as_array().map(Vec::len), Some(2), "{v}");
+    for bad in [
+        format!("{window}&kind=contact"),
+        format!("{window}&kind=contact_group"),
+        format!("{window}&kind=event,contact"),
+        format!("{window}&kind=meeting"),
+        format!("{window}&kind="),
+        format!("{window}&done=maybe"),
+        "kind=event".to_owned(),
+        "kind=event,task".to_owned(),
+        "kind=task&done=false".to_owned(),
+        "from=2026-01-05T00:00:00Z&kind=task".to_owned(),
+        "to=2026-01-06T00:00:00Z".to_owned(),
+        String::new(),
+    ] {
+        let (s, v) = n.get(&format!("/v1/entities?{bad}"), &key).await;
+        assert_eq!(s, 400, "{bad}: {v}");
+        assert!(no_data(&v) && v["message"].is_string(), "{bad}: {v}");
+    }
 }

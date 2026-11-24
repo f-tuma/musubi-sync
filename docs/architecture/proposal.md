@@ -106,7 +106,8 @@ Přihlášení k **poskytovatelům** (OAuth Googlu a Microsoftu, hesla pro aplik
 POST /v1/accounts                připojení účtu (OAuth odkaz, nebo import hotového grantu)
 GET  /v1/accounts/{id}           stav synchronizace, schopnosti, poslední chyba
 GET  /v1/collections             kalendáře, seznamy úkolů, …
-GET  /v1/entities?kind=event&from=…&to=…&expand=occurrences   hlavní čtení, jeden řádek na záznam
+GET  /v1/entities?kind=event,task&from=…&to=…&done=…   hlavní čtení, jeden řádek na výskyt
+GET  /v1/entities?kind=task      výpis jednoho druhu (úkoly, kontakty, skupiny)
 GET  /v1/entities/{id}?include=placements
 POST /v1/entities/{id}/placements   umístit do další kolekce, nebo připojit existující položku
 GET  /v1/items/{id}?include=raw  nízkoúrovňový pohled na jednu kopii u poskytovatele
@@ -118,6 +119,8 @@ POST /v1/tokens                  krátkodobý token pro klienta (kapitola 7)
 GET  /v1/rules                   pravidla synchronizace (kapitola 13.9)
 GET  /v1/scheduling/…            plánovací adresy, odesílatelé, nastavení (kapitola 14.11)
 ```
+
+**Čtení rozsahu.** O režimu rozhoduje přítomnost `from` a `to`. V rozsahu je `kind` seznam oddělený čárkami z `event` a `task`; bez něj se vrací oba druhy s výskyty, jiný druh je `400`. `done=true|false` nechá jen výskyty úkolů dokončené nebo nedokončené (události mají vždy `false`), bez něj se vrací vše. Každý výskyt nese `entity`, `kind`, `recurrence_id`, `start`, `end`, `floating`, `done` a `canonical`. Kurzor `after` platí jen pro stejné `kind`, `done` a `collection`. Bez `from` a `to` je `kind` jeden druh k výpisu; `kind=event` je `400`, `kind=task` je jediná cesta k úkolům bez data.
 
 Úplný seznam volání pro umístění je v kapitole 12.11, pro pravidla v 13.9 a pro plánování v 14.11.
 
@@ -1299,7 +1302,7 @@ Značka slouží k obnově vazeb po ztrátě databáze, k rozpoznání vlastní 
 ### 12.11 API
 
 ```
-GET    /v1/entities?kind=event&from=…&to=…        jeden řádek na záznam
+GET    /v1/entities?kind=event,task&from=…&to=…   jeden řádek na výskyt (kapitola 1)
 GET    /v1/entities/{id}?include=placements        umístění, jejich stav a věrnost
 POST   /v1/mutations                               create { kind, data, placements: [{collection, role}], policy } | update | delete { notify_attendees }
 POST   /v1/entities/{id}/placements                { collection } nebo { item, truth }; volitelně dry_run, allow_lossy

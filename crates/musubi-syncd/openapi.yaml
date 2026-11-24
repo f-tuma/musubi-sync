@@ -155,21 +155,27 @@ paths:
     get:
       summary: Occurrences in a time window, or entities of one kind, paged
       description: |
-        Without `kind`: one row per occurrence overlapping `[from, to)`
-        (both required), ordered by start. Pass `next` back as `after` for the
-        following page. Series whose stored occurrence index ends inside the
-        window are listed in `unindexed` (their later occurrences are not in
-        this page).
+        With `from` and `to`: one row per occurrence of an event or a task
+        overlapping `[from, to)`, ordered by start. `kind` is a comma-separated
+        list of `event` and `task` (default both; any other kind answers
+        `400`); `done` keeps only occurrences with that `done` (default all).
+        Pass `next` back as `after` for the following page, with the same
+        `kind`, `done` and `collection`. Series of the requested kinds whose
+        stored occurrence index ends inside the window are listed in
+        `unindexed` (their later occurrences are not in this page).
 
-        With `kind` (`task`, `contact`, `contact_group`): the live entities of
-        that kind in `collection` (default all), ordered by id, as
+        Without `from` and `to`, `kind` (`task`, `contact`, `contact_group`)
+        lists the live entities of that one kind in `collection` (default
+        all), ordered by id, as
         `{"entities": [{id, kind, rev, seq, tombstone, canonical}], "next"}`;
-        `from`, `to`, `zone`, `ids_only` and `expand` do not apply. Events are
-        read by range (`kind=event` answers `400`).
+        this is the only way to read tasks without dates. `zone`, `ids_only`
+        and `expand` do not apply and `done` answers `400`. Events are read by
+        range (`kind=event` answers `400`).
       parameters:
-        - { name: kind, in: query, schema: { type: string, enum: [task, contact, contact_group] } }
-        - { name: from, in: query, description: Required without kind, schema: { type: string, format: date-time } }
-        - { name: to, in: query, description: Required without kind, schema: { type: string, format: date-time } }
+        - { name: kind, in: query, description: "Range: comma-separated event, task. Listing: one of task, contact, contact_group", schema: { type: string } }
+        - { name: from, in: query, description: "Range start; with to", schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: "Range end; with from", schema: { type: string, format: date-time } }
+        - { name: done, in: query, description: "Range only: completed or failed task occurrences (events are never done); default all", schema: { type: boolean } }
         - { name: zone, in: query, description: "IANA zone for floating times; default UTC", schema: { type: string } }
         - { name: collection, in: query, description: Comma-separated collection ids, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
@@ -190,14 +196,16 @@ paths:
                       type: object
                       properties:
                         entity: { $ref: "#/components/schemas/Id" }
+                        kind: { type: string, enum: [event, task] }
                         recurrence_id: { type: [string, "null"], format: date-time }
                         start: { type: string, format: date-time }
                         end: { type: string, format: date-time }
                         floating: { type: boolean }
-                        canonical: { description: Canonical event JSON, or null with ids_only }
+                        done: { type: boolean, description: "The task occurrence is completed or failed; false for events" }
+                        canonical: { description: "Canonical event or task JSON, or null with ids_only" }
                   entities:
                     type: array
-                    description: With kind.
+                    description: Listing by kind (without from and to).
                     items: { type: object }
                   next: { type: [string, "null"] }
                   unindexed:
