@@ -1925,7 +1925,8 @@ fn redeem(g: &Inner, f: &BTreeMap<String, String>) -> Response {
 
 /// Scopes the token endpoint reports as granted: everything Musubi asks for.
 const SCOPES: &str = "openid https://www.googleapis.com/auth/calendar.readonly \
-https://www.googleapis.com/auth/tasks.readonly https://www.googleapis.com/auth/contacts.readonly";
+https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks \
+https://www.googleapis.com/auth/contacts";
 
 fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)

@@ -27,11 +27,14 @@ use serde_json::{Value, json};
 use crate::crypto::{b64, random, random_token, sha256, unb64};
 use crate::{ApiError, App, Caller};
 
-/// Read-only Calendar, Tasks and Contacts (plan 6.1). The user may untick
+/// Calendar list read, and read and write of events, tasks and contacts
+/// (plan 6.1, open question 2: phase 3 writes need no second consent). The
+/// `calendarList` read needs `calendar.readonly`. The user may untick
 /// Tasks or Contacts on the consent screen; discovery then reports the kind
 /// as unauthorized instead of failing.
 const SCOPES: &str = "openid https://www.googleapis.com/auth/calendar.readonly \
-https://www.googleapis.com/auth/tasks.readonly https://www.googleapis.com/auth/contacts.readonly";
+https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks \
+https://www.googleapis.com/auth/contacts";
 const STATE_TTL: SignedDuration = SignedDuration::from_mins(10);
 
 /// The OAuth client of this node.
