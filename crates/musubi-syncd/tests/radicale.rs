@@ -105,9 +105,9 @@ async fn a_radicale_account_syncs_through_the_binary() {
     // First data.
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let tasks = ok(&api, "GET", "/v1/entities?kind=task", &read, None).await;
+        let tasks = ok(api, "GET", "/v1/entities?kind=task", read, None).await;
         let found = tasks["entities"].as_array().is_some_and(|t| t.len() == 1)
-            && names(&api, &read).await.len() == 1;
+            && names(api, read).await.len() == 1;
         if found {
             break;
         }
@@ -121,10 +121,10 @@ async fn a_radicale_account_syncs_through_the_binary() {
     let mut since = 0;
     loop {
         let page = ok(
-            &api,
+            api,
             "GET",
             &format!("/v1/changes?since={since}"),
-            &read,
+            read,
             None,
         )
         .await;
@@ -136,17 +136,17 @@ async fn a_radicale_account_syncs_through_the_binary() {
 
     // The user looks at the data: `touch` polls at once, then the active
     // level keeps polling; each change reaches the feed within two intervals.
-    ok(&api, "POST", "/v1/interest", &read, None).await;
+    ok(api, "POST", "/v1/interest", read, None).await;
     for (uid, name) in [("carol", "Carol Singer"), ("dave", "Dave Diver")] {
         let start = Instant::now();
         r.put(&r.addressbook(), &format!("{uid}.vcf"), &card(uid, name))
             .await;
         loop {
             let page = ok(
-                &api,
+                api,
                 "GET",
                 &format!("/v1/changes?since={since}"),
-                &read,
+                read,
                 None,
             )
             .await;
@@ -164,12 +164,12 @@ async fn a_radicale_account_syncs_through_the_binary() {
         eprintln!("{name} in the feed after {:?}", start.elapsed());
     }
     assert!(
-        names(&api, &read)
+        names(api, read)
             .await
             .iter()
             .any(|n| n.contains("Dave Diver")),
         "{:?}",
-        names(&api, &read).await
+        names(api, read).await
     );
 }
 
