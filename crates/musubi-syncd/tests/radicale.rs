@@ -1,10 +1,14 @@
 //! The whole musubi-syncd binary with a DAV account on the pinned Radicale
 //! (plan K8): connect, first data in the API, and a change at Radicale in the
-//! change feed within two active-level intervals. Needs `MUSUBI_RADICALE`;
+//! change feed within two active-level intervals, and a recurring task in
+//! the range (K12d). Needs `MUSUBI_RADICALE`;
 //! run by the CI job `conformance`.
+
+mod common;
 
 use std::time::{Duration, Instant};
 
+use common::tasks;
 use musubi_testkit::google::FakeGoogle;
 use musubi_testkit::harness::{self, Api, Daemon};
 use musubi_testkit::radicale::{PASSWORD, Radicale, USER};
@@ -38,13 +42,17 @@ async fn names(api: &Api, read: &str) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_radicale_account_syncs_through_the_binary() {
-    let r = Radicale::start().await;
-    r.put(&r.calendar(), "todo-1.ics", TODO).await;
-    r.put(&r.addressbook(), "bob.vcf", &card("bob", "Bob Builder"))
-        .await;
+/// The binary with a tenant whose DAV account is on `r`.
+struct Node {
+    // Field order is drop order: the daemon dies before its directory goes.
+    daemon: Daemon,
+    api: Api,
+    read: String,
+    _google: FakeGoogle,
+    _dir: tempfile::TempDir,
+}
 
+async fn connected(r: &Radicale) -> Node {
     let g = FakeGoogle::start(Default::default()).await.expect("google");
     let dir = tempfile::tempdir().expect("tempdir");
     let listen = harness::free_addr();
@@ -72,6 +80,23 @@ async fn a_radicale_account_syncs_through_the_binary() {
     )
     .await;
     assert_eq!(v["username"], USER, "{v}");
+    Node {
+        daemon,
+        api,
+        read,
+        _google: g,
+        _dir: dir,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_radicale_account_syncs_through_the_binary() {
+    let r = Radicale::start().await;
+    r.put(&r.calendar(), "todo-1.ics", TODO).await;
+    r.put(&r.addressbook(), "bob.vcf", &card("bob", "Bob Builder"))
+        .await;
+    let n = connected(&r).await;
+    let (daemon, api, read) = (&n.daemon, &n.api, n.read.as_str());
 
     // First data.
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -142,4 +167,40 @@ async fn a_radicale_account_syncs_through_the_binary() {
         "{:?}",
         names(&api, &read).await
     );
+}
+
+/// Plan 12.7 and K12d: a recurring VTODO from Radicale is in the range with
+/// its occurrences, the override moved through `DUE` and `done` only on the
+/// completed override.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_recurring_radicale_task_is_in_the_range_with_its_overrides() {
+    let r = Radicale::start().await;
+    r.put(&r.calendar(), "water.ics", tasks::RECURRING_TODO)
+        .await;
+    r.put(&r.calendar(), "standup.ics", tasks::EVENT).await;
+    let n = connected(&r).await;
+
+    let range = |q: &str| format!("/v1/entities?{}&{q}", tasks::NOVEMBER);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let all = loop {
+        let v = ok(&n.api, "GET", &range("kind=event,task"), &n.read, None).await;
+        if v["occurrences"].as_array().map(Vec::len) == Some(5) {
+            break v;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no task and event: {v}\n{}",
+            n.daemon.tail(40)
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let open = ok(
+        &n.api,
+        "GET",
+        &range("kind=event,task&done=false"),
+        &n.read,
+        None,
+    )
+    .await;
+    tasks::check_ranges(&all, &open);
 }

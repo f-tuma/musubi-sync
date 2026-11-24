@@ -193,20 +193,6 @@ async fn index_extension_extends_task_and_event_series() {
     assert_eq!(events.occurrences[0].entity, standup);
 }
 
-/// The state a `MAIN_V2` tenant file of a binary without task occurrences
-/// had: no task rows or series spans, no `done` column, schema 2.
-fn downgrade_to_main_v2(main_db: &std::path::Path) {
-    let c = rusqlite::Connection::open(main_db).unwrap();
-    c.execute_batch(
-        "DELETE FROM occurrences WHERE entity IN (SELECT id FROM entities WHERE kind = 'task');
-         UPDATE entities SET series_first = NULL, series_last = NULL, indexed_until = NULL
-           WHERE kind = 'task';
-         ALTER TABLE occurrences DROP COLUMN done;
-         UPDATE meta SET v = 2 WHERE k = 'schema';",
-    )
-    .unwrap();
-}
-
 #[tokio::test]
 async fn main_v3_migration_redecodes_tasks_once_offline() {
     let mut h = task_harness(|_| {});
@@ -233,7 +219,7 @@ async fn main_v3_migration_redecodes_tasks_once_offline() {
     // store's layout (`SqliteStorage::new`, storage.rs).
     let dir = h._dir.0.join("tenants");
     let main_db = dir.join("tenants").join(TENANT.to_string()).join("main.db");
-    downgrade_to_main_v2(&main_db);
+    musubi_testkit::store::downgrade_to_main_v2(&main_db);
     h.storage = Arc::new(SqliteStorage::new(&dir, 4).unwrap());
     h.engine = h.engine_codecs(h.vault.clone(), task_codecs());
     assert!(h.task_rows(from, to).is_empty(), "migrated, not yet re-decoded");

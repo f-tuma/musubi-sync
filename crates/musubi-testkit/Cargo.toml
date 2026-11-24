@@ -33,6 +33,8 @@ reqwest.workspace = true
 rustls.workspace = true
 # Data directories of the `bench` nodes.
 tempfile.workspace = true
+# Tenant files of earlier schemas (src/store.rs).
+rusqlite.workspace = true
 
 # Needs the musubi-syncd binary and (for Radicale) MUSUBI_RADICALE; run by the
 # CI job `conformance`, not by `cargo test --workspace`.

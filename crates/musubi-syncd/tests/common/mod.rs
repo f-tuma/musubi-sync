@@ -2,6 +2,7 @@
 //! HTTP helpers and store fixtures (as in musubi-store-sqlite's tests).
 #![allow(dead_code)]
 
+pub mod tasks;
 pub mod whole;
 
 use std::path::Path;
