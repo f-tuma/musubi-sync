@@ -767,18 +767,18 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 
 Měření K9: D1, D2 a D4 měří binárka `crates/musubi-testkit/src/bin/bench.rs` (`musubi-syncd` jako proces nad falešným DAV), D3 je `cargo bench -p musubi-ical`. D2 zrychlí čas 20× (v `bench-smoke` 60×): všechny meze vydělí stejným číslem a hodinu zkrátí na 180 s. Spící úroveň nastane až po 7 dnech bez zájmu, proto D2 dá spící meze na místo běžných. Čísla jsou z jednoho běhu na Intel Core Ultra 7 265K.
 
-**B3t (K12d), rozsah nad událostmi a úkoly.** Měří binárka `bench.rs` (`b3t`) nad falešným DAV: 4 950 událostí a 50 týdenních sérií jako B3 (kapitola 6.5 plánu fáze 1), k tomu 5 000 úkolů (250 denních a 250 týdenních otevřených sérií, 1 000 bez data, 1 000 dokončených, zbytek jednorázové). Každý dotaz čte všechny stránky po 1 000 výskytech s kanonickým JSON, p99 z 500 dotazů v náhodných oknech za ±2,5 roku. Hodnoty jsou ze dvou běhů release na Intel Core Ultra 7 265K. B3 ve stejných bězích dává 7 dní 1,0–1,2 ms a 30 dní 3,7–3,9 ms, sloupec „bez úkolů" je B3t s 0 úkoly (počet `tasks` v `b3t` nastavený na 0; přepínač pro to binárka nemá). Všechny dotazy jedné délky okna běží nad stejnými okny (generátor se pro každý dotaz založí znovu), takže se jejich ceny dají porovnat.
+**B3t (K12d), rozsah nad událostmi a úkoly.** Měří binárka `bench.rs` (`b3t`) nad falešným DAV: 4 950 událostí a 50 týdenních sérií jako B3 (kapitola 6.5 plánu fáze 1), k tomu 5 000 úkolů (250 denních a 250 týdenních otevřených sérií, 1 000 bez data, 1 000 dokončených, zbytek jednorázové). Každý dotaz čte všechny stránky po 1 000 výskytech s kanonickým JSON, p99 z 500 dotazů v náhodných oknech za ±2,5 roku. Hodnoty „s úkoly“ jsou ze dvou běhů release na Intel Core Ultra 7 265K nad stejnými okny pro všechny dotazy; sloupec „bez úkolů“ je z dřívějšího běhu. B3 ve stejných bězích dává 7 dní 1,3–1,5 ms a 30 dní 3,7–4,3 ms, sloupec „bez úkolů" je B3t s 0 úkoly (počet `tasks` v `b3t` nastavený na 0; přepínač pro to binárka nemá). Všechny dotazy jedné délky okna běží nad stejnými okny (generátor se pro každý dotaz založí znovu), takže se jejich ceny dají porovnat.
 
 | Dotaz | Výskytů | p99 bez úkolů | p99 s úkoly | Cíl |
 | --- | --- | --- | --- | --- |
-| 7 dní `kind=event` | ~44 | 1,1 ms | 0,9 / 1,0 ms | ≤ 10 ms, bez zhoršení proti B3 |
-| 7 dní `kind=event,task` | ~1 100 | 0,9 ms | 19,0 / 20,3 ms | měří se |
-| 7 dní `kind=event,task`, jen id | ~1 100 | 0,4 ms | 9,4 / 9,3 ms | měří se |
-| 7 dní `kind=task&done=false` | ~1 020 | 0,2 ms | 17,7 / 18,4 ms | měří se |
-| 30 dní `kind=event` | ~196 | 2,8 ms | 2,9 / 3,1 ms | ≤ 10 ms, bez zhoršení proti B3 |
-| 30 dní `kind=event,task` | ~4 700 | 2,6 ms | 76,8 / 79,4 ms | měří se |
-| 30 dní `kind=event,task`, jen id | ~4 650 | 1,2 ms | 34,0 / 37,0 ms | měří se |
-| 30 dní `kind=task&done=false` | ~4 440 | 0,1 ms | 73,9 / 75,4 ms | měří se |
+| 7 dní `kind=event` | ~45 | 1,1 ms | 0,9 / 1,0 ms | ≤ 10 ms, bez zhoršení proti B3 |
+| 7 dní `kind=event,task` | ~1 090 | 0,9 ms | 18,8 / 17,8 ms | měří se |
+| 7 dní `kind=event,task`, jen id | ~1 090 | 0,4 ms | 9,5 / 8,7 ms | měří se |
+| 7 dní `kind=task&done=false` | ~1 040 | 0,2 ms | 16,9 / 17,0 ms | měří se |
+| 30 dní `kind=event` | ~197 | 2,8 ms | 2,8 / 2,9 ms | ≤ 10 ms, bez zhoršení proti B3 |
+| 30 dní `kind=event,task` | ~4 780 | 2,6 ms | 73,6 / 69,7 ms | měří se |
+| 30 dní `kind=event,task`, jen id | ~4 780 | 1,2 ms | 34,7 / 32,8 ms | měří se |
+| 30 dní `kind=task&done=false` | ~4 570 | 0,1 ms | 68,0 / 66,1 ms | měří se |
 | velikost `main.db` | | 11,0 MB | 137,0 MB (WAL 4,2 MB) | měří se |
 
 `kind=event` stojí stejně s úkoly i bez nich, protože jde přes index `occurrences_kind_time` (12.4, R1). Dotazy přes úkoly vracejí tisíce výskytů: polovinu času tvoří kanonický JSON (verze jen s id je zhruba dvakrát rychlejší) a zbytek je asi 8 µs na výskyt v pěti stránkách HTTP. Malé měřítko (495 + 5 událostí, 500 úkolů) běží v `bench-smoke` (`bench --smoke`) se smoke mezí 10× pro `kind=event`, jako ostatní časové řádky.
@@ -1013,7 +1013,7 @@ K11 ─ K12a úložiště ─┬─ K12b engine ─┬─ K12d důkaz
 - **R1, cena filtru druhu.** Dotaz jen na události projde i řádky úkolů v okně. Při stovkách denních úkolů to může přerazit p99 10 ms. Měří K12a (VM kroky) a K12d (B3t). Náprava je sloupec `occurrences.kind` s indexem s druhem na začátku, pouze uvnitř nevydaného `MAIN_V3`.
   - **Výsledek K12a:** s filtrem přes `items` přidal každý řádek úkolu v okně dotazu jen na události 14 VM kroků, v paměti asi 1,6 ms na 15 000 řádků.
   - **Výsledek K12d (B3t, soubor na disku):** s filtrem přes `items` stál `kind=event` za 30 dní 9,0–9,1 ms p99 proti 2,5 ms bez úkolů a za 7 dní 3,1 ms proti 0,8 ms. To je pod 10 ms, ale trojnásobné zhoršení proti B3. Okno 30 dní obsahuje asi 4 500 řádků úkolů z otevřených denních sérií.
-  - **Rozhodnutí:** `MAIN_V3` dostane sloupec `occurrences.kind` a indexy s druhem na začátku (12.4). Dotaz jen na události pak řádky úkolů neprochází: test VM kroků ukazuje stejný počet kroků s 0, 1 500 i 15 000 řádky úkolů v okně a B3t dává `kind=event` za 7 dní 0,9–1,0 ms a za 30 dní 2,9–3,1 ms, stejně jako bez úkolů (11.2).
+  - **Rozhodnutí:** `MAIN_V3` dostane sloupec `occurrences.kind` a indexy s druhem na začátku (12.4). Dotaz jen na události pak řádky úkolů neprochází: test VM kroků ukazuje stejný počet kroků s 0, 1 500 i 15 000 řádky úkolů v okně a B3t dává `kind=event` za 7 dní 0,9–1,0 ms a za 30 dní 2,8–2,9 ms, stejně jako bez úkolů (11.2).
 - **R6, pořadí K12a a K12b.** Binárka s `MAIN_V3` bez výpočtu výskytů úkolů (K12a bez K12b) by přepočet po migraci spotřebovala naprázdno a úkoly by zůstaly bez řádků, dokud se u poskytovatele nezmění. K12a a K12b se proto mergují hned po sobě, K12b na větvi K12a, a mezi nimi neběží build z `main` proti skutečnému tenantovi. Soubor tenanta, který otevřel build z `main` mezi #49 a K12d, má verzi 3 bez sloupce `kind` a jeho indexů. Migrace ho přeskočí a první zápis výskytů nebo rozsah přes jeden druh selže s chybou SQLite. Náprava je obnova zálohy z binárky K11, u vývojového tenanta jeho smazání.
 - **R2, velikost indexu.** Otevřené denní série mají tisíce řádků za 5 let horizontu, stejně jako události. Kratší horizont pro úkoly by porušil rozhodnutí „stejně jako události", proto se jen měří (B3t, velikost `main.db`).
   - **Výsledek K12d (B3t):** 250 denních a 250 týdenních otevřených sérií úkolů dá 536 149 řádků výskytů proti 18 456 řádkům událostí. `main.db` má 137,0 MB proti 11,0 MB bez úkolů. Z toho asi 32 MB připadá na sloupec `kind` a indexy z R1 (105 MB před nimi). Rozsah `kind=event` tím nezpomalí (11.2). Kdyby velikost začala vadit, rozsah přes všechny druhy může jít přes indexy s druhem na začátku (čtyři větve `UNION ALL`) a `occurrences_time` s `occurrences_long` odpadnou; sloupec `kind` jako celé číslo zmenší i položky indexů.
