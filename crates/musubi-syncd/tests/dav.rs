@@ -6,7 +6,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::Node;
+use common::{Node, tasks};
 use musubi_model::capability::ProviderId;
 use musubi_model::control::{AccountRecord, AccountState, AccountTokens};
 use musubi_model::{AccountId, ControlStore, Credentials, TenantId, TokenVault};
@@ -692,6 +692,81 @@ async fn google_tasks_and_contacts_are_read() {
     assert_eq!(account(&n, &t, &id).await["missing"], json!([]));
 }
 
+/// Plan 12.7: a recurring VTODO with a completed and a moved override and an
+/// event, read by range with `kind` and `done`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_recurring_dav_task_is_in_the_range_with_its_overrides() {
+    let n = private_node().await;
+    let _engine = n.app.engine().start();
+    let d = FakeDav::start(DavConfig::default())
+        .await
+        .expect("fake dav");
+    let cal = d.add_collection(Kind::Calendar(&["VEVENT", "VTODO"]), "home", "Home");
+    d.put(&cal, "water.ics", tasks::RECURRING_TODO);
+    d.put(&cal, "standup.ics", tasks::EVENT);
+    let t = tenant(&n).await;
+    let mut sse = n.stream(&t.read).await;
+    let (s, v) = connect(&n, &t, generic(&d, "secret")).await;
+    assert_eq!(s, 200, "{v}");
+
+    let range = |q: &str| format!("/v1/entities?{}&{q}", tasks::NOVEMBER);
+    let all = sse
+        .until("task and event", Duration::from_secs(20), async || {
+            let (s, v) = n.get(&range("kind=event,task"), &t.read).await;
+            assert_eq!(s, 200, "{v}");
+            (v["occurrences"].as_array().map(Vec::len) == Some(5)).then_some(v)
+        })
+        .await;
+    let (s, open) = n.get(&range("kind=event,task&done=false"), &t.read).await;
+    assert_eq!(s, 200, "{open}");
+    tasks::check_ranges(&all, &open);
+}
+
+/// Plan 12.7: a Google task due on a date (Google keeps no time) covers that
+/// whole day in the zone of the query, not the next.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_google_task_due_on_a_date_is_in_that_day_of_the_query_zone() {
+    let n = Node::start().await;
+    let _engine = n.app.engine().start();
+    let list = n.google.put_task_list("Errands");
+    // A client set a time; Google stores 20 November at midnight UTC.
+    n.google.put_task(
+        &list,
+        json!({ "title": "pay rent", "due": "2026-11-20T15:30:00.000Z" }),
+    );
+    let t = tenant(&n).await;
+    let mut sse = n.stream(&t.read).await;
+    google_account(&n, &t).await;
+    sse.until("task", Duration::from_secs(20), async || {
+        (listed(&n, &t, "task").await.len() == 1).then_some(())
+    })
+    .await;
+
+    // Days in Europe/Prague (UTC+1 in November).
+    let day = |from: &str, to: &str| {
+        format!("/v1/entities?from={from}&to={to}&kind=task&zone=Europe/Prague")
+    };
+    let (s, v) = n
+        .get(
+            &day("2026-11-19T23:00:00Z", "2026-11-20T23:00:00Z"),
+            &t.read,
+        )
+        .await;
+    assert_eq!(s, 200, "{v}");
+    let o = v["occurrences"].as_array().expect("occurrences");
+    assert_eq!(o.len(), 1, "{v}");
+    assert_eq!(o[0]["floating"], true, "{v}");
+    assert!(o[0]["canonical"].to_string().contains("pay rent"), "{v}");
+    for (from, to) in [
+        ("2026-11-20T23:00:00Z", "2026-11-21T23:00:00Z"),
+        ("2026-11-18T23:00:00Z", "2026-11-19T23:00:00Z"),
+    ] {
+        let (s, v) = n.get(&day(from, to), &t.read).await;
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["occurrences"], json!([]), "{from}: {v}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_phase_one_google_account_keeps_its_calendars_and_reports_missing() {
     let n = Node::start().await;
@@ -714,7 +789,7 @@ async fn a_phase_one_google_account_keeps_its_calendars_and_reports_missing() {
     let t = tenant(&n).await;
     let id = google_account(&n, &t).await;
 
-    let range = format!("/v1/entities?from={}&to={}", at(0), at(48));
+    let range = format!("/v1/entities?from={}&to={}&kind=event", at(0), at(48));
     let v = until("the event and missing", async || {
         let (s, events) = n.get(&range, &t.read).await;
         assert_eq!(s, 200, "{events}");
@@ -976,7 +1051,7 @@ const EVENT: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//test//E
 const CARD3: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:card-1\r\nFN:Bob Builder\r\nN:Builder;Bob;;;\r\nEND:VCARD\r\n";
 /// An Apple contact group: vCard 3.0 with `X-ADDRESSBOOKSERVER-KIND:group`.
 const GROUP3: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:group-1\r\nFN:Family\r\nN:Family;;;;\r\nX-ADDRESSBOOKSERVER-KIND:group\r\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:card-1\r\nEND:VCARD\r\n";
-const RANGE: &str = "/v1/entities?from=2026-11-01T00:00:00Z&to=2026-12-01T00:00:00Z";
+const RANGE: &str = "/v1/entities?from=2026-11-01T00:00:00Z&to=2026-12-01T00:00:00Z&kind=event";
 
 /// A fake iCloud: an event calendar, a reminders list (VTODO only, not
 /// synced) and an address book with a contact and a group.

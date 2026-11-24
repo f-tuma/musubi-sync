@@ -20,12 +20,14 @@
 //! [`dav`] is the in-process fake CalDAV/CardDAV server, [`radicale`] runs a
 //! local Radicale, and [`conformance`] holds the scenario format and the
 //! `Target` trait of the conformance runner (`tests/conformance.rs`).
+//! [`store`] turns tenant files back into earlier schemas for upgrade tests.
 
 pub mod conformance;
 pub mod dav;
 pub mod google;
 pub mod harness;
 pub mod radicale;
+pub mod store;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::future::Future;

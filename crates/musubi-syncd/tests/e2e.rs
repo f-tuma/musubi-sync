@@ -85,7 +85,7 @@ async fn google_account_syncs_end_to_end_and_removal_stops_its_channel() {
     let range = async |from: i64, to: i64| {
         let (s, v) = n
             .get(
-                &format!("/v1/entities?from={}&to={}", at(from), at(to)),
+                &format!("/v1/entities?from={}&to={}&kind=event", at(from), at(to)),
                 &read,
             )
             .await;

@@ -71,17 +71,25 @@ ALTER TABLE collections ADD COLUMN push_resource TEXT;
 CREATE INDEX entities_kind ON entities(kind, id) WHERE tombstone = 0;
 "#;
 
-/// Version 3 (docs/plan/phase2.md 12.4): the done state of task occurrences.
-/// Live tasks are marked stale and their re-decode versions dropped, so the
-/// next start re-decodes them once from the raw layer and writes their rows.
+/// Version 3 (docs/plan/phase2.md 12.4): the done state and the kind of
+/// occurrences (`items.kind` of their item; every earlier row is an event,
+/// tasks had none), with kind-first twins of `occurrences_time` and
+/// `occurrences_long` that a range over one kind walks without touching the
+/// other kind's rows (risk R1). Live tasks are marked stale and their
+/// re-decode versions dropped, so the next start re-decodes them once from
+/// the raw layer and writes their rows.
 const MAIN_V3: &str = r#"
 ALTER TABLE occurrences ADD COLUMN done INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE occurrences ADD COLUMN kind TEXT NOT NULL DEFAULT 'event';
+CREATE INDEX occurrences_kind_time ON occurrences(kind, start, entity, rid);
+CREATE INDEX occurrences_kind_long ON occurrences(kind, end) WHERE end - start > 604800000000;
 UPDATE items SET schema_version = 0 WHERE kind = 'task' AND tombstone = 0;
 DELETE FROM meta WHERE k GLOB 'mapping:*:task:schema' OR k GLOB 'mapping:*:task:mapping';
 "#;
 
-/// Occurrences longer than this (7 days, µs) are found through `occurrences_long`;
-/// the literal in [`MAIN_V1`] and in the range query must match it.
+/// Occurrences longer than this (7 days, µs) are found through `occurrences_long`
+/// and `occurrences_kind_long`; the literals in [`MAIN_V1`], [`MAIN_V3`] and in
+/// the range query must match it.
 pub(crate) const LONG_SPAN: i64 = 7 * 24 * 3600 * 1_000_000;
 
 /// Schema version stored in a tenant or control file; 0 if it has none yet.
@@ -266,11 +274,14 @@ mod tests {
 
     #[test]
     fn long_index_matches_long_span() {
-        assert!(MAIN_V1.contains(&format!("WHERE end - start > {LONG_SPAN};")));
+        for schema in [MAIN_V1, MAIN_V3] {
+            assert!(schema.contains(&format!("WHERE end - start > {LONG_SPAN};")));
+        }
     }
 
     /// `MAIN_V3` marks live tasks stale and drops their re-decode versions;
-    /// events, their rows and other meta stay, existing rows are not done. A
+    /// events, their rows and other meta stay, existing rows are events and
+    /// not done. A
     /// binary that knows only `MAIN_V2` refuses the result.
     #[test]
     fn v3_marks_tasks_for_redecode() {
@@ -315,9 +326,9 @@ mod tests {
                 "oldest"
             ]
         );
-        let row: (i64, i64, Vec<u8>, i64, bool, bool) = c
+        let row: (i64, i64, Vec<u8>, i64, bool, bool, String) = c
             .query_row(
-                "SELECT start, end, entity, rid, floating, done FROM occurrences",
+                "SELECT start, end, entity, rid, floating, done, kind FROM occurrences",
                 [],
                 |r| {
                     Ok((
@@ -327,11 +338,12 @@ mod tests {
                         r.get(3)?,
                         r.get(4)?,
                         r.get(5)?,
+                        r.get(6)?,
                     ))
                 },
             )
             .unwrap();
-        assert_eq!(row, (10, 20, vec![0xe3], 5, false, false));
+        assert_eq!(row, (10, 20, vec![0xe3], 5, false, false, "event".into()));
         let err = migrate(&mut c, &MAIN_MIGRATIONS[..2]).unwrap_err();
         assert!(matches!(
             err.0,

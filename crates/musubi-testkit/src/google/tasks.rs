@@ -70,11 +70,13 @@ impl FakeGoogle {
     /// it; any other `id` is ignored, as live `tasks.insert` does (T10), and
     /// a new one is generated. The server sets `kind`, `etag`, `updated`,
     /// `selfLink`, `webViewLink` and `position`, defaults `status` to
-    /// `needsAction` and `completed` of a completed task to `updated`.
-    /// Returns the task id.
+    /// `needsAction` and `completed` of a completed task to `updated`, and
+    /// keeps only the date of `due` (`2026-11-20T00:00:00.000Z`), as Google
+    /// does. Returns the task id.
     ///
     /// # Panics
-    /// If the list does not exist or `task` is not an object.
+    /// If the list does not exist, `task` is not an object or its `due` is
+    /// not an RFC 3339 timestamp.
     pub fn put_task(&self, list: &str, mut task: Value) -> String {
         assert!(task.is_object(), "task must be a JSON object");
         let epoch = self.inner.config.epoch;
@@ -96,6 +98,11 @@ impl FakeGoogle {
             }
         };
         let updated = logical(epoch, v).to_string();
+        if let Some(due) = task.get("due").and_then(Value::as_str) {
+            let due: Timestamp = due.parse().expect("due is an RFC 3339 timestamp");
+            let date = due.to_zoned(jiff::tz::TimeZone::UTC).date();
+            task["due"] = json!(format!("{date}T00:00:00.000Z"));
+        }
         task["kind"] = json!("tasks#task");
         task["id"] = json!(id);
         task["etag"] = json!(etag(v));

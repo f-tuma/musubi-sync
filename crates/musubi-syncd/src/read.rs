@@ -14,7 +14,8 @@ use musubi_dav::Profile;
 use musubi_model::control::{AccountRecord, AccountState, ApiKeyHash, Scope};
 use musubi_model::remote::MediaType;
 use musubi_model::store::{
-    CollectionState, Coverage, EntityView, Include, ItemView, RangeCursor, RangeQuery,
+    CollectionState, Coverage, EntityView, Include, ItemView, OCCURRENCE_KINDS, RangeCursor,
+    RangeQuery,
 };
 use musubi_model::{
     AccountId, CollectionId, ControlStore, EntityId, EntityKind, ItemId, Seq, Storage, TenantId,
@@ -179,11 +180,11 @@ fn parse_kind(name: &str) -> Option<EntityKind> {
 /// The `kind` list of a range: kinds with occurrences only, default all of them.
 fn range_kinds(kind: Option<&str>) -> Result<Vec<EntityKind>, ApiError> {
     let Some(list) = kind else {
-        return Ok(vec![EntityKind::Event, EntityKind::Task]);
+        return Ok(OCCURRENCE_KINDS.to_vec());
     };
     list.split(',')
         .map(|name| match parse_kind(name) {
-            Some(k @ (EntityKind::Event | EntityKind::Task)) => Ok(k),
+            Some(k) if OCCURRENCE_KINDS.contains(&k) => Ok(k),
             _ => Err(ApiError::bad_request(format!(
                 "kind in a range must be a comma-separated list of event and task, not {name:?}"
             ))),

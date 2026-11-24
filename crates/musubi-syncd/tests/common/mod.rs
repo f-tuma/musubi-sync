@@ -2,6 +2,7 @@
 //! HTTP helpers and store fixtures (as in musubi-store-sqlite's tests).
 #![allow(dead_code)]
 
+pub mod tasks;
 pub mod whole;
 
 use std::path::Path;
@@ -19,6 +20,7 @@ use musubi_model::{
 use musubi_syncd::App;
 use musubi_syncd::config::Config;
 use musubi_testkit::google::FakeGoogle;
+use musubi_testkit::harness::{Api, Sse};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
@@ -126,6 +128,15 @@ impl Node {
 
     pub async fn get(&self, path: &str, auth: &str) -> (u16, Value) {
         self.call("GET", path, Some(auth), None).await
+    }
+
+    /// `/v1/stream` of the tenant whose read credential is `read`.
+    pub async fn stream(&self, read: &str) -> Sse {
+        let api = Api {
+            base: self.base.clone(),
+            http: self.http.clone(),
+        };
+        Sse::open(&api, read).await
     }
 
     /// Creates a tenant over the admin API.

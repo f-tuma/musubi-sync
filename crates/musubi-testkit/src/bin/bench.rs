@@ -1,4 +1,5 @@
-//! Benchmarks B1–B7 (and B7n) of plan 6.5 and D1, D2 and D4 of phase 2 plan 11.2: the
+//! Benchmarks B1–B7 (and B7n) of plan 6.5, D1, D2 and D4 of phase 2 plan 11.2
+//! and B3t of phase 2 plan 12.7: the
 //! release `musubi-syncd` binary as a child process over the fake Google or
 //! DAV server, measured from the client side (HTTP over loopback included).
 //! B8/B9 and D3 are crate benches (`musubi-google`, `musubi-recurrence`,
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 use jiff::SignedDuration;
 use musubi_testkit::dav::{self, Config as DavConfig, FakeDav, Kind, Quirk};
 use musubi_testkit::google::{self, FakeGoogle, Seed};
-use musubi_testkit::harness::{Api, Daemon, Rng, config, free_addr};
+use musubi_testkit::harness::{ADMIN_KEY, Api, Daemon, Rng, Sse, config, free_addr};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
@@ -242,64 +243,6 @@ async fn b1(o: &Opts) -> Vec<Row> {
     )]
 }
 
-/// A client of `/v1/stream`.
-struct Sse {
-    resp: reqwest::Response,
-    buf: String,
-}
-
-impl Sse {
-    async fn open(n: &Node, t: &Tenant) -> Self {
-        let resp = n
-            .api
-            .http
-            .get(format!("{}/v1/stream", n.api.base))
-            .bearer_auth(&t.read)
-            // The client's 60 s cap covers the whole body; `past` bounds each event.
-            .timeout(Duration::from_secs(24 * 3600))
-            .send()
-            .await
-            .expect("stream");
-        assert_eq!(resp.status(), 200);
-        Self {
-            resp,
-            buf: String::new(),
-        }
-    }
-
-    /// The id (head seq) of the next event.
-    async fn next_id(&mut self) -> u64 {
-        loop {
-            if let Some(i) = self.buf.find("\n\n") {
-                let ev: String = self.buf.drain(..i + 2).collect();
-                if let Some(id) = ev.lines().find_map(|l| l.strip_prefix("id: ")) {
-                    return id.trim().parse().expect("seq");
-                }
-                continue;
-            }
-            let chunk = self
-                .resp
-                .chunk()
-                .await
-                .expect("stream")
-                .expect("stream open");
-            self.buf.push_str(&String::from_utf8_lossy(&chunk));
-        }
-    }
-
-    /// Waits for an event past `last`; returns its id.
-    async fn past(&mut self, last: u64) -> u64 {
-        loop {
-            let id = tokio::time::timeout(Duration::from_secs(120), self.next_id())
-                .await
-                .expect("no SSE event");
-            if id > last {
-                return id;
-            }
-        }
-    }
-}
-
 /// Notification → SSE event, `iters` times, at `latency` per fake request.
 async fn push_to_sse(o: &Opts, latency: Duration, iters: usize) -> Vec<Duration> {
     let fake = google::Config {
@@ -320,7 +263,7 @@ async fn push_to_sse(o: &Opts, latency: Duration, iters: usize) -> Vec<Duration>
     }
     // The delta right after the full read.
     tokio::time::sleep(COALESCE + latency * 2 + Duration::from_millis(200)).await;
-    let mut sse = Sse::open(&n, &t).await;
+    let mut sse = Sse::open(&n.api, &t.read).await;
     let mut last = sse.next_id().await;
     let primary = n.fake.primary();
     let mut out = Vec::new();
@@ -375,6 +318,46 @@ async fn b5(o: &Opts) -> Vec<Row> {
     )]
 }
 
+/// `reqs` paged range queries of `days` days from `start()` with the query
+/// pairs `extra`, each timed over all its pages; the p99 and the mean number
+/// of occurrences per query.
+async fn ranges(
+    n: &Node,
+    t: &Tenant,
+    reqs: usize,
+    days: i64,
+    extra: &[(&str, &str)],
+    mut start: impl FnMut() -> jiff::Timestamp,
+) -> (Duration, usize) {
+    let mut lat = Vec::new();
+    let mut occurrences = 0;
+    for _ in 0..reqs {
+        let start = start();
+        let end = start + SignedDuration::from_hours(24 * days);
+        let mut after: Option<String> = None;
+        let t0 = Instant::now();
+        loop {
+            let mut q = vec![
+                ("from", start.to_string()),
+                ("to", end.to_string()),
+                ("limit", "1000".into()),
+            ];
+            q.extend(extra.iter().map(|&(k, v)| (k, v.to_owned())));
+            q.extend(after.take().map(|a| ("after", a)));
+            let url = reqwest::Url::parse_with_params(&format!("{}/v1/entities", n.api.base), &q)
+                .expect("url");
+            let v = n.get(url.as_str(), &t.read).await;
+            occurrences += v["occurrences"].as_array().map_or(0, Vec::len);
+            match v["next"].as_str() {
+                Some(a) => after = Some(a.to_owned()),
+                None => break,
+            }
+        }
+        lat.push(t0.elapsed());
+    }
+    (pct(&lat, 0.99), occurrences / reqs)
+}
+
 /// B3 and B4 over one tenant: single events over ±2.5 years and open weekly
 /// series.
 async fn b3_b4(o: &Opts) -> Vec<Row> {
@@ -407,51 +390,24 @@ async fn b3_b4(o: &Opts) -> Vec<Row> {
     let t = n.tenant().await;
     n.api.connect(&t.admin).await;
     n.full(&t, Duration::from_secs(120)).await;
+    // shortcut: the follow-up delta after a full read journals nothing, so no
+    // API signal shows it has finished; the pause keeps it out of the measured
+    // queries. Upgrade when collection state changes reach `/v1/stream`.
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let mut rows = Vec::new();
     for (days, ids_only) in [(7, false), (7, true), (30, false), (30, true)] {
-        let mut lat = Vec::new();
-        let mut occurrences = 0;
-        for _ in 0..reqs {
-            let start = at(&mut rng);
-            let end = start + SignedDuration::from_hours(24 * days);
-            let mut after: Option<String> = None;
-            let t0 = Instant::now();
-            loop {
-                let mut q = vec![
-                    ("from", start.to_string()),
-                    ("to", end.to_string()),
-                    ("limit", "1000".into()),
-                ];
-                if ids_only {
-                    q.push(("ids_only", "true".into()));
-                }
-                q.extend(after.take().map(|a| ("after", a)));
-                let url =
-                    reqwest::Url::parse_with_params(&format!("{}/v1/entities", n.api.base), &q)
-                        .expect("url");
-                let v = n.get(url.as_str(), &t.read).await;
-                occurrences += v["occurrences"].as_array().map_or(0, Vec::len);
-                match v["next"].as_str() {
-                    Some(a) => after = Some(a.to_owned()),
-                    None => break,
-                }
-            }
-            lat.push(t0.elapsed());
-        }
+        let extra: &[(&str, &str)] = if ids_only {
+            &[("kind", "event"), ("ids_only", "true")]
+        } else {
+            &[("kind", "event")]
+        };
+        let (p99, occurrences) = ranges(&n, &t, reqs, days, extra, || at(&mut rng)).await;
         let what = format!(
-            "range {days} d{}, {singles}+{series} series, ~{} occurrences, p99 of {reqs}",
+            "range {days} d{}, {singles}+{series} series, ~{occurrences} occurrences, p99 of {reqs}",
             if ids_only { " ids only" } else { "" },
-            occurrences / reqs
         );
-        rows.push(timed(
-            o,
-            "B3",
-            what,
-            pct(&lat, 0.99),
-            Duration::from_millis(10),
-        ));
+        rows.push(timed(o, "B3", what, p99, Duration::from_millis(10)));
     }
 
     let head = n.head(&t).await;
@@ -471,6 +427,110 @@ async fn b3_b4(o: &Opts) -> Vec<Row> {
         pct(&lat, 0.99),
         Duration::from_millis(10),
     ));
+    rows
+}
+
+/// B3t (phase 2 plan 12.7): B3's events over a fake DAV calendar plus
+/// 5 000 tasks in the same calendar: 500 open recurring (half daily, half
+/// weekly), 1 000 without a date, 1 000 completed and the rest open one-off,
+/// dated as B3's events. Ranges of events alone (guarded like B3), of both
+/// kinds and of open tasks, and the size of `main.db`.
+async fn b3t(o: &Opts) -> Vec<Row> {
+    let (singles, series, recurring, undated, completed, tasks, reqs) = if o.smoke {
+        (495, 5, 50, 100, 100, 500, 50)
+    } else {
+        (4950, 50, 500, 1000, 1000, 5000, 500)
+    };
+    let dav = FakeDav::start(DavConfig::default())
+        .await
+        .expect("fake dav");
+    let cal = dav.add_collection(Kind::Calendar(&["VEVENT", "VTODO"]), "home", "Home");
+    let mut rng = Rng::new(3);
+    let span_min = 5 * 365 * 24 * 60;
+    let at = |rng: &mut Rng| {
+        epoch() + SignedDuration::from_mins(rng.below(span_min) as i64 - span_min as i64 / 2)
+    };
+    for i in 0..singles {
+        let uid = format!("single-{i}");
+        dav.put(&cal, &format!("{uid}.ics"), &vevent(&uid, at(&mut rng)));
+    }
+    for i in 0..series {
+        let uid = format!("series-{i}");
+        let ics = vevent_rule(&uid, at(&mut rng), Some("FREQ=WEEKLY"));
+        dav.put(&cal, &format!("{uid}.ics"), &ics);
+    }
+    for i in 0..tasks {
+        let uid = format!("task-{i}");
+        let start = at(&mut rng);
+        let dated = format!(
+            "DTSTART:{}\r\nDUE:{}\r\n",
+            ics_time(start),
+            ics_time(start + SignedDuration::from_hours(1))
+        );
+        let props = match i {
+            i if i < recurring / 2 => format!("{dated}RRULE:FREQ=DAILY\r\n"),
+            i if i < recurring => format!("{dated}RRULE:FREQ=WEEKLY\r\n"),
+            i if i < recurring + undated => String::new(),
+            i if i < recurring + undated + completed => format!("{dated}STATUS:COMPLETED\r\n"),
+            _ => dated,
+        };
+        dav.put(&cal, &format!("{uid}.ics"), &vcal("VTODO", &uid, &props));
+    }
+    let (n, t) = dav_node(o, json!({})).await;
+    connect_dav(&n, &t, &dav).await;
+    n.full(&t, Duration::from_secs(600)).await;
+    // shortcut: the follow-up delta after a full read journals nothing, so no
+    // API signal shows it has finished; the pause keeps it out of the measured
+    // queries. Upgrade when collection state changes reach `/v1/stream`.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let data = format!("{singles}+{series} series, {tasks} tasks ({recurring} recurring)");
+    let mut rows = Vec::new();
+    // `ids_only` splits the cost of the rows from that of their payload.
+    let queries: [(&str, &[(&str, &str)]); 4] = [
+        ("kind=event", &[("kind", "event")]),
+        ("kind=event,task", &[("kind", "event,task")]),
+        (
+            "kind=event,task ids only",
+            &[("kind", "event,task"), ("ids_only", "true")],
+        ),
+        (
+            "kind=task&done=false",
+            &[("kind", "task"), ("done", "false")],
+        ),
+    ];
+    for days in [7, 30] {
+        for (name, extra) in queries {
+            // The same windows for every query of a length, so their costs compare.
+            let mut rng = Rng::new(days as u64);
+            let (p99, occurrences) = ranges(&n, &t, reqs, days, extra, || at(&mut rng)).await;
+            let what =
+                format!("range {days} d {name}, {data}, ~{occurrences} occurrences, p99 of {reqs}");
+            rows.push(if name == "kind=event" {
+                timed(o, "B3t", what, p99, Duration::from_millis(10))
+            } else {
+                Row {
+                    id: "B3t",
+                    what,
+                    value: ms(p99),
+                    budget: "report".into(),
+                    ok: true,
+                }
+            });
+        }
+    }
+    let stats = n
+        .get(&format!("/v1/admin/tenants/{}/stats", t.id), ADMIN_KEY)
+        .await;
+    let bytes = |k: &str| stats[k].as_u64().unwrap_or_else(|| panic!("{k}: {stats}"));
+    let (main, wal) = (bytes("main_bytes"), bytes("wal_bytes"));
+    rows.push(Row {
+        id: "B3t",
+        what: format!("main.db size, {data} (WAL {:.1} MB)", wal as f64 / 1e6),
+        value: format!("{:.1} MB", main as f64 / 1e6),
+        budget: "report".into(),
+        ok: true,
+    });
     rows
 }
 
@@ -705,15 +765,34 @@ async fn connect_dav(n: &Node, t: &Tenant, dav: &FakeDav) {
     assert_eq!(s, 200, "connect: {v}");
 }
 
-fn vevent(uid: &str, start: jiff::Timestamp) -> String {
-    let fmt = |t: jiff::Timestamp| t.strftime("%Y%m%dT%H%M%SZ").to_string();
+/// `t` as an iCalendar UTC date-time.
+fn ics_time(t: jiff::Timestamp) -> String {
+    t.strftime("%Y%m%dT%H%M%SZ").to_string()
+}
+
+/// A calendar object of one `component` with `UID` `uid` and the
+/// CRLF-terminated property lines `props`.
+fn vcal(component: &str, uid: &str, props: &str) -> String {
     format!(
-        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//bench//EN\r\nBEGIN:VEVENT\r\n\
-         UID:{uid}\r\nDTSTAMP:20260101T000000Z\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:{uid}\r\n\
-         END:VEVENT\r\nEND:VCALENDAR\r\n",
-        fmt(start),
-        fmt(start + SignedDuration::from_mins(45))
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//bench//EN\r\nBEGIN:{component}\r\n\
+         UID:{uid}\r\nDTSTAMP:20260101T000000Z\r\nSUMMARY:{uid}\r\n{props}END:{component}\r\nEND:VCALENDAR\r\n"
     )
+}
+
+/// A 45-minute event, repeating by `rrule` if given.
+fn vevent_rule(uid: &str, start: jiff::Timestamp, rrule: Option<&str>) -> String {
+    let rule = rrule.map_or(String::new(), |r| format!("RRULE:{r}\r\n"));
+    let end = start + SignedDuration::from_mins(45);
+    let props = format!(
+        "DTSTART:{}\r\nDTEND:{}\r\n{rule}",
+        ics_time(start),
+        ics_time(end)
+    );
+    vcal("VEVENT", uid, &props)
+}
+
+fn vevent(uid: &str, start: jiff::Timestamp) -> String {
+    vevent_rule(uid, start, None)
 }
 
 /// The engine's first-impression window (`musubi_engine::Config` defaults):
@@ -900,7 +979,7 @@ async fn d4(o: &Opts) -> Vec<Row> {
             }
         })
     };
-    let mut sse = Sse::open(&n, &t).await;
+    let mut sse = Sse::open(&n.api, &t.read).await;
     let mut last = n.head(&t).await;
     let mut rng = Rng::new(4);
     let mut lat = Vec::new();
@@ -960,6 +1039,22 @@ fn opts() -> Opts {
         "{} not found; build it or pass --syncd",
         o.syncd.display()
     );
+    // A daemon older than this binary may predate the code being measured.
+    // shortcut: compares build times, so a bench rebuilt alone after a
+    // bench-only change is refused too; a build id in both binaries would not.
+    let built = |p: &Path| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .expect("mtime")
+    };
+    let exe = std::env::current_exe().expect("exe");
+    assert!(
+        built(&o.syncd) >= built(&exe),
+        "{} is older than {}; rebuild both with `cargo build --release -p musubi-syncd \
+         -p musubi-testkit --bins` (touch a musubi-syncd source if cargo keeps it)",
+        o.syncd.display(),
+        exe.display()
+    );
     o
 }
 
@@ -976,6 +1071,9 @@ async fn main() {
     }
     if want("B3") || want("B4") {
         rows.extend(b3_b4(&o).await);
+    }
+    if want("B3t") {
+        rows.extend(b3t(&o).await);
     }
     if want("B5") {
         rows.extend(b5(&o).await);

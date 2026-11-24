@@ -2,6 +2,7 @@
 //! extent from `start`, `due` and `estimated_duration`, its done state, and
 //! the series of a recurring task. Expansion is the events' ([`ingest`]).
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use jiff::civil::DateTime;
@@ -21,7 +22,8 @@ use crate::ingest::{
 
 /// Index rows of one task. A cancelled task and a task without any date have
 /// none; a task in a zone that cannot be resolved is reported as unindexed
-/// (never floating), a series is indexed like an event's.
+/// (never floating), a series is indexed like an event's. An occurrence that
+/// ends before it starts is clamped to its start, with one warning per item.
 pub(crate) fn task_occurrences(
     key: &RemoteKey,
     t: &CalendarTask,
@@ -33,7 +35,7 @@ pub(crate) fn task_occurrences(
     }
     let zone = task_zone(t);
     let known = zone.as_ref().ok().and_then(Option::as_ref);
-    let (anchor, span) = match master_extent(t, known) {
+    let (anchor, span, clamped) = match master_extent(t, known) {
         Ok(Some(e)) => e,
         Ok(None) => return Occurrences::default(),
         Err(e) => {
@@ -41,30 +43,29 @@ pub(crate) fn task_occurrences(
             return Occurrences::default();
         }
     };
+    let clamped = Cell::new(clamped);
     let recurring = !(t.recurrence_rules.is_empty() && t.recurrence_overrides.is_empty());
-    let zone = match zone {
-        Ok(z) => z,
+    let o = match zone {
         Err(e) => {
             tracing::warn!(key = %key.0, error = %e, "zone not resolvable; reported as unindexed");
-            return unresolved(anchor, span, recurring);
+            unresolved(anchor, span, recurring)
         }
+        Ok(zone) if !recurring => {
+            let mut o = single(key, anchor, span, zone.as_ref(), None);
+            o.rows.iter_mut().for_each(|r| r.done = done(t.progress));
+            o
+        }
+        Ok(zone) => index_series(key, anchor, zone.as_ref(), index, previous, |until| {
+            let z = zone.clone();
+            let (rows, c) = expand_task(t, anchor, span, z, Timestamp::MIN, until, index.limit)?;
+            clamped.set(clamped.get() || c);
+            Ok(rows)
+        }),
     };
-    if !recurring {
-        let mut o = single(key, anchor, span, zone.as_ref(), None);
-        o.rows.iter_mut().for_each(|r| r.done = done(t.progress));
-        return o;
+    if clamped.get() {
+        tracing::warn!(key = %key.0, "task ends before it starts; ends at its start");
     }
-    index_series(key, anchor, zone.as_ref(), index, previous, |until| {
-        expand_task(
-            t,
-            anchor,
-            span,
-            zone.clone(),
-            Timestamp::MIN,
-            until,
-            index.limit,
-        )
-    })
+    o
 }
 
 /// Rows extending a stored task master's index from `from` to `until`.
@@ -77,9 +78,11 @@ pub(crate) fn extension(
     let t: CalendarTask = serde_json::from_str(canonical)?;
     // An unresolved zone keeps the item in `unindexed`, never floating rows.
     let zone = task_zone(&t)?;
-    let (anchor, span) =
+    let (anchor, span, _) =
         master_extent(&t, zone.as_ref())?.ok_or("task without a date has no series")?;
-    Ok(expand_task(&t, anchor, span, zone, from, until, limit)?)
+    // Clamped ends were reported when the item was written.
+    let (rows, _) = expand_task(&t, anchor, span, zone, from, until, limit)?;
+    Ok(rows)
 }
 
 /// The task's zone, resolved as an event's ([`ingest::zone`]).
@@ -96,9 +99,8 @@ fn done(p: TaskProgress) -> bool {
 fn master_extent(
     t: &CalendarTask,
     zone: Option<&TimeZone>,
-) -> Result<Option<(DateTime, Span)>, jiff::Error> {
+) -> Result<Option<(DateTime, Span, bool)>, jiff::Error> {
     extent(
-        &t.uid,
         zone,
         t.start,
         t.due,
@@ -111,16 +113,15 @@ fn master_extent(
 /// lasts (plan 12.2); `None` without any date. A date-only due covers its
 /// whole day (nominal days); a timed end in a zone is exact hours, as for
 /// events, so a DST change in between does not move it. An end before the
-/// start (due before start, or a negative estimate) is clamped to the start
-/// with a warning.
+/// start (due before start, or a negative estimate) is clamped to the start;
+/// the flag says so.
 fn extent(
-    uid: &str,
     zone: Option<&TimeZone>,
     start: Option<DateTime>,
     due: Option<DateTime>,
     estimated: Option<Span>,
     whole_day: bool,
-) -> Result<Option<(DateTime, Span)>, jiff::Error> {
+) -> Result<Option<(DateTime, Span, bool)>, jiff::Error> {
     let day = |t: DateTime| {
         if whole_day {
             t.checked_add(1.day())
@@ -135,25 +136,22 @@ fn extent(
         (Some(start), None, Some(d)) => (start, start.checked_add(d)?),
         (Some(start), None, None) => (start, day(start)?),
     };
-    let end = if end < anchor {
-        tracing::warn!(%uid, %anchor, %end, "task ends before it starts; ends at its start");
-        anchor
-    } else {
-        end
-    };
+    let clamped = end < anchor;
+    let end = end.max(anchor);
     let span = match zone {
         Some(z) if !whole_day => anchor
             .to_zoned(z.clone())?
             .until((Unit::Hour, &end.to_zoned(z.clone())?))?,
         _ => anchor.until(end)?,
     };
-    Ok(Some((anchor, span)))
+    Ok(Some((anchor, span, clamped)))
 }
 
 /// Rows of a task series starting in `[from, until)`. An override moves
 /// through the anchor member (`start`, else `due`) and changes its length
 /// through the other members; its `progress` decides its done state, other
-/// occurrences take the master's.
+/// occurrences take the master's. The flag says an override's end was
+/// clamped to its start ([`extent`]).
 fn expand_task(
     t: &CalendarTask,
     anchor: DateTime,
@@ -162,7 +160,8 @@ fn expand_task(
     from: Timestamp,
     until: Timestamp,
     limit: usize,
-) -> Result<Vec<OccurrenceRow>, RecurrenceError> {
+) -> Result<(Vec<OccurrenceRow>, bool), RecurrenceError> {
+    let clamped = Cell::new(false);
     let mut done_at = HashMap::new();
     for (k, p) in &t.recurrence_overrides {
         let Some(v) = p.get("progress") else { continue };
@@ -182,7 +181,7 @@ fn expand_task(
         rule_values(&t.recurrence_rules),
         Vec::new(),
         &t.recurrence_overrides,
-        |rid, p| override_extent(t, zone.as_ref(), rid, p),
+        |rid, p| override_extent(t, zone.as_ref(), rid, p, &clamped),
     );
     let master = done(t.progress);
     let mut rows = expand_rows(&s, from, until, limit)?;
@@ -190,7 +189,7 @@ fn expand_task(
         let own = r.recurrence_id.and_then(|k| done_at.get(&k));
         r.done = own.copied().unwrap_or(master);
     }
-    Ok(rows)
+    Ok((rows, clamped.get()))
 }
 
 /// A patched `progress`; `null` removes it, leaving the default `needs-action`.
@@ -211,6 +210,7 @@ fn override_extent(
     zone: Option<&TimeZone>,
     rid: DateTime,
     p: &PatchObject,
+    clamped: &Cell<bool>,
 ) -> (DateTime, Option<Span>) {
     let at = |name| text(p, name).and_then(|v| v.parse::<DateTime>().ok());
     let anchored_at_due = t.start.is_none();
@@ -246,8 +246,11 @@ fn override_extent(
         .unwrap_or(t.show_without_time);
     let starts = (!anchored_at_due).then_some(start);
     // Out of range: the occurrence keeps the series length; expansion reports the range.
-    let span = match extent(&t.uid, zone, starts, due, estimated, whole_day) {
-        Ok(e) => e.map(|(_, s)| s),
+    let span = match extent(zone, starts, due, estimated, whole_day) {
+        Ok(e) => e.map(|(_, s, c)| {
+            clamped.set(clamped.get() || c);
+            s
+        }),
         Err(e) => {
             tracing::warn!(uid = %t.uid, %rid, error = %e, "override length out of range; keeps the series'");
             None
@@ -561,6 +564,45 @@ mod tests {
                 row("2026-11-05T11:00:00Z", "2026-11-05T12:00:00Z", false),
             ]
         );
+    }
+
+    /// A date-only series keys its overrides at local midnight; a completed
+    /// one is done on its own day only.
+    #[test]
+    fn date_only_series_completes_the_override_at_midnight() {
+        let o = occ(
+            json!({"due": "2026-11-02T00:00:00", "showWithoutTime": true,
+            "recurrenceRules": ["FREQ=DAILY;COUNT=3"],
+            "recurrenceOverrides": {"2026-11-03T00:00:00": {"progress": "completed"}}}),
+        );
+        assert_eq!(
+            rows(&o),
+            [
+                row("2026-11-02T00:00:00Z", "2026-11-03T00:00:00Z", false),
+                row("2026-11-03T00:00:00Z", "2026-11-04T00:00:00Z", true),
+                row("2026-11-04T00:00:00Z", "2026-11-05T00:00:00Z", false),
+            ]
+        );
+        assert!(o.rows.iter().all(|r| r.floating));
+    }
+
+    /// A floating timed series: the override is keyed at its wall time.
+    #[test]
+    fn floating_series_completes_its_override() {
+        let o = occ(
+            json!({"start": "2026-11-02T09:00:00", "due": "2026-11-02T10:00:00",
+            "recurrenceRules": ["FREQ=DAILY;COUNT=3"],
+            "recurrenceOverrides": {"2026-11-03T09:00:00": {"progress": "completed"}}}),
+        );
+        assert_eq!(
+            rows(&o),
+            [
+                row("2026-11-02T09:00:00Z", "2026-11-02T10:00:00Z", false),
+                row("2026-11-03T09:00:00Z", "2026-11-03T10:00:00Z", true),
+                row("2026-11-04T09:00:00Z", "2026-11-04T10:00:00Z", false),
+            ]
+        );
+        assert!(o.rows.iter().all(|r| r.floating));
     }
 
     /// Europe/Prague's current rule as a custom zone (plan 3.7).
