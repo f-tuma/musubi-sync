@@ -345,13 +345,16 @@ fn phase1_tenant_file_migrates_to_last_version() {
         tn.apply_page(&page(col, vec![event("e", "1", 1), task]))
             .unwrap();
     }
-    // Back to the phase-1 schema: version 1 had none of the columns or the index.
+    // Back to the phase-1 schema: version 1 had none of the columns or indexes.
     {
         let c = Connection::open(main_db(d.path(), TENANT)).unwrap();
         c.execute_batch(
             "DROP INDEX entities_kind;
              ALTER TABLE collections DROP COLUMN push_resource;
+             DROP INDEX occurrences_kind_time;
+             DROP INDEX occurrences_kind_long;
              ALTER TABLE occurrences DROP COLUMN done;
+             ALTER TABLE occurrences DROP COLUMN kind;
              UPDATE meta SET v = 1 WHERE k = 'schema';",
         )
         .unwrap();
@@ -376,24 +379,19 @@ fn phase1_tenant_file_migrates_to_last_version() {
         before,
         tables(&main_db(d.path(), TENANT))
             .into_iter()
-            .map(|(t, mut cols, rows)| {
+            .map(|(t, mut cols, mut rows)| {
                 // The columns v2 and v3 add, with their value after the migration.
-                let added = match t.as_str() {
-                    "collections" => Some(("push_resource", rusqlite::types::Value::Null)),
-                    "occurrences" => Some(("done", 0.into())),
-                    _ => None,
+                let added: Vec<(&str, rusqlite::types::Value)> = match t.as_str() {
+                    "collections" => vec![("push_resource", rusqlite::types::Value::Null)],
+                    "occurrences" => vec![("done", 0.into()), ("kind", "event".to_owned().into())],
+                    _ => Vec::new(),
                 };
-                if let Some((col, value)) = added {
+                for (col, value) in added {
                     let i = cols.iter().position(|c| c == col).unwrap();
                     cols.remove(i);
-                    let rows = rows
-                        .into_iter()
-                        .map(|mut r| {
-                            assert_eq!(r.remove(i), value);
-                            r
-                        })
-                        .collect();
-                    return (t, cols, rows);
+                    for r in &mut rows {
+                        assert_eq!(r.remove(i), value);
+                    }
                 }
                 (t, cols, rows)
             })
