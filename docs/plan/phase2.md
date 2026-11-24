@@ -285,7 +285,7 @@ Dva celočíselné řádky tabulky `meta`, `mapping:<provider>:<kind>:schema` a 
 
 ### 4.2 Výskyty
 
-- **Úkoly:** ve fázi 2 bez indexu výskytů. Opakovaný VTODO zůstane v kanonickém tvaru s pravidlem, nerozbaluje se. Okno podle termínu úkolu ve fázi 2 není (otevřená otázka 5).
+- **Úkoly:** mají index výskytů a rozsah jako události (kapitola 12, K12).
 - **Kontakty a skupiny:** výskyty nemají a mít nebudou.
 - Indexy kontaktů podle e-mailu, telefonu a předpony jména (kapitola 2.7 návrhu) ve fázi 2 nevznikají. Čtecí API je nepotřebuje; přijdou s vyhledáváním (kapitola 11.3).
 
@@ -548,7 +548,7 @@ Pořadí je závazné jen tam, kde to říkají závislosti. K0 je brána. T10 a
 ```
 K0 ─┬─ K1 úložiště ─── K5 engine ───────────────────────────┐
     ├─ K2 musubi-ical ──────────────────────────────────────┤
-    ├─ K3 falešný DAV + Radicale ─ K4 musubi-dav ─┬─────────┼─ K8 server ─ K9 důkaz ─ K10 živá kontrola ─ K11 zmrazení v0
+    ├─ K3 falešný DAV + Radicale ─ K4 musubi-dav ─┬─────────┼─ K8 server ─ K9 důkaz ─ K10 živá kontrola ─ K11 zmrazení v0 ─ K12 výskyty úkolů ─ K13 úkoly iCloudu
     │                                             └─ K7 iCloud ───────────────── (→ K9)
     ├─ T10 živě Google Tasks/People ─ K6 Google Tasks/People┘
     └─ T11 živě iCloud ──────────────────────────────── (→ K7)
@@ -773,24 +773,240 @@ Latence u DAV, Tasks a People je omezená dotazováním. Cíl „do 500 ms od oz
 
 - Jakýkoli zápis k poskytovateli a vrstva záplat (fáze 3).
 - WebDAV-Push (W1, po 1.0).
-- Úkoly iCloudu: nejsou ve v1 vůbec (návrh, shrnutí bod 18, kapitoly 2.6 a 11.4), kolekce jen s VTODO profil `icloud` přeskočí.
+- Úkoly iCloudu: kolekce jen s VTODO profil `icloud` zatím přeskočí (návrh, shrnutí bod 18, kapitoly 2.6 a 11.4). Přijdou v K13 po K12.
 - Plánování a T12 (fáze 6).
 - Přeskočení dopředu u drahých sérií (kapitola 10, bod 5).
 - Google `contactGroups` a `otherContacts`; členství osob ve skupinách v kanonickém tvaru.
 - Fotky kontaktů mimo databázi; indexy kontaktů podle e-mailu, telefonu a jména.
-- Index výskytů pro VTODO.
 - Digest a OAuth pro DAV; DNS SRV.
 - Microsoft Graph (fáze 7).
 - Další DAV servery v CI (Baïkal, Nextcloud, Stalwart).
 
 ### 11.4 Otevřené otázky
 
-Otázky 1, 2, 3, 6 a 7 jsou vyřešené. U otázky 5 plán počítá s doporučenou výchozí volbou; změna rozhodnutí upraví jen uvedené kapitoly.
+Všechny otázky jsou vyřešené; otázka 4 čeká jen na živá data.
 
 1. **Testovací účet iCloud pro T11 a K10.** Dodá uživatel: Apple ID s 2FA a heslem pro aplikace, s kalendářem, adresářem a pár kontakty a skupinou. Bez něj K7 stojí jen na sekundárních zdrojích a K11 zmrazí v0 s výhradou, že profil `icloud` je ověřený jen proti falešnému DAV (kapitola 3.8). Zmrazení se kvůli účtu nezastaví, protože profil je data v `musubi-dav` a jeho oprava kontrakt nemění. **Vyřešeno:** uživatel dal pro T11 a K10 své Apple ID. K10 ověřila profil `icloud` živě a `docs/contract/v0.md` výhradu nenese.
 2. **Scope pro zápis už teď?** Fáze 3 bude potřebovat `tasks` a `contacts` (bez `.readonly`) a `calendar.events`. Žádat je teď ušetří druhý souhlas, ale fáze 2 by držela víc oprávnění, než potřebuje (kapitola 7 návrhu: minimální scope). **Rozhodnuto 24. 11. 2026:** scope pro zápis už teď (kapitola 6.1). Účty připojené dřív je dostanou opětovným souhlasem.
 3. **Stav a tvar chyby vypršeného sync tokenu** u People. Neplatný token je podle T10 `400 INVALID_ARGUMENT` bez `ErrorInfo` a adaptér ho bere jako `CursorExpired`. Vypršený je podle K10 `400 FAILED_PRECONDITION` s `EXPIRED_SYNC_TOKEN`, tedy také `CursorExpired`. Ověřeno.
 4. **iCloud: zkracování `507`, velikost dávky `multiget`, `PUT` s `If-Match`** **(neověřeno)**. `sync-collection` u CardDAV a `:443` potvrdila T11. Deltu po změně (CalDAV i CardDAV) a `PUT` s `If-None-Match: *` potvrdila K10 ([live-k10.md](../research/phase2/live-k10.md)).
-5. **Rozsah úkolů podle termínu.** Má `/v1/entities?kind=task` umět okno podle `due`? Bez indexu výskytů jde jen o filtr nad `list_entities`; opakované úkoly by potřebovaly rozbalení. **Doporučená výchozí volba:** žádné okno, úkoly se stránkují po `id` (kapitola 4.2).
+5. **Rozsah úkolů podle termínu.** **Rozhodnuto 24. 11. 2026:** úkoly mají index výskytů a rozsah jako události, včetně rozbalení opakovaných úkolů, počítáno na nejhorší případ (kapitola 12, K12).
 6. **Skryté úkoly Googlu** (`hidden: true`, vyčištěné dokončené). **Doporučená výchozí volba:** synchronizovat je jako živé položky s příznakem `CalendarTask.hidden` a nechat skrývání na klientovi (kapitoly 3.1 a 6.2). Pokud T10 ukáže, že je Google po čase maže, příznak to nemění. **Rozhodnuto 24. 11. 2026:** tak, jak je; klient je použije třeba pro skutečný počet dokončených úkolů.
 7. **Meze adaptivního dotazování.** Výchozí čísla v kapitole 7.2 jsou odhad; kvóta Tasks API (podle K10 50 000 dotazů za den na projekt, [live-k10.md](../research/phase2/live-k10.md) kap. 5) může u většího nasazení vynutit delší `min` aktivní úrovně. K9 podle D2 výchozí meze ponechala: stojí čtvrtinu až šestinu rozpočtu (kapitola 7.2). Pro jednoho uživatele i malé nasazení kvóta stačí.
+
+## 12. Index výskytů úkolů (K12)
+
+### 12.1 Rozhodnutí a rozsah
+
+**Rozhodnuto 24. 11. 2026** (otevřená otázka 5, kapitola 4.2): úkoly (`EntityKind::Task`, `CalendarTask`) dostanou stejný index výskytů a stejný dotaz na rozsah jako události. Opakovaný VTODO (`RRULE`, `RDATE`, `EXDATE`, výjimky s `RECURRENCE-ID`) se rozbalí stejnou cestou jako opakovaná událost. Google Tasks opakování přes API nedává, takže z Googlu jsou úkoly vždy jednorázové. Klient čte události i úkoly jedním dotazem, `GET /v1/entities?from&to`. Musubi se podle nového API přepíše, takže formát odpovědi nemusí zůstat zpětně kompatibilní (rozhodnuto 24. 11. 2026).
+
+- **Kontrakt adaptéru v0 se nemění.** Moduly `kind`, `task`, `event` ani `time` se nemění a `contract_freeze` zůstane zelený. Mění se jen `store` (není v kontraktu, `docs/contract/v0.md`, ř. 18), `musubi-store-sqlite`, `musubi-engine` a `musubi-syncd`.
+- **Kodeky se nemění.** `musubi-ical` už dnes skládá výjimky VTODO do `recurrence_overrides` s klíčem podle `start ?? due` (`ical.rs:838`). Zrušená výjimka je `{"excluded": true}` (`ical.rs:147`). Google dává `due` jen jako datum s `showWithoutTime` (`tasks.rs:396–399`).
+- **Úkoly iCloudu zůstávají mimo v1** (kapitola 11.3): profil `icloud` kolekce jen s VTODO dál přeskakuje. Opakované úkoly tak přicházejí z obecného CalDAV (Radicale a další).
+- `musubi-recurrence` se nemění. `Series` potřebuje jen kotvu (`DateTime`), zónu, délku, pravidla a výjimky. Úkol je dodá stejně jako událost.
+
+### 12.2 Co je výskyt úkolu
+
+**Kotva** `K = start ?? due`, tedy `DTSTART`, a bez něj `DUE`. Stejnou kotvu používá kodek pro klíče výjimek (`ical.rs:838`), takže `recurrence_id` z rozbalení a klíče v `recurrence_overrides` sedí. RFC 5545 (3.8.5.3) pro `RRULE` vyžaduje `DTSTART`. VTODO s `RRULE` jen s `DUE` je mimo normu, ale klienti ho posílají; index ho rozbalí od `DUE`, ne zahodí.
+
+**Zóna** je `time_zone` úkolu (zóna `DTSTART`, jinak `DUE`, viz `ical.rs:775–780`). Vyhodnocuje se stejně jako u události: IANA název, `/<TZID>` z `time_zones`, `None` znamená plovoucí čas. Nevyřešená zóna nemá řádky a úkol se objeví v `unindexed` (kapitola 3.7), nikdy jako plovoucí.
+
+**Rozpětí** jednoho výskytu (`d` = 1 den, pokud je `show_without_time`, jinak 0):
+
+| Data úkolu | Začátek | Konec | Kotva |
+| --- | --- | --- | --- |
+| `DTSTART` + `DUE` | `start` | `due + d` | `start` |
+| `DTSTART` + `DURATION` (`estimated_duration`) | `start` | `start + estimated_duration` | `start` |
+| jen `DTSTART` | `start` | `start + d` | `start` |
+| jen `DUE` (vždy u Google) | `due` | `due + d` | `due` |
+| bez data | žádný řádek, žádná série | | |
+
+- `DTSTART + DURATION` má význam podle RFC 5545 3.6.2, tedy `DUE = DTSTART + DURATION`. Kodek tu hodnotu ukládá do `estimated_duration` (`ical.rs:800–809`). Pro index platí význam z RFC jen tam, kde `DUE` chybí. `DUE` spolu s `DURATION` RFC zakazuje, takže jiný případ nevznikne.
+- Datum bez času znamená celý den splatnosti, tedy `[due, due + P1D)` jako celodenní událost (podotázka 2 v 12.9). Google úkol s termínem 20. 11. je v okně 20. 11. v zóně dotazu (`floating = true`, rozšíření o ±14 h a přesný filtr přes `RangeQuery.zone` jako dnes).
+- Čas `DUE` bez `DTSTART` dá výskyt nulové délky `[due, due]`. `TimeWindow::overlaps` ho počítá do okna, když `start <= t < end` (`time.rs:36`), a SQL `o.end >= ?1 AND o.start < ?2` také.
+- Když `due < start` (vadná data), konec je `start` a do logu jde varování. Kontrakt řádku `end >= start` (`store.rs:452`) platí dál.
+- **Opakování:** délka série je rozpětí předlohy jako nominální `Span` (`start.until(due) + d`). Výjimka v `recurrence_overrides` mění začátek přes člen kotvy (`start`, případně `due`) a délku přes druhý člen. `{"excluded": true}` je EXDATE, prázdný patch je RDATE, stejně jako u událostí (`ingest.rs:367–381`). `EXRULE` model úkolu nemá; `exrules` jsou prázdné.
+- **Úkoly bez data** nejsou ve výsledku rozsahu ani v `unindexed`. Klient je čte výpisem `GET /v1/entities?kind=task`. Ten zůstává beze změny a vrací všechny úkoly, i ty s datem.
+
+### 12.3 Stav úkolu v indexu
+
+| Stav | Index | Rozsah |
+| --- | --- | --- |
+| `cancelled` předlohy nebo jednorázového úkolu | žádné řádky, stejně jako zrušená událost (`ingest.rs:242`) | nevrací; výpis ano |
+| zrušená výjimka (`STATUS:CANCELLED` s `RECURRENCE-ID`) | kodek z ní udělá `excluded`, výskyt nevznikne | nevrací |
+| `completed`, `failed` | řádky s `done = 1` | vrací s `"done": true` |
+| `needs-action`, `in-process` | řádky s `done = 0` | vrací s `"done": false` |
+| Google `hidden` (vždy dokončený) | `done = 1`; `hidden` je jen v kanonickém tvaru | vrací; klient rozhodne podle `canonical.hidden` |
+
+- **Hotovo po výskytech:** `progress` z patche výjimky má přednost před `progress` předlohy. `COMPLETED` na předloze s `RRULE` tak označí všechny výskyty kromě těch, jejichž výjimka říká jinak. RFC 5545 to nedefinuje; plán se drží sémantiky patchů JSCalendar. RDATE (prázdný patch) bere stav předlohy.
+- Stav se ukládá jako sloupec, ne jako filtr nad JSON. Server pak umí `done=false` (zobrazit jen otevřené úkoly jako blokující čas) a stránkování zůstane přesné. Klient také nemusí sám aplikovat patche, aby poznal stav výskytu.
+- U událostí je `done` vždy 0.
+
+### 12.4 Úložiště: `MAIN_V3`
+
+Jedna nová migrace v `MAIN_MIGRATIONS` (`schema.rs:13`), líná při otevření jako `MAIN_V2`:
+
+```sql
+ALTER TABLE occurrences ADD COLUMN done INTEGER NOT NULL DEFAULT 0;
+-- Vynutí jednorázový přepočet úkolů (kapitola 10, bod 1), který jim spočítá výskyty.
+UPDATE items SET schema_version = 0 WHERE kind = 'task' AND tombstone = 0;
+DELETE FROM meta WHERE k LIKE 'mapping:%:task:schema' OR k LIKE 'mapping:%:task:mapping';
+```
+
+- **Proč ne `Task::SCHEMA_VERSION = 2`:** kanonický JSON úkolu se nemění. `SCHEMA_VERSION` je v hashovaném modulu `kind` a zvýšení by bylo změnou kontraktu bez důvodu. Index je odvozená data. Přepočet spustí migrace tak, že úkoly označí jako zastaralé (`stale_items` hledá `schema_version <> ?`, `tenant.rs:1092`) a smaže meta řádky, které `redecoded` čte (`redecode.rs:55–60`). Při startu pak engine přes `redecode_write` → `item_write` přepočítá všechny úkoly ze surové vrstvy a `redecode` v úložišti zapíše jejich řádky (`tenant.rs:679–691`).
+- **Bez sloupce `kind` v `occurrences`:** filtr druhu je `i.kind IN (…)` nad `items`, které dotaz na rozsah už spojuje kvůli `observed` (`tenant.rs:760`). Cenu ověří K12a (riziko R1). Kdyby test nevyšel, sloupec a index s druhem na začátku přijdou do téhož `MAIN_V3` ještě před vydáním. Po vydání se `MAIN_V3` nemění.
+- `ADD COLUMN` s konstantní výchozí hodnotou je v SQLite O(1). `UPDATE` sáhne jen na řádky úkolů, a to v transakci migrace.
+
+**Změny `musubi-model::store`** (mimo kontrakt):
+
+| Typ | Změna |
+| --- | --- |
+| `OccurrenceRow` | `done: bool` |
+| `OccurrenceView` | `kind: EntityKind`, `done: bool` |
+| `RangeQuery` | `kinds: Vec<EntityKind>` (neprázdné; jen druhy s výskyty), `done: Option<bool>` (`None` = vše) |
+| `list_entities` | dokumentace už neříká „druhy bez výskytů"; chování beze změny |
+
+**`range`** (`tenant.rs:702`) přidá do obou polovin `UNION ALL` podmínku `AND i.kind IN (…)`, při `done` i `AND o.done = ?`. Část `unindexed` filtruje druh v `EXISTS (SELECT 1 FROM items i …)` (`tenant.rs:827`). Klíč stránkování `(start, entity, rid)` se nemění; `kinds` a `done` musí být na všech stránkách stejné, stejně jako dnes `collections`. `series_to_extend` a `extend_occurrences` se nemění: série úkolů jsou řádky `entities` se stejnými sloupci `series_first`, `series_last` a `indexed_until`.
+
+**Přechod a návrat** (pravidla 4.4 platí beze změny):
+- Před přechodem záloha binárkou K11.
+- Binárka K11 tenanta s `MAIN_V3` odmítne (`SchemaTooNew`, `schema.rs:131`), takže návrat je obnova celé zálohy.
+- Přerušený přepočet je bezpečný: úkoly mají dál `schema_version = 0` a meta řádky chybí, takže další start ho pustí znovu. Sync nezměněného úkolu mezitím úkol přepočítá také (`current()` je `false`, `ingest.rs:58`).
+- Data se neztrácí. Migrace mění jen verzi u položek a odvozená meta.
+
+### 12.5 Engine
+
+- **`ingest.rs`:** větev `EntityKind::Task` v `item_write` (`ingest.rs:133`) zavolá novou funkci `task_occurrences` (kapitoly 12.2 a 12.3). Kód sdílí s událostmi:
+  - smyčku přes horizonty (`index.horizon`, předchozí horizont, `index.fallback`; `ingest.rs:273–309`) vytáhnout do funkce, která dostane uzávěr „rozbal do `until`". Události i úkoly mají stejné chování u `TooExpensive`;
+  - `unresolved` (`ingest.rs:313`) dostane kotvu a délku místo `&CalendarEvent`;
+  - `series()` (`ingest.rs:352`) se rozdělí na stavbu `Series` z obecných částí a čtení patche podle druhu (událost: `start` a `duration`; úkol: člen kotvy a druhý člen pro délku);
+  - `done` po výskytech: klíče výjimek se převedou přes `recurrence_id(Moment::Local(k), zone)` na `Timestamp` a vznikne mapa `rid → done`. Řádek bez záznamu bere `done` předlohy.
+- **Korelace** u úkolů zůstává `None`. CalDAV skládá výjimky do jedné položky a Google úkoly opakování nemají, takže potlačení přes `items.uid` je nepotřebuje.
+- **`extension`** (`ingest.rs:406`) dostane `kind: EntityKind` a podle něj deserializuje `CalendarEvent` nebo `CalendarTask`. `extend_index` (`jobs.rs:1466–1467`) předá `EntityView.kind`, který už čte. Bez toho by série úkolu selhala na parsování jako událost a nikdy by se neprodloužila.
+- **Konfigurace se nemění:** `index_forward` (5 let), `index_row_limit` (50 000 na sérii), `window_forward` jako záložní horizont a `extend_every` platí pro oba druhy (`lib.rs:197–198`).
+- **`redecode.rs`:** beze změny kódu. Přepočet spustí migrace z 12.4.
+
+### 12.6 Čtecí API
+
+`GET /v1/entities` (`read.rs:179`):
+
+| Parametry | Chování |
+| --- | --- |
+| `from`, `to` (+ `kind`, `done`, `zone`, `collection`, `limit`, `after`, `ids_only`) | **rozsah**. `kind` je seznam oddělený čárkami z `event` a `task`; bez něj všechny druhy s výskyty (`event,task`). `contact` nebo `contact_group` v rozsahu je `400`. `done=true\|false` filtruje, bez něj vrací vše |
+| `kind` bez `from` a `to` | **výpis** jako dnes: právě jeden druh, `event` je `400`. `kind=task` vrací všechny úkoly; jediná cesta k úkolům bez data |
+
+- Dnes se `kind` vyhodnocuje před oknem (`read.rs:201`), takže `kind=event&from&to` končí chybou. Nově rozhoduje přítomnost `from` a `to`. Tvar `kind=event&from&to` z návrhu (`proposal.md:109`) tak začne fungovat.
+- **Výskyt v odpovědi** dostane `"kind"` a `"done"`. Ostatní pole, kurzor `after` a `unindexed` (jen série požadovaných druhů) se nemění. Meze `limit` 1–1000 (`read.rs:31–32`) zůstávají.
+- **Výkon v nejhorším případě (odhad, neověřeno, změří K12d):** denně opakovaný úkol založený před 3 lety s horizontem 5 let dá asi 2 900 řádků. Tisíc takových sérií dá asi 2,9 milionu řádků, řádově stovky MB s indexy. Mez řádků (50 000 na sérii) a `UNINDEXED_MAX` (10 000, `tenant.rs:855`) chrání stejně jako u událostí. Dotaz na rozsah čte jen řádky v okně, takže měsíc s 50 denními úkoly přidá asi 1 500 řádků.
+- Dokumentace API: v `docs/architecture/proposal.md` (kapitola API) doplnit `kind` jako seznam, `done` a pole `kind` a `done` ve výskytu. Samostatný dokument API neexistuje.
+
+### 12.7 Testy
+
+- **Jednotkové (`musubi-engine/src/ingest.rs`):**
+  - tabulka z 12.2: pět kombinací dat × čas, datum, IANA zóna, plovoucí čas;
+  - `due < start`;
+  - série s kotvou `start` i `due`;
+  - výjimka posunutá přes `due`, dokončená výjimka (`done` jen u ní), `COMPLETED` na předloze (všechny `done`), zrušená výjimka chybí, zrušený úkol nemá řádky;
+  - vlastní zóna `/TZID` dává stejné řádky jako IANA zóna;
+  - nevyřešená zóna je v `unindexed`;
+  - `TooExpensive` padá na záložní horizont;
+  - `extension(Task, …)` od horizontu dává totéž co čerstvé rozbalení (vzor `custom_zone_indexes_and_extends_like_its_iana_zone`).
+  - Golden snímky `codec_golden__tasks__{recurring,completed}.snap` přes pomocnou funkci podle `ical_rows` (`ingest.rs:725`), bez závislosti na `musubi-ical`.
+- **Úložiště (`musubi-store-sqlite`):**
+  - test migrace: soubor `MAIN_V2` s úkolem a meta `mapping:…:task:*` → `MAIN_V3`, úkol má `schema_version = 0`, meta řádky jsou pryč, události a jejich řádky beze změny, `done = 0`;
+  - `range` s `kinds` a `done` přes stránky (bez duplicit, bez děr);
+  - `unindexed` jen pro požadované druhy;
+  - test počtu VM kroků (vzor `long_occurrence_does_not_widen_the_range_scan`, `tenant.rs:1451`): dotaz jen na události v okně s N řádky úkolů. Výsledek rozhodne R1.
+- **Engine (`crates/musubi-engine/tests/cases`):**
+  - `FakeProvider` s VTODO JSON přes testovací kodek → rozsah vrací úkoly;
+  - změna `progress` přepíše `done`;
+  - `extend_index` prodlouží sérii úkolu;
+  - přepočet po migraci proběhne jednou, druhý start nedělá nic.
+- **`musubi-syncd` e2e:**
+  - `tests/redecode.rs`: tenant z K11 s úkoly bez řádků → start → `kind=task` vrací výskyty;
+  - `tests/dav.rs` (falešný DAV): opakovaný VTODO s dokončenou výjimkou, `kind=event,task`, `done=false`;
+  - `tests/radicale.rs`: totéž proti Radicale;
+  - Google fake: úkol jen s datem je v okně dne v zóně `Europe/Prague`, mimo sousední den;
+  - `tests/api.rs`: matice parametrů (`kind=contact&from&to` je 400, `kind=event` bez okna je 400, výchozí rozsah vrací oba druhy).
+- **Konformační sada:** beze změny, adaptéry se nemění.
+- **Benchmark:** B3t v `crates/musubi-testkit/src/bin/bench.rs` vedle B3. Falešný DAV: 4 950 událostí a 50 sérií jako B3, k tomu 5 000 úkolů (500 opakovaných denně a týdně, 1 000 bez data, 1 000 dokončených). Měří p99 pro `kind=event` (bez zhoršení proti B3, cíl ≤ 10 ms), `kind=event,task` a `kind=task&done=false`, a velikost `main.db`. Malé měřítko jde do `bench-smoke`.
+
+### 12.8 K12
+
+```
+K11 ─ K12a úložiště ─┬─ K12b engine ─┬─ K12d důkaz
+                     └─ K12c API ────┘
+```
+
+#### K12a. Úložiště
+
+- **Cíl:** kapitola 12.4.
+- **Crates:** `musubi-model` (`store`: `OccurrenceRow.done`, `OccurrenceView.kind` a `done`, `RangeQuery.kinds` a `done`), `musubi-store-sqlite` (`MAIN_V3`, `range`, `insert_occurrences` a `extend_occurrences` s `done`). Volající v `musubi-engine` a `musubi-syncd` se přizpůsobí jen tak, aby se přeložili: `kinds: vec![Event]`, `done: false`.
+- **Hotovo:** migrace, filtr druhu a stavu, testy úložiště z 12.7.
+- **Přijetí:**
+  - starý soubor `MAIN_V2` se otevře, má verzi 3 a data podle 12.4; binárka s `MAIN_V2` ho odmítne (`SchemaTooNew`);
+  - rozsah s `kinds = [Event]` vrací přesně totéž co před K12a (stávající testy úložiště beze změny výsledků);
+  - test VM kroků z 12.7 má zapsaný výsledek a rozhodnutí R1 (filtr přes `items` stačí, nebo sloupec `kind` v `MAIN_V3`);
+  - `contract_freeze` zelený.
+- **Závisí na:** K11.
+
+#### K12b. Engine
+
+- **Cíl:** kapitoly 12.2, 12.3 a 12.5.
+- **Crates:** `musubi-engine` (`ingest.rs`, `jobs.rs`); `musubi-recurrence` beze změny.
+- **Hotovo:** `task_occurrences`, sdílená smyčka horizontů a `unresolved`, `extension` podle druhu, jednotkové testy a testy enginu z 12.7.
+- **Přijetí:**
+  - tabulka z 12.2 a stavy z 12.3 projdou testem;
+  - událostí se netýká žádná změna výsledků (stávající testy `ingest.rs` a `k5.rs` beze změny očekávání);
+  - `extend_index` nad tenantem se sérií úkolu i události prodlouží obě a nic nezaloguje jako chybu;
+  - po migraci `MAIN_V3` přepočet úkolů proběhne jednou bez síťového volání a druhý start nic nepřepíše.
+- **Závisí na:** K12a.
+- **Souběžně:** K12c.
+
+#### K12c. API
+
+- **Cíl:** kapitola 12.6.
+- **Crates:** `musubi-syncd` (`read.rs`); dokumentace API v `docs/architecture/proposal.md`.
+- **Hotovo:** `kind` jako seznam v rozsahu, `done`, pole `kind` a `done` ve výskytu, rozlišení rozsahu a výpisu podle `from` a `to`, test `api.rs`.
+- **Přijetí:**
+  - rozsah bez `kind` vrací události i úkoly; s `kind=event` totéž co dnes;
+  - `kind=event,task` vrací oba druhy v jednom řazení se stabilním kurzorem;
+  - výpis `kind=task` beze změny;
+  - neplatné kombinace jsou `400` se zprávou.
+- **Závisí na:** K12a.
+- **Souběžně:** K12b.
+
+#### K12d. Důkaz
+
+- **Cíl:** celé čtení úkolů v rozsahu přes `musubi-syncd` a změřená cena.
+- **Hotovo:** e2e testy (falešný DAV, Radicale, Google fake, upgrade z K11 v `redecode.rs`), B3t v `bench.rs` a `bench-smoke`, čísla v 11.2.
+- **Přijetí:**
+  - opakovaný VTODO z Radicale je v rozsahu se správnými výskyty, posunutou výjimkou a `done` u dokončené výjimky;
+  - Google úkol jen s datem je ve správném dni v zóně dotazu;
+  - tenant z binárky K11 po startu nové binárky vrací úkoly v rozsahu;
+  - B3t: `kind=event` p99 ≤ 10 ms a bez zhoršení proti B3, ostatní dotazy změřené a zapsané.
+- **Závisí na:** K12b, K12c.
+
+### 12.9 Rizika a podotázky
+
+**Rizika**
+
+- **R1, cena filtru druhu.** Dotaz jen na události projde i řádky úkolů v okně. Při stovkách denních úkolů to může přerazit p99 10 ms. Měří K12a (VM kroky) a K12d (B3t). Náprava je sloupec `occurrences.kind` s indexem s druhem na začátku, pouze uvnitř nevydaného `MAIN_V3`.
+- **R2, velikost indexu.** Otevřené denní série mají tisíce řádků za 5 let horizontu, stejně jako události. Kratší horizont pro úkoly by porušil rozhodnutí „stejně jako události", proto se jen měří (B3t, velikost `main.db`).
+- **R3, přepočet při přechodu.** Do konce přepočtu po startu `kind=task` neukáže všechno a nic to nesignalizuje (jen log). Dekódování VTODO zvládá asi 82 MB/s (D3), takže tisíce úkolů jsou otázka sekund.
+- **R4, žádný záznam v žurnálu.** Když se změní jen index (kanonický tvar je stejný), `redecode` nic nežurnáluje (`tenant.rs:667`). Klient, který si drží rozsahy v mezipaměti, se o nových výskytech úkolů po přechodu nedozví ze SSE. Provozní poznámka: po přechodu načíst rozsahy znovu.
+- **R5, různé chování klientů při dokončení opakovaného úkolu.** Thunderbird zapisuje výjimku s `RECURRENCE-ID`, Apple posouvá `DTSTART` předlohy. Index ukazuje to, co je v datech; úkoly iCloudu ve v1 nejsou.
+
+**Rozhodnuto 24. 11. 2026**
+
+1. Rozsah bez `kind` vrací všechny druhy s výskyty. Zpětná kompatibilita odpovědi se nedrží, protože Musubi se podle nového API přepíše.
+2. Datum bez času trvá celý den splatnosti, `[due, due + P1D)`.
+3. Zrušené úkoly nemají řádky a rozsah je nevrací. Výpis je vrací dál.
+4. Filtr „jen úkoly bez data" ve výpisu K12 nedělá. Klient je pozná podle chybějícího `start` a `due` ve výpisu `kind=task`. Přibude, až ho klient bude potřebovat.
+
+### K13. Úkoly iCloudu
+
+- **Cíl:** úkoly iCloudu ve stejném indexu a rozsahu jako ostatní úkoly (kapitola 12). Dnes profil `icloud` kolekce jen s VTODO přeskakuje (kapitoly 5.4 a 11.3, návrh kapitola 2.6). Uživatel 24. 11. 2026 rozhodl, že je to další položka po K12 a nesmí se ztratit.
+- **Hotovo:** profil `icloud` kolekce jen s VTODO čte; konformační sada a falešný DAV s profilem `icloud` je pokrývají; živá kontrola proti iCloudu (čtení, delta, opakovaný VTODO, dokončení výskytu podle chování klientů Apple, riziko R5).
+- **Přijetí:** opakovaný úkol vytvořený v aplikaci Připomínky je v rozsahu se správnými výskyty a `done`; zjištění zapsaná v `docs/research/phase2/`.
+- **Závisí na:** K12d.
