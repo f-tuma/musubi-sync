@@ -975,6 +975,7 @@ dependencies = [
  "musubi-recurrence",
  "musubi-store-sqlite",
  "musubi-testkit",
+ "rusqlite",
  "secrecy",
  "serde",
  "serde_json",

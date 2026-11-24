@@ -8,7 +8,7 @@ use jiff::civil::DateTime;
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Span, Timestamp};
 use musubi_model::error::BoxError;
-use musubi_model::event::{CalendarEvent, EventStatus};
+use musubi_model::event::{CalendarEvent, EventStatus, PatchObject, RecurrenceRule};
 use musubi_model::store::{
     CanonicalJson, Correlation, ItemState, ItemView, ItemWrite, OccurrenceRow, Occurrences,
     SeriesSpan,
@@ -20,7 +20,7 @@ use musubi_recurrence::{
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{Codecs, DecodeFn};
+use crate::{Codecs, DecodeFn, task_index};
 
 /// How far an event in an unresolved zone may be from its wall-clock start
 /// read as UTC: the widest UTC offset, as for floating occurrences in `range`.
@@ -130,7 +130,11 @@ fn item_write(
             correlation = Some(corr);
             Some(json)
         }),
-        EntityKind::Task => decode(codecs.task, &obj).and_then(|c| to_json(&obj.key, &c)),
+        EntityKind::Task => decode(codecs.task, &obj).and_then(|t| {
+            let json = to_json(&obj.key, &t)?;
+            occurrences = task_index::task_occurrences(&obj.key, &t, index, previous);
+            Some(json)
+        }),
         EntityKind::Contact => decode(codecs.contact, &obj).and_then(|c| to_json(&obj.key, &c)),
         EntityKind::ContactGroup => {
             decode(codecs.contact_group, &obj).and_then(|c| to_json(&obj.key, &c))
@@ -203,7 +207,7 @@ fn event_correlation(obj: &RemoteObject, ev: &CalendarEvent) -> Correlation {
 /// whose POSIX TZ rule is in `zones`, anything else a tzdb name (or one with
 /// a known path prefix). `None` without a name (floating). An error for a zone
 /// that cannot be resolved: never UTC or floating in its place.
-fn zone(
+pub(crate) fn zone(
     name: Option<&str>,
     zones: &BTreeMap<String, String>,
 ) -> Result<Option<TimeZone>, BoxError> {
@@ -222,16 +226,12 @@ fn event_zone(ev: &CalendarEvent) -> Result<Option<TimeZone>, BoxError> {
     zone(ev.time_zone.as_deref(), &ev.time_zones)
 }
 
-/// Index rows of one item. `rid` is set for an exception of a series.
+/// Index rows of one event. `rid` is set for an exception of a series.
 ///
 /// A cancelled item has none: a cancelled exception stays a live item whose
-/// correlation hides the master's occurrence. A series that cannot be expanded
-/// up to the horizon (e.g. [`RecurrenceError::TooExpensive`]) is indexed up to
-/// the largest shorter horizon that works: its `previous` one, then the
-/// window read's end. Only when none works does it get no rows and
-/// `indexed_until` at its first occurrence. Either way `range` reports it in
-/// `unindexed` past its horizon instead of showing it as empty. So is an
-/// item in a zone that cannot be resolved ([`unresolved`]).
+/// correlation hides the master's occurrence. A series is indexed by
+/// [`index_series`]; an item in a zone that cannot be resolved gets
+/// [`unresolved`].
 fn event_occurrences(
     key: &RemoteKey,
     ev: &CalendarEvent,
@@ -248,22 +248,40 @@ fn event_occurrences(
         Ok(z) => z,
         Err(e) => {
             tracing::warn!(key = %key.0, error = %e, "zone not resolvable; reported as unindexed");
-            return unresolved(ev, recurring);
+            return unresolved(ev.start, ev.duration.0, recurring);
         }
     };
     if !recurring {
-        return match single(ev, zone.as_ref(), rid) {
-            Ok(row) => Occurrences {
-                rows: vec![row],
-                series: None,
-            },
-            Err(e) => {
-                tracing::warn!(key = %key.0, error = %e, "event time out of range; not indexed");
-                Occurrences::default()
-            }
-        };
+        return single(key, ev.start, ev.duration.0, zone.as_ref(), rid);
     }
-    let first = match recurrence_id(ev.start, zone.as_ref()) {
+    index_series(key, ev.start, zone.as_ref(), index, previous, |until| {
+        expand_rows(
+            &event_series(ev, zone.clone()),
+            Timestamp::MIN,
+            until,
+            index.limit,
+        )
+    })
+}
+
+/// Index of a series whose first occurrence starts at `start` in `zone`;
+/// `expand(until)` gives the rows of the occurrences starting before `until`.
+///
+/// A series that cannot be expanded up to the horizon (e.g.
+/// [`RecurrenceError::TooExpensive`]) is indexed up to the largest shorter
+/// horizon that works: its `previous` one, then the window read's end. Only
+/// when none works does it get no rows and `indexed_until` at its first
+/// occurrence. Either way `range` reports it in `unindexed` past its horizon
+/// instead of showing it as empty.
+pub(crate) fn index_series(
+    key: &RemoteKey,
+    start: DateTime,
+    zone: Option<&TimeZone>,
+    index: Index,
+    previous: Option<Timestamp>,
+    expand: impl Fn(Timestamp) -> Result<Vec<OccurrenceRow>, RecurrenceError>,
+) -> Occurrences {
+    let first = match recurrence_id(start, zone) {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(key = %key.0, error = %e, "series start out of range; not indexed");
@@ -277,7 +295,7 @@ fn event_occurrences(
     horizons.sort_unstable_by(|a, b| b.cmp(a));
     horizons.dedup();
     for until in horizons {
-        match expand_rows(ev, zone.clone(), Timestamp::MIN, until, index.limit) {
+        match expand(until) {
             // shortcut: `last` stays unknown (None), so ended series are re-expanded by
             // every index extension; compute it from COUNT/UNTIL if that shows in profiles.
             Ok(rows) => {
@@ -306,18 +324,19 @@ fn event_occurrences(
     }
 }
 
-/// No rows, only a span for `range` to report the item in `unindexed`
-/// (plan 3.7): from the wall-clock start read as UTC widened by
-/// [`FLOAT_WIDEN`], open-ended for a series, to the widened end for a single
-/// event or an exception, so it shows only in windows that may contain it.
-fn unresolved(ev: &CalendarEvent, recurring: bool) -> Occurrences {
+/// No rows, only a span for `range` to report the item starting at the wall
+/// time `start` and lasting `duration` in `unindexed` (plan 3.7): from the
+/// wall-clock start read as UTC widened by [`FLOAT_WIDEN`], open-ended for a
+/// series, to the widened end for a single item or an exception, so it shows
+/// only in windows that may contain it.
+pub(crate) fn unresolved(start: DateTime, duration: Span, recurring: bool) -> Occurrences {
     let span = || -> Result<SeriesSpan, jiff::Error> {
-        let w = ev.start.to_zoned(TimeZone::UTC)?;
+        let w = start.to_zoned(TimeZone::UTC)?;
         let first = w.timestamp().checked_sub(FLOAT_WIDEN)?;
         let last = match recurring {
             true => None,
             false => Some(
-                w.checked_add(ev.duration.0)?
+                w.checked_add(duration)?
                     .timestamp()
                     .checked_add(FLOAT_WIDEN)?,
             ),
@@ -334,47 +353,78 @@ fn unresolved(ev: &CalendarEvent, recurring: bool) -> Occurrences {
     }
 }
 
-fn single(
-    ev: &CalendarEvent,
+/// The one row of an item that does not recur, starting at the wall time
+/// `start` in `zone` (floating for `None`); none when out of range.
+pub(crate) fn single(
+    key: &RemoteKey,
+    start: DateTime,
+    duration: Span,
     zone: Option<&TimeZone>,
     rid: Option<Timestamp>,
-) -> Result<OccurrenceRow, jiff::Error> {
-    let start = ev.start.to_zoned(zone.cloned().unwrap_or(TimeZone::UTC))?;
-    let end = start.checked_add(ev.duration.0)?;
-    Ok(OccurrenceRow {
-        start: start.timestamp(),
-        end: end.timestamp(),
-        recurrence_id: rid,
-        floating: zone.is_none(),
-        done: false,
-    })
+) -> Occurrences {
+    let row = || -> Result<OccurrenceRow, jiff::Error> {
+        let start = start.to_zoned(zone.cloned().unwrap_or(TimeZone::UTC))?;
+        let end = start.checked_add(duration)?;
+        Ok(OccurrenceRow {
+            start: start.timestamp(),
+            end: end.timestamp(),
+            recurrence_id: rid,
+            floating: zone.is_none(),
+            done: false,
+        })
+    };
+    match row() {
+        Ok(row) => Occurrences {
+            rows: vec![row],
+            series: None,
+        },
+        Err(e) => {
+            tracing::warn!(key = %key.0, error = %e, "item time out of range; not indexed");
+            Occurrences::default()
+        }
+    }
 }
 
-fn series(ev: &CalendarEvent, zone: Option<TimeZone>) -> Series {
-    let rules = |r: &[musubi_model::event::RecurrenceRule]| r.iter().map(|r| r.0.clone()).collect();
+/// The values of recurrence rules.
+pub(crate) fn rule_values(rules: &[RecurrenceRule]) -> Vec<String> {
+    rules.iter().map(|r| r.0.clone()).collect()
+}
+
+/// The series starting at the wall time `start`: `recurrence_overrides`
+/// become EXDATEs (`{"excluded": true}`), RDATEs (an empty patch) and
+/// overrides, whose start and length `patch` reads from the patch of the
+/// occurrence it is given the key of (`None` keeps the series length).
+pub(crate) fn series(
+    start: DateTime,
+    zone: Option<TimeZone>,
+    duration: Span,
+    rules: Vec<String>,
+    exrules: Vec<String>,
+    overrides: &BTreeMap<DateTime, PatchObject>,
+    patch: impl Fn(DateTime, &PatchObject) -> (DateTime, Option<Span>),
+) -> Series {
     let mut s = Series {
-        start: ev.start,
+        start,
         zone,
-        duration: ev.duration.0,
-        rules: rules(&ev.recurrence_rules),
-        exrules: rules(&ev.excluded_recurrence_rules),
+        duration,
+        rules,
+        exrules,
         rdates: Vec::new(),
         exdates: Vec::new(),
         overrides: Vec::new(),
     };
-    for (rid, patch) in &ev.recurrence_overrides {
+    for (rid, p) in overrides {
         let at = Moment::Local(*rid);
-        if patch.is_empty() {
+        if p.is_empty() {
             s.rdates.push(at);
-        } else if patch.get("excluded").and_then(Value::as_bool) == Some(true) {
+        } else if p.get("excluded").and_then(Value::as_bool) == Some(true) {
             s.exdates.push(at);
         } else {
-            let text = |name| patch.get(name).and_then(Value::as_str);
-            let start = text("start").and_then(|v| v.parse::<DateTime>().ok());
+            let (start, duration) = patch(*rid, p);
             s.overrides.push(Override {
                 recurrence_id: at,
-                start: Moment::Local(start.unwrap_or(*rid)),
-                duration: text("duration").and_then(|v| v.parse::<Span>().ok()),
+                start: Moment::Local(start),
+                duration,
                 this_and_future: false,
             });
         }
@@ -382,16 +432,38 @@ fn series(ev: &CalendarEvent, zone: Option<TimeZone>) -> Series {
     s
 }
 
-/// Rows of the occurrences of a master that start in `[from, until)`.
-fn expand_rows(
-    ev: &CalendarEvent,
-    zone: Option<TimeZone>,
+/// The patch member `name` as a string.
+pub(crate) fn text<'a>(patch: &'a PatchObject, name: &str) -> Option<&'a str> {
+    patch.get(name).and_then(Value::as_str)
+}
+
+/// The event's series: an override moves through `start` and changes its
+/// length through `duration`.
+fn event_series(ev: &CalendarEvent, zone: Option<TimeZone>) -> Series {
+    series(
+        ev.start,
+        zone,
+        ev.duration.0,
+        rule_values(&ev.recurrence_rules),
+        rule_values(&ev.excluded_recurrence_rules),
+        &ev.recurrence_overrides,
+        |rid, p| {
+            let start = text(p, "start").and_then(|v| v.parse::<DateTime>().ok());
+            let duration = text(p, "duration").and_then(|v| v.parse::<Span>().ok());
+            (start.unwrap_or(rid), duration)
+        },
+    )
+}
+
+/// Rows of the occurrences of `series` that start in `[from, until)`, not done.
+pub(crate) fn expand_rows(
+    series: &Series,
     from: Timestamp,
     until: Timestamp,
     limit: usize,
 ) -> Result<Vec<OccurrenceRow>, RecurrenceError> {
-    let floating = zone.is_none();
-    Ok(expand(&series(ev, zone), from..until, limit)?
+    let floating = series.zone.is_none();
+    Ok(expand(series, from..until, limit)?
         .into_iter()
         .filter(|i| i.start >= from)
         .map(|i| OccurrenceRow {
@@ -404,21 +476,28 @@ fn expand_rows(
         .collect())
 }
 
-/// Rows extending a stored master's index from `from` to `until`.
+/// Rows extending the index of a stored master of `kind` from `from` to `until`.
 pub(crate) fn extension(
+    kind: EntityKind,
     canonical: &str,
     from: Timestamp,
     until: Timestamp,
     limit: usize,
 ) -> Result<Vec<OccurrenceRow>, BoxError> {
-    let ev: CalendarEvent = serde_json::from_str(canonical)?;
-    // An unresolved zone keeps the item in `unindexed`, never floating rows.
-    let zone = event_zone(&ev)?;
-    Ok(expand_rows(&ev, zone, from, until, limit)?)
+    match kind {
+        EntityKind::Event => {
+            let ev: CalendarEvent = serde_json::from_str(canonical)?;
+            // An unresolved zone keeps the item in `unindexed`, never floating rows.
+            let zone = event_zone(&ev)?;
+            Ok(expand_rows(&event_series(&ev, zone), from, until, limit)?)
+        }
+        EntityKind::Task => task_index::extension(canonical, from, until, limit),
+        other => Err(format!("{other} has no occurrences").into()),
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use musubi_model::remote::MediaType;
     use musubi_model::{Codec, Event, Raw, Validator};
@@ -494,7 +573,12 @@ mod tests {
         }));
         let zone = event_zone(&e).unwrap();
         assert_eq!(
-            expand_rows(&e, zone, Timestamp::MIN, INDEX.horizon, INDEX.limit),
+            expand_rows(
+                &event_series(&e, zone),
+                Timestamp::MIN,
+                INDEX.horizon,
+                INDEX.limit
+            ),
             Err(RecurrenceError::TooExpensive)
         );
         let w = item_write(obj("k", &e, None), &codecs(), INDEX, None);
@@ -613,7 +697,7 @@ mod tests {
         let (from, until) = (index.horizon, "2026-11-01T00:00:00Z".parse().unwrap());
         let ext = |e: &CalendarEvent| {
             let json = serde_json::to_string(e).unwrap();
-            extension(&json, from, until, 1000).unwrap()
+            extension(EntityKind::Event, &json, from, until, 1000).unwrap()
         };
         let (ea, eb) = (ext(&iana), ext(&custom));
         assert_eq!(ea.len(), 214);
@@ -676,7 +760,16 @@ mod tests {
         // Extending the index fails rather than making floating rows.
         let json = json!({"uid": "u", "start": "2026-03-02T09:00:00",
             "timeZone": "/Nowhere", "duration": "PT1H", "recurrenceRules": ["FREQ=DAILY"]});
-        assert!(extension(&json.to_string(), first, INDEX.horizon, 1000).is_err());
+        assert!(
+            extension(
+                EntityKind::Event,
+                &json.to_string(),
+                first,
+                INDEX.horizon,
+                1000
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -721,19 +814,24 @@ mod tests {
         assert_eq!(rids[3], "2026-03-09T10:00:00Z");
     }
 
-    /// Index rows of the canonical form `musubi-ical` decodes a fixture to,
+    /// The canonical form `musubi-ical` decodes the fixture `group/name` to,
     /// as its golden snapshot records it (the engine may not depend on the
     /// codec crate, even in tests).
-    fn ical_rows(name: &str) -> Vec<(String, String)> {
+    pub(crate) fn ical_golden(group: &str, name: &str) -> Value {
         let snap = std::fs::read_to_string(format!(
-            "{}/../musubi-ical/tests/snapshots/codec_golden__events__{name}.snap",
+            "{}/../musubi-ical/tests/snapshots/codec_golden__{group}__{name}.snap",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
         // Past the insta header: `---`, metadata, `---`.
         let body = snap.splitn(3, "---\n").nth(2).unwrap();
+        serde_json::from_str(body).unwrap()
+    }
+
+    /// Index rows of the event fixture `name`, see [`ical_golden`].
+    fn ical_rows(name: &str) -> Vec<(String, String)> {
         let w = item_write(
-            obj(name, &ev(serde_json::from_str(body).unwrap()), None),
+            obj(name, &ev(ical_golden("events", name)), None),
             &codecs(),
             INDEX,
             None,

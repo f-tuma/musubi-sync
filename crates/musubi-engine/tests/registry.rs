@@ -7,3 +7,4 @@ const SECOND: bool = true;
 include!("cases/harness.rs");
 include!("cases/read_path.rs");
 include!("cases/k5.rs");
+include!("cases/k12.rs");

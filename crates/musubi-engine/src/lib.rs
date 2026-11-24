@@ -31,6 +31,7 @@ use tokio::sync::{Notify, Semaphore};
 mod ingest;
 mod jobs;
 mod redecode;
+mod task_index;
 mod writer;
 
 use writer::Writer;

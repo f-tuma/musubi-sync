@@ -25,6 +25,7 @@ tracing.workspace = true
 [dev-dependencies]
 musubi-store-sqlite.workspace = true
 musubi-testkit.workspace = true
+rusqlite.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]

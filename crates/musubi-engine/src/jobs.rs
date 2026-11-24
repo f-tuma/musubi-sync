@@ -1461,10 +1461,13 @@ impl<S: Storage + 'static> Engine<S> {
                         placements: false,
                         raw: false,
                     };
-                    let Some(json) = store.entity(r.entity, inc)?.and_then(|e| e.canonical) else {
+                    let Some((kind, json)) = store
+                        .entity(r.entity, inc)?
+                        .and_then(|e| Some((e.kind, e.canonical?)))
+                    else {
                         continue;
                     };
-                    match ingest::extension(json.get(), r.indexed_until, until, row_limit) {
+                    match ingest::extension(kind, json.get(), r.indexed_until, until, row_limit) {
                         Ok(rows) => out.push(SeriesExtension {
                             entity: r.entity,
                             from: r.indexed_until,
