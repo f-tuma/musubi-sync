@@ -701,6 +701,13 @@ fn place(t: Timestamp, zone: &TimeZone) -> Result<Timestamp> {
 }
 
 fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
+    debug_assert!(
+        q.kinds
+            .iter()
+            .all(|k| matches!(k, EntityKind::Event | EntityKind::Task)),
+        "range over kinds without occurrences: {:?}",
+        q.kinds
+    );
     // `IN ()` folds the query to nothing, which `INDEXED BY` below refuses to plan.
     if q.kinds.is_empty() || q.collections.as_ref().is_some_and(Vec::is_empty) {
         return Ok(RangePage {
@@ -716,15 +723,17 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
         .flatten()
         .map(|c| c.to_bytes())
         .collect();
-    // Kinds are literals of `EntityKind::as_str`, never caller text.
-    let kind_filter = |alias: &str| {
-        let kinds: Vec<String> = q
-            .kinds
-            .iter()
-            .map(|k| format!("'{}'", k.as_str()))
-            .collect();
-        format!("AND {alias}.kind IN ({})", kinds.join(","))
-    };
+    // Kinds are literals of `EntityKind::as_str`, never caller text. Sorted
+    // and deduplicated, so one kind set is one cached statement.
+    let mut kinds: Vec<&str> = q.kinds.iter().map(|k| k.as_str()).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let kinds = kinds
+        .iter()
+        .map(|k| format!("'{k}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let kind_filter = |alias: &str| format!("AND {alias}.kind IN ({kinds})");
     // Collections bind as ?first, ?first+1, … (numbered: the range query uses them twice).
     let col_filter = |alias: &str, first: usize| match &q.collections {
         None => String::new(),

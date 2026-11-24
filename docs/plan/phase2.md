@@ -866,7 +866,7 @@ DELETE FROM meta WHERE k LIKE 'mapping:%:task:schema' OR k LIKE 'mapping:%:task:
 | `RangeQuery` | `kinds: Vec<EntityKind>` (neprázdné; jen druhy s výskyty), `done: Option<bool>` (`None` = vše) |
 | `list_entities` | dokumentace už neříká „druhy bez výskytů"; chování beze změny |
 
-**`range`** (`tenant.rs:702`) přidá do obou polovin `UNION ALL` podmínku `AND i.kind IN (…)`, při `done` i `AND o.done = ?`. Část `unindexed` filtruje druh v `EXISTS (SELECT 1 FROM items i …)` (`tenant.rs:827`). Klíč stránkování `(start, entity, rid)` se nemění; `kinds` a `done` musí být na všech stránkách stejné, stejně jako dnes `collections`. `series_to_extend` a `extend_occurrences` se nemění: série úkolů jsou řádky `entities` se stejnými sloupci `series_first`, `series_last` a `indexed_until`.
+**`range`** (`tenant.rs:702`) přidá do obou polovin `UNION ALL` podmínku `AND i.kind IN (…)`, při `done` i `AND o.done = 0` nebo `1`. Část `unindexed` filtruje druh v `EXISTS (SELECT 1 FROM items i …)` (`tenant.rs:827`). Klíč stránkování `(start, entity, rid)` se nemění; `kinds` a `done` musí být na všech stránkách stejné, stejně jako dnes `collections`. `series_to_extend` a `extend_occurrences` se nemění: série úkolů jsou řádky `entities` se stejnými sloupci `series_first`, `series_last` a `indexed_until`.
 
 **Přechod a návrat** (pravidla 4.4 platí beze změny):
 - Před přechodem záloha binárkou K11.
@@ -941,7 +941,7 @@ K11 ─ K12a úložiště ─┬─ K12b engine ─┬─ K12d důkaz
 #### K12a. Úložiště
 
 - **Cíl:** kapitola 12.4.
-- **Crates:** `musubi-model` (`store`: `OccurrenceRow.done`, `OccurrenceView.kind` a `done`, `RangeQuery.kinds` a `done`), `musubi-store-sqlite` (`MAIN_V3`, `range`, `insert_occurrences` a `extend_occurrences` s `done`). Volající v `musubi-engine` a `musubi-syncd` se přizpůsobí jen tak, aby se přeložili: `kinds: vec![Event]`, `done: false`.
+- **Crates:** `musubi-model` (`store`: `OccurrenceRow.done`, `OccurrenceView.kind` a `done`, `RangeQuery.kinds` a `done`), `musubi-store-sqlite` (`MAIN_V3`, `range`, `insert_occurrences` a `extend_occurrences` s `done`). Volající v `musubi-engine` a `musubi-syncd` se přizpůsobí jen tak, aby se přeložili: `kinds: vec![Event]`, `done: None`.
 - **Hotovo:** migrace, filtr druhu a stavu, testy úložiště z 12.7.
 - **Přijetí:**
   - starý soubor `MAIN_V2` se otevře, má verzi 3 a data podle 12.4; binárka s `MAIN_V2` ho odmítne (`SchemaTooNew`);
@@ -993,6 +993,7 @@ K11 ─ K12a úložiště ─┬─ K12b engine ─┬─ K12d důkaz
 
 - **R1, cena filtru druhu.** Dotaz jen na události projde i řádky úkolů v okně. Při stovkách denních úkolů to může přerazit p99 10 ms. Měří K12a (VM kroky) a K12d (B3t). Náprava je sloupec `occurrences.kind` s indexem s druhem na začátku, pouze uvnitř nevydaného `MAIN_V3`.
   - **Výsledek K12a** (`task_rows_in_the_window_cost_an_event_range`, `tenant.rs`): okno 30 dní s 240 událostmi stojí 7 841 VM kroků. Každý řádek úkolu v okně přidá 14 kroků (krok indexu, řádek a jeho položka), lineárně. 1 500 řádků úkolů (50 denních úkolů za měsíc, 12.6) dá 28 746 kroků a asi 0,24 ms, 15 000 řádků 217 746 kroků a asi 1,6 ms (release, databáze v paměti, nejlepší z 50 běhů; čtení všech 15 240 řádků obou druhů asi 2,8 ms). **Rozhodnutí:** filtr přes `items` stačí, `MAIN_V3` sloupec `kind` nedostane. Test hlídá mez 16 kroků na řádek úkolu. Konečné p99 ze souboru na disku změří B3t (K12d).
+- **R6, pořadí K12a a K12b.** Binárka s `MAIN_V3` bez výpočtu výskytů úkolů (K12a bez K12b) by přepočet po migraci spotřebovala naprázdno a úkoly by zůstaly bez řádků, dokud se u poskytovatele nezmění. K12a a K12b se proto mergují hned po sobě, K12b na větvi K12a, a mezi nimi neběží build z `main` proti skutečnému tenantovi.
 - **R2, velikost indexu.** Otevřené denní série mají tisíce řádků za 5 let horizontu, stejně jako události. Kratší horizont pro úkoly by porušil rozhodnutí „stejně jako události", proto se jen měří (B3t, velikost `main.db`).
 - **R3, přepočet při přechodu.** Do konce přepočtu po startu `kind=task` neukáže všechno a nic to nesignalizuje (jen log). Dekódování VTODO zvládá asi 82 MB/s (D3), takže tisíce úkolů jsou otázka sekund.
 - **R4, žádný záznam v žurnálu.** Když se změní jen index (kanonický tvar je stejný), `redecode` nic nežurnáluje (`tenant.rs:667`). Klient, který si drží rozsahy v mezipaměti, se o nových výskytech úkolů po přechodu nedozví ze SSE. Provozní poznámka: po přechodu načíst rozsahy znovu.

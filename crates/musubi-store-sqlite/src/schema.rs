@@ -77,7 +77,7 @@ CREATE INDEX entities_kind ON entities(kind, id) WHERE tombstone = 0;
 const MAIN_V3: &str = r#"
 ALTER TABLE occurrences ADD COLUMN done INTEGER NOT NULL DEFAULT 0;
 UPDATE items SET schema_version = 0 WHERE kind = 'task' AND tombstone = 0;
-DELETE FROM meta WHERE k LIKE 'mapping:%:task:schema' OR k LIKE 'mapping:%:task:mapping';
+DELETE FROM meta WHERE k GLOB 'mapping:*:task:schema' OR k GLOB 'mapping:*:task:mapping';
 "#;
 
 /// Occurrences longer than this (7 days, µs) are found through `occurrences_long`;
@@ -301,7 +301,7 @@ mod tests {
         let want = [("task", 0), ("gone", 1), ("event", 1)];
         assert_eq!(versions, want.map(|(k, v)| (k.to_owned(), v)));
         let mapping: Vec<String> = c
-            .prepare("SELECT k FROM meta WHERE k LIKE 'mapping:%' ORDER BY k")
+            .prepare("SELECT k FROM meta WHERE k LIKE 'mapping:%' OR k = 'oldest' ORDER BY k")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
@@ -311,7 +311,8 @@ mod tests {
             mapping,
             [
                 "mapping:google:event:mapping",
-                "mapping:google:event:schema"
+                "mapping:google:event:schema",
+                "oldest"
             ]
         );
         let row: (i64, i64, Vec<u8>, i64, bool, bool) = c
