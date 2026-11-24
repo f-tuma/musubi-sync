@@ -469,6 +469,10 @@ fn range_filters_kinds_and_done_across_pages() {
     items.extend((0..10).map(|i| task(event(&format!("t{i}"), "1", i % 4), |_| i % 2 == 0)));
     items.push(series("es", 1, 5, None));
     items.push(task(series("ts", 2, 6, None), |r| r % 3 == 0));
+    // A task row longer than 7 days, found through the long index.
+    let mut long = task(event("tl", "1", 5), |_| false);
+    long.occurrences.rows[0].end = common::t(5 + 24 * 9);
+    items.push(long);
     t.apply_page(&page(col, items)).unwrap();
     // A task row added by extension carries its done state.
     let ts = t.items_by_remote(col, &keys(&["ts"])).unwrap()[0].entity;
@@ -485,14 +489,15 @@ fn range_filters_kinds_and_done_across_pages() {
     .unwrap();
 
     let key = |o: &musubi_model::store::OccurrenceView| (o.start, o.entity, o.recurrence_id);
-    // (kinds, done, expected count): 10 + 5 event rows; 10 + 7 task rows, 5 + 3 done.
+    // (kinds, done, expected count): 10 + 5 event rows; 10 + 7 + 1 long task
+    // rows, 5 + 3 done.
     let cases = [
         (vec![Event], None, 15),
-        (vec![Task], None, 17),
+        (vec![Task], None, 18),
         (vec![Task], Some(true), 8),
-        (vec![Task], Some(false), 9),
-        (vec![Event, Task], None, 32),
-        (vec![Event, Task], Some(false), 24),
+        (vec![Task], Some(false), 10),
+        (vec![Event, Task], None, 33),
+        (vec![Event, Task], Some(false), 25),
     ];
     for (kinds, done, n) in cases {
         let mut q = window(0, 24 * 10);

@@ -1470,8 +1470,8 @@ mod tests {
 
     const H: i64 = 3_600_000_000;
 
-    /// VM steps and occurrences of one first-page event `range` over `[from, to)` hours.
-    fn range_steps(c: &mut Connection, from: i64, to: i64) -> (u64, usize) {
+    /// VM steps and occurrences of one first-page `range` of `kinds` over `[from, to)` hours.
+    fn range_steps(c: &mut Connection, kinds: &[EntityKind], from: i64, to: i64) -> (u64, usize) {
         let n = Arc::new(AtomicU64::new(0));
         let counter = n.clone();
         c.progress_handler(
@@ -1489,7 +1489,7 @@ mod tests {
             )
             .unwrap(),
             collections: None,
-            kinds: vec![EntityKind::Event],
+            kinds: kinds.to_vec(),
             done: None,
             zone: TimeZone::UTC,
             after: None,
@@ -1501,9 +1501,16 @@ mod tests {
         (n.load(Ordering::Relaxed), p.occurrences.len())
     }
 
-    /// A multi-year occurrence is found without widening the scan of short ones.
+    /// A multi-year occurrence is found without widening the scan of short
+    /// ones, through the kind-first indexes and through the plain ones.
     #[test]
     fn long_occurrence_does_not_widen_the_range_scan() {
+        for kinds in [&[EntityKind::Event][..], &OCCURRENCE_KINDS] {
+            long_occurrence_does_not_widen_the_scan_of(kinds);
+        }
+    }
+
+    fn long_occurrence_does_not_widen_the_scan_of(kinds: &[EntityKind]) {
         let mut c = Connection::open_in_memory().unwrap();
         migrate(&mut c, MAIN_MIGRATIONS).unwrap();
         c.execute_batch(
@@ -1524,16 +1531,16 @@ mod tests {
             .step_by(3)
             .inspect(|h| add(&c, *h, h + 1))
             .count() as u64;
-        let (base, found) = range_steps(&mut c, day, day + 24);
+        let (base, found) = range_steps(&mut c, kinds, day, day + 24);
         assert_eq!(found, 8);
 
         add(&c, -24 * 365, day + 24 * 365);
-        let (steps, found) = range_steps(&mut c, day, day + 24);
-        assert_eq!(found, 9, "the long occurrence is found");
+        let (steps, found) = range_steps(&mut c, kinds, day, day + 24);
+        assert_eq!(found, 9, "the long occurrence is found, {kinds:?}");
         // A scan visiting every row costs several steps per row.
         assert!(
             steps < 2 * base && steps < rows,
-            "{steps} VM steps, {base} without it, {rows} rows"
+            "{kinds:?}: {steps} VM steps, {base} without it, {rows} rows"
         );
     }
 
@@ -1575,8 +1582,8 @@ mod tests {
             add(&c, 1, h, h);
         }
         // The second call: the first one also counts one-time statement setup.
-        range_steps(&mut c, 0, window);
-        let (base, events) = range_steps(&mut c, 0, window);
+        range_steps(&mut c, &[EntityKind::Event], 0, window);
+        let (base, events) = range_steps(&mut c, &[EntityKind::Event], 0, window);
         assert_eq!(events, 240);
         for n in [1_500i64, 15_000] {
             let have: i64 = c
@@ -1589,7 +1596,7 @@ mod tests {
             for i in have..n {
                 add(&c, 2, i * window / n, i);
             }
-            let (steps, found) = range_steps(&mut c, 0, window);
+            let (steps, found) = range_steps(&mut c, &[EntityKind::Event], 0, window);
             assert_eq!(found, events, "task rows are filtered out");
             // A deeper index costs a step or two; per task row it costs none.
             assert!(
