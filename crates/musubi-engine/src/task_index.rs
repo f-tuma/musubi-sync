@@ -171,13 +171,18 @@ fn expand_task(
     Ok(rows)
 }
 
+/// A patched `progress`; `null` removes it, leaving the default `needs-action`.
 fn progress(v: &Value) -> Option<TaskProgress> {
-    serde_json::from_value(v.clone()).ok()
+    match v {
+        Value::Null => Some(TaskProgress::default()),
+        v => serde_json::from_value(v.clone()).ok(),
+    }
 }
 
 /// Start and length of the override at `rid` with patch `p`. The length is
 /// the series' unless the patch sets `due`, `estimatedDuration` or
-/// `showWithoutTime`; members it leaves out are the master's.
+/// `showWithoutTime`; members it leaves out are the master's, its due moved
+/// with the start.
 fn override_extent(t: &CalendarTask, rid: DateTime, p: &PatchObject) -> (DateTime, Option<Span>) {
     let at = |name| text(p, name).and_then(|v| v.parse::<DateTime>().ok());
     let anchored_at_due = t.start.is_none();
@@ -196,7 +201,10 @@ fn override_extent(t: &CalendarTask, rid: DateTime, p: &PatchObject) -> (DateTim
         match member("due") {
             Some(true) => at("due"),
             Some(false) => None,
-            None => t.due,
+            None => t
+                .start
+                .zip(t.due)
+                .and_then(|(s, d)| start.checked_add(s.until(d).ok()?).ok()),
         }
     };
     let estimated = match member("estimatedDuration") {
@@ -479,14 +487,18 @@ mod tests {
             Some("2026-11-03T08:00:00Z".parse().unwrap())
         );
         // Start-anchored: `start` moves, `due` sets the length; a completed
-        // master is done except where the override says otherwise.
+        // master is done except where the override says otherwise. Without
+        // `due` in the patch the master's due moves with the start; a removed
+        // `progress` is the default, not done.
         let o = occ(
             json!({"start": "2026-11-02T09:00:00", "due": "2026-11-02T10:00:00",
             "timeZone": "Europe/Prague", "progress": "completed",
-            "recurrenceRules": ["FREQ=DAILY;COUNT=3"],
+            "recurrenceRules": ["FREQ=DAILY;COUNT=4"],
             "recurrenceOverrides": {
                 "2026-11-03T09:00:00": {"start": "2026-11-03T12:00:00", "due": "2026-11-03T15:00:00"},
-                "2026-11-04T09:00:00": {"progress": "needs-action", "title": "again"}
+                "2026-11-04T09:00:00": {"progress": "needs-action", "title": "again"},
+                "2026-11-05T09:00:00": {"start": "2026-11-05T12:00:00", "showWithoutTime": false,
+                    "progress": null}
             }}),
         );
         assert_eq!(
@@ -495,6 +507,7 @@ mod tests {
                 row("2026-11-02T08:00:00Z", "2026-11-02T09:00:00Z", true),
                 row("2026-11-03T11:00:00Z", "2026-11-03T14:00:00Z", true),
                 row("2026-11-04T08:00:00Z", "2026-11-04T09:00:00Z", false),
+                row("2026-11-05T11:00:00Z", "2026-11-05T12:00:00Z", false),
             ]
         );
     }
