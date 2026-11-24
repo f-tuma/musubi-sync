@@ -67,6 +67,7 @@ fn decode(s: &str) -> Result<u128, ParseIdError> {
 
 /// Why a string is not a valid identifier.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ParseIdError {
     /// The text is not exactly 26 characters long (the value is the actual length).
     #[error("identifier must be {ID_TEXT_LEN} characters, got {0}")]
