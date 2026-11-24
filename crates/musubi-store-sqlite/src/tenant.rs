@@ -16,8 +16,9 @@ use musubi_model::remote::{Cursor, MediaType, Raw, RawHash, RemoteKey, Validator
 use musubi_model::store::{
     CanonicalJson, CheckpointInfo, CheckpointMode, CollectionError, CollectionState,
     CollectionStatus, Correlation, Coverage, DiscoveryWrite, EntityView, Include, ItemState,
-    ItemView, ItemWrite, OccurrenceRow, OccurrenceView, OccurrenceWrite, PageWrite, PlacementView,
-    PruneInfo, RangeCursor, RangePage, RangeQuery, SeriesRef, StoreStats, TenantStore,
+    ItemView, ItemWrite, OCCURRENCE_KINDS, OccurrenceRow, OccurrenceView, OccurrenceWrite,
+    PageWrite, PlacementView, PruneInfo, RangeCursor, RangePage, RangeQuery, SeriesRef, StoreStats,
+    TenantStore,
 };
 use musubi_model::time::TimeWindow;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
@@ -29,9 +30,6 @@ use crate::{Result, corrupt, enum_text, opt_ts, parse_enum, ts, us};
 
 /// `occurrences.rid` of an occurrence without a recurrence id; sorts first, as `None` does.
 const NO_RID: i64 = i64::MIN;
-
-/// The kinds whose items have occurrences.
-const OCCURRENCE_KINDS: [EntityKind; 2] = [EntityKind::Event, EntityKind::Task];
 
 /// Floating and all-day occurrences are stored in wall time; real offsets lie
 /// within ±14 hours of it.
@@ -149,6 +147,11 @@ fn insert_occurrences(
     let kind: String = c
         .prepare_cached("SELECT kind FROM items WHERE id = ?1")?
         .query_row([item], |r| r.get(0))?;
+    // `range` over every kind relies on it: no other kind has rows to leak.
+    debug_assert!(
+        OCCURRENCE_KINDS.iter().any(|k| k.as_str() == kind),
+        "occurrences of a {kind} item"
+    );
     let mut st = c.prepare_cached(
         "INSERT INTO occurrences(start, end, entity, rid, floating, collection, item, done, kind)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",

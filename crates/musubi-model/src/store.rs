@@ -503,6 +503,9 @@ pub struct SeriesExtension {
     pub indexed_until: Timestamp,
 }
 
+/// The kinds whose items have occurrences, and so the kinds a range returns.
+pub const OCCURRENCE_KINDS: [EntityKind; 2] = [EntityKind::Event, EntityKind::Task];
+
 /// Input of [`TenantStore::range`].
 #[derive(Debug, Clone)]
 pub struct RangeQuery {
@@ -512,7 +515,7 @@ pub struct RangeQuery {
     /// several of them is returned once.
     pub collections: Option<Vec<CollectionId>>,
     /// Only occurrences and `unindexed` series of these kinds; non-empty, only
-    /// kinds with occurrences (events, tasks). The same on every page.
+    /// [`OCCURRENCE_KINDS`]. The same on every page.
     pub kinds: Vec<EntityKind>,
     /// Only occurrences with this [`OccurrenceRow::done`]; `None` means all.
     /// The same on every page.
