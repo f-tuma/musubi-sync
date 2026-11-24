@@ -319,11 +319,16 @@ impl H {
     }
 
     fn range(&self, start: Timestamp, end: Timestamp) -> RangePage {
+        self.range_of(&[EntityKind::Event], start, end)
+    }
+
+    /// Occurrences of `kinds` in `[start, end)`.
+    fn range_of(&self, kinds: &[EntityKind], start: Timestamp, end: Timestamp) -> RangePage {
         self.store()
             .range(&RangeQuery {
                 window: TimeWindow::new(start, end).unwrap(),
                 collections: None,
-                kinds: vec![EntityKind::Event],
+                kinds: kinds.to_vec(),
                 done: None,
                 zone: TimeZone::UTC,
                 after: None,
