@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use jiff::civil::DateTime;
 use jiff::tz::TimeZone;
-use jiff::{Span, Timestamp, ToSpan};
+use jiff::{Span, Timestamp, ToSpan, Unit};
 use musubi_model::RemoteKey;
 use musubi_model::error::BoxError;
 use musubi_model::event::PatchObject;
@@ -31,7 +31,9 @@ pub(crate) fn task_occurrences(
     if t.progress == TaskProgress::Cancelled {
         return Occurrences::default();
     }
-    let (anchor, span) = match master_extent(t) {
+    let zone = task_zone(t);
+    let known = zone.as_ref().ok().and_then(Option::as_ref);
+    let (anchor, span) = match master_extent(t, known) {
         Ok(Some(e)) => e,
         Ok(None) => return Occurrences::default(),
         Err(e) => {
@@ -40,7 +42,7 @@ pub(crate) fn task_occurrences(
         }
     };
     let recurring = !(t.recurrence_rules.is_empty() && t.recurrence_overrides.is_empty());
-    let zone = match task_zone(t) {
+    let zone = match zone {
         Ok(z) => z,
         Err(e) => {
             tracing::warn!(key = %key.0, error = %e, "zone not resolvable; reported as unindexed");
@@ -73,9 +75,10 @@ pub(crate) fn extension(
     limit: usize,
 ) -> Result<Vec<OccurrenceRow>, BoxError> {
     let t: CalendarTask = serde_json::from_str(canonical)?;
-    let (anchor, span) = master_extent(&t)?.ok_or("task without a date has no series")?;
     // An unresolved zone keeps the item in `unindexed`, never floating rows.
     let zone = task_zone(&t)?;
+    let (anchor, span) =
+        master_extent(&t, zone.as_ref())?.ok_or("task without a date has no series")?;
     Ok(expand_task(&t, anchor, span, zone, from, until, limit)?)
 }
 
@@ -90,9 +93,13 @@ fn done(p: TaskProgress) -> bool {
 }
 
 /// The master's anchor and span, see [`extent`].
-fn master_extent(t: &CalendarTask) -> Result<Option<(DateTime, Span)>, jiff::Error> {
+fn master_extent(
+    t: &CalendarTask,
+    zone: Option<&TimeZone>,
+) -> Result<Option<(DateTime, Span)>, jiff::Error> {
     extent(
         &t.uid,
+        zone,
         t.start,
         t.due,
         t.estimated_duration.map(|d| d.0),
@@ -101,11 +108,14 @@ fn master_extent(t: &CalendarTask) -> Result<Option<(DateTime, Span)>, jiff::Err
 }
 
 /// Where one occurrence starts (the anchor, `start ?? due`) and how long it
-/// lasts as a nominal span (plan 12.2); `None` without any date. A date-only
-/// due covers its whole day; an end before the start (due before start, or a
-/// negative estimate) is clamped to the start with a warning.
+/// lasts (plan 12.2); `None` without any date. A date-only due covers its
+/// whole day (nominal days); a timed end in a zone is exact hours, as for
+/// events, so a DST change in between does not move it. An end before the
+/// start (due before start, or a negative estimate) is clamped to the start
+/// with a warning.
 fn extent(
     uid: &str,
+    zone: Option<&TimeZone>,
     start: Option<DateTime>,
     due: Option<DateTime>,
     estimated: Option<Span>,
@@ -131,7 +141,13 @@ fn extent(
     } else {
         end
     };
-    Ok(Some((anchor, anchor.until(end)?)))
+    let span = match zone {
+        Some(z) if !whole_day => anchor
+            .to_zoned(z.clone())?
+            .until((Unit::Hour, &end.to_zoned(z.clone())?))?,
+        _ => anchor.until(end)?,
+    };
+    Ok(Some((anchor, span)))
 }
 
 /// Rows of a task series starting in `[from, until)`. An override moves
@@ -149,18 +165,24 @@ fn expand_task(
 ) -> Result<Vec<OccurrenceRow>, RecurrenceError> {
     let mut done_at = HashMap::new();
     for (k, p) in &t.recurrence_overrides {
-        if let Some(progress) = p.get("progress").and_then(progress) {
-            done_at.insert(recurrence_id(*k, zone.as_ref())?, done(progress));
+        let Some(v) = p.get("progress") else { continue };
+        match progress(v) {
+            Some(progress) => {
+                done_at.insert(recurrence_id(*k, zone.as_ref())?, done(progress));
+            }
+            None => {
+                tracing::warn!(uid = %t.uid, %k, %v, "unknown override progress; takes the master's");
+            }
         }
     }
     let s = series(
         anchor,
-        zone,
+        zone.clone(),
         span,
         rule_values(&t.recurrence_rules),
         Vec::new(),
         &t.recurrence_overrides,
-        |rid, p| override_extent(t, rid, p),
+        |rid, p| override_extent(t, zone.as_ref(), rid, p),
     );
     let master = done(t.progress);
     let mut rows = expand_rows(&s, from, until, limit)?;
@@ -182,8 +204,14 @@ fn progress(v: &Value) -> Option<TaskProgress> {
 /// Start and length of the override at `rid` with patch `p`. The length is
 /// the series' unless the patch sets `due`, `estimatedDuration` or
 /// `showWithoutTime`; members it leaves out are the master's, its due moved
-/// with the start.
-fn override_extent(t: &CalendarTask, rid: DateTime, p: &PatchObject) -> (DateTime, Option<Span>) {
+/// with the start. A due-anchored series ignores a `start` the patch adds:
+/// the occurrence stays keyed and anchored at its due.
+fn override_extent(
+    t: &CalendarTask,
+    zone: Option<&TimeZone>,
+    rid: DateTime,
+    p: &PatchObject,
+) -> (DateTime, Option<Span>) {
     let at = |name| text(p, name).and_then(|v| v.parse::<DateTime>().ok());
     let anchored_at_due = t.start.is_none();
     let start = at(if anchored_at_due { "due" } else { "start" }).unwrap_or(rid);
@@ -218,10 +246,13 @@ fn override_extent(t: &CalendarTask, rid: DateTime, p: &PatchObject) -> (DateTim
         .unwrap_or(t.show_without_time);
     let starts = (!anchored_at_due).then_some(start);
     // Out of range: the occurrence keeps the series length; expansion reports the range.
-    let span = extent(&t.uid, starts, due, estimated, whole_day)
-        .ok()
-        .flatten()
-        .map(|(_, s)| s);
+    let span = match extent(&t.uid, zone, starts, due, estimated, whole_day) {
+        Ok(e) => e.map(|(_, s)| s),
+        Err(e) => {
+            tracing::warn!(uid = %t.uid, %rid, error = %e, "override length out of range; keeps the series'");
+            None
+        }
+    };
     (start, span)
 }
 
@@ -261,6 +292,26 @@ mod tests {
 
     fn row(start: &str, end: &str, done: bool) -> (String, String, bool) {
         (start.to_owned(), end.to_owned(), done)
+    }
+
+    /// A timed task across the spring DST change ends at its due instant
+    /// (11 real hours), as an event would; a floating one keeps wall hours.
+    #[test]
+    fn timed_extent_across_dst_ends_at_due() {
+        let t = |zone: Option<&str>| {
+            occ(
+                json!({"start": "2026-03-28T20:00:00", "due": "2026-03-29T08:00:00",
+                "timeZone": zone}),
+            )
+        };
+        assert_eq!(
+            rows(&t(Some("Europe/Prague"))),
+            [row("2026-03-28T19:00:00Z", "2026-03-29T06:00:00Z", false)]
+        );
+        assert_eq!(
+            rows(&t(None)),
+            [row("2026-03-28T20:00:00Z", "2026-03-29T08:00:00Z", false)]
+        );
     }
 
     /// The table of plan 12.2: every combination of dates, with times and

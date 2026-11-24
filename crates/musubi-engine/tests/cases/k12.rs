@@ -229,7 +229,8 @@ async fn main_v3_migration_redecodes_tasks_once_offline() {
     let events = event_rows(&h);
     let journal = h.journal().len();
 
-    // A process restart on a file of the previous binary.
+    // A process restart on a file of the previous binary; the path is the
+    // store's layout (`SqliteStorage::new`, storage.rs).
     let dir = h._dir.0.join("tenants");
     let main_db = dir.join("tenants").join(TENANT.to_string()).join("main.db");
     downgrade_to_main_v2(&main_db);
