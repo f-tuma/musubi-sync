@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use jiff::SignedDuration;
 use musubi_testkit::dav::{self, Config as DavConfig, FakeDav, Kind, Quirk};
 use musubi_testkit::google::{self, FakeGoogle, Seed};
-use musubi_testkit::harness::{Api, Daemon, Rng, Sse, config, free_addr};
+use musubi_testkit::harness::{ADMIN_KEY, Api, Daemon, Rng, Sse, config, free_addr};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
@@ -495,6 +495,8 @@ async fn b3t(o: &Opts) -> Vec<Row> {
     ];
     for days in [7, 30] {
         for (name, extra) in queries {
+            // The same windows for every query of a length, so their costs compare.
+            let mut rng = Rng::new(days as u64);
             let (p99, occurrences) = ranges(&n, &t, reqs, days, extra, || at(&mut rng)).await;
             let what =
                 format!("range {days} d {name}, {data}, ~{occurrences} occurrences, p99 of {reqs}");
@@ -511,15 +513,11 @@ async fn b3t(o: &Opts) -> Vec<Row> {
             });
         }
     }
-    let db = n
-        .dir
-        .path()
-        .join("data/tenants")
-        .join(&t.id)
-        .join("main.db");
-    let main = std::fs::metadata(&db).expect("main.db").len();
-    // No WAL file is an empty WAL.
-    let wal = std::fs::metadata(db.with_extension("db-wal")).map_or(0, |m| m.len());
+    let stats = n
+        .get(&format!("/v1/admin/tenants/{}/stats", t.id), ADMIN_KEY)
+        .await;
+    let bytes = |k: &str| stats[k].as_u64().unwrap_or_else(|| panic!("{k}: {stats}"));
+    let (main, wal) = (bytes("main_bytes"), bytes("wal_bytes"));
     rows.push(Row {
         id: "B3t",
         what: format!("main.db size, {data} (WAL {:.1} MB)", wal as f64 / 1e6),
@@ -1034,6 +1032,22 @@ fn opts() -> Opts {
         o.syncd.exists(),
         "{} not found; build it or pass --syncd",
         o.syncd.display()
+    );
+    // A daemon older than this binary may predate the code being measured.
+    // shortcut: compares build times, so a bench rebuilt alone after a
+    // bench-only change is refused too; a build id in both binaries would not.
+    let built = |p: &Path| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .expect("mtime")
+    };
+    let exe = std::env::current_exe().expect("exe");
+    assert!(
+        built(&o.syncd) >= built(&exe),
+        "{} is older than {}; rebuild both with `cargo build --release -p musubi-syncd \
+         -p musubi-testkit --bins` (touch a musubi-syncd source if cargo keeps it)",
+        o.syncd.display(),
+        exe.display()
     );
     o
 }
