@@ -286,8 +286,8 @@ impl Fault {
         }
     }
 
-    /// `400 FAILED_PRECONDITION` with `EXPIRED_SYNC_TOKEN` (People), as
-    /// documented; the live shape of an expired token is unknown until K10.
+    /// `400 FAILED_PRECONDITION` with `EXPIRED_SYNC_TOKEN` (People), live
+    /// Google's answer to an expired sync token (K10).
     /// [`FakeGoogle::expire_people_sync_tokens`] makes the server answer this
     /// by itself.
     pub fn expired_sync_token() -> Self {

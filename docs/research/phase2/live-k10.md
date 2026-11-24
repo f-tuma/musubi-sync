@@ -40,11 +40,36 @@ Sekundy od změny u poskytovatele do záznamu v deníku. Vzorků je málo, proto
 
 Cloud Console projektu `musubi-sync-test`, 2026-11-22: **50 000 dotazů za den na projekt** (upravitelná, ten den využito 263) a 60 000 000 dotazů za minutu na uživatele. Podle D2 stojí seznam úkolů beze změn 60 dotazů za hodinu v aktivní úrovni, 5 v běžné a 1 ve spící, tedy 1 440, 120 a 24 za den. Denní kvóta tak pokryje zhruba 400 seznamů trvale v běžné úrovni, ale jen asi 35 trvale v aktivní. Pro jednoho uživatele i malé nasazení meze stačí. Větší nasazení potřebuje vyšší kvótu nebo delší `min` aktivní úrovně pro Tasks; kontrakt se tím nemění.
 
-## 6. Zbývá (nejdřív 2026-11-24)
+## 6. Sync token People (kapitola 6.3, otevřená otázka 3)
 
-- Delta People s tokenem A a s posledním tokenem řetězu B (kapitola 6.3) a tvar chyby vypršeného tokenu (otevřená otázka 3).
-- Vypršení kanálu push kalendáře Google 24. 11.
+T10 vydala 2026-11-16 10:43:31 UTC dvěma úplnými čteními dva tokeny. Token A se od té doby nepoužil. Token B se posouval deltou jednou denně, naposledy 2026-11-22 11:00 UTC (8 delt). Další posun 23. 11. neproběhl, protože refresh token T10 vypršel po 7 dnech (aplikace OAuth v režimu Testing). 2026-11-24 09:24 UTC proběhla delta s oběma tokeny pod grantem instance K10 (stejný klient a účet):
 
-## 7. Dopad
+| Token | Poslední vydání | Odpověď |
+| --- | --- | --- |
+| A | 2026-11-16 (úplné čtení) | `400` |
+| B | 2026-11-22 (delta) | `400` |
 
-Žádná odchylka neměnila kontrakt; K10 zatím nenašla nic, co by blokovalo K11. Meze dotazování zůstávají. D4 může u People nahradit odhad „několik minut“ naměřeným: propsání pod sekundu.
+Obě odpovědi měly stejné tělo:
+
+```json
+{"error": {"code": 400,
+  "message": "Sync token is expired. Clear local cache and retry call without the sync token.",
+  "status": "FAILED_PRECONDITION",
+  "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+    "reason": "EXPIRED_SYNC_TOKEN", "domain": "people.googleapis.com"}]}}
+```
+
+Kontrola grantu: nové úplné čtení pod týmž grantem a hned po něm delta s jeho tokenem vrátily `200`.
+
+- Vypršený token je `400 FAILED_PRECONDITION` s `ErrorInfo` `EXPIRED_SYNC_TOKEN`, ne `410`. Adaptér bere každý `400` i `410` na čtení s tokenem jako `CursorExpired`. Falešný Google (`Fault::expired_sync_token`) vrací přesně tento tvar.
+- Delty platnost tokenu neprodlužují. Token B, vydaný deltou dva dny před pokusem, vypršel stejně jako A, tedy zhruba 7 dní po úplném čtení na začátku řetězu. Týdenní úplné čtení z kapitoly 6.3 proto nastává.
+- Výhrada: oba tokeny vydal grant T10, pokus proběhl pod grantem K10. Google odpověděl „expired“, ne „invalid“. Že se token na grant neváže, kontrola přímo nedokazuje.
+
+## 7. Kanál push kalendáře Google
+
+Kanál z 2026-11-17 (instance K8) vypršel 24. 11. bez obnovy, protože instance K8 byla zastavená. Kanál instance K10 otevřela 2026-11-22 08:15 UTC s platností do 2026-11-29 08:15 UTC. Engine uložil job `renew_channel` na 2026-11-27 00:15 UTC, tedy po 2/3 platnosti. Job je v řídicí databázi, takže přežije restart. Obnovu včetně pushe po ní ověřil 17. 11. #38, K10 ji živě neopakovala: instance K10 se zastavila 2026-11-23 18:15 před termínem obnovy. Jeden kalendář (svátky) push odmítl (`400 pushNotSupportedForRequestedResource`). Engine ho pak jen dotazuje a odmítnutí zkouší znovu za 24 h, jak má.
+
+## 8. Dopad
+
+Žádná odchylka neměnila kontrakt; K10 nenašla nic, co by blokovalo K11. Meze dotazování zůstávají. D4 může u People nahradit odhad „několik minut“ naměřeným: propsání pod sekundu. Kapitola 6.3 a otevřené otázky 3 a 7 jsou ověřené. Položky K10 v iCloudu (`musubi-k10-*`) jsou smazané.
+

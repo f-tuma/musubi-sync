@@ -300,8 +300,8 @@ impl GoogleProvider {
         if matches!(status, StatusCode::BAD_REQUEST | StatusCode::GONE) {
             let body = resp.bytes().await.unwrap_or_default();
             // An invalid token is `400 INVALID_ARGUMENT` without ErrorInfo
-            // (T10); an expired one is documented as `EXPIRED_SYNC_TOKEN`
-            // (live shape: K10). Whatever Google says about a token or page
+            // (T10); an expired one is `400 FAILED_PRECONDITION` with
+            // `EXPIRED_SYNC_TOKEN` (K10). Whatever Google says about a token or page
             // token, the pass restarts as a full read, which carries neither,
             // so this cannot loop.
             if q.token.is_some() || q.page.is_some() {
