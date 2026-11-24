@@ -390,6 +390,9 @@ async fn b3_b4(o: &Opts) -> Vec<Row> {
     let t = n.tenant().await;
     n.api.connect(&t.admin).await;
     n.full(&t, Duration::from_secs(120)).await;
+    // shortcut: the follow-up delta after a full read journals nothing, so no
+    // API signal shows it has finished; the pause keeps it out of the measured
+    // queries. Upgrade when collection state changes reach `/v1/stream`.
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let mut rows = Vec::new();
@@ -476,6 +479,9 @@ async fn b3t(o: &Opts) -> Vec<Row> {
     let (n, t) = dav_node(o, json!({})).await;
     connect_dav(&n, &t, &dav).await;
     n.full(&t, Duration::from_secs(600)).await;
+    // shortcut: the follow-up delta after a full read journals nothing, so no
+    // API signal shows it has finished; the pause keeps it out of the measured
+    // queries. Upgrade when collection state changes reach `/v1/stream`.
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let data = format!("{singles}+{series} series, {tasks} tasks ({recurring} recurring)");
