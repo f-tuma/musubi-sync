@@ -232,6 +232,8 @@ pub(crate) async fn entities(
     let q = RangeQuery {
         window,
         collections,
+        kinds: vec![EntityKind::Event],
+        done: None,
         zone,
         after,
         limit,

@@ -11,8 +11,8 @@ use musubi_model::capability::ProviderId;
 use musubi_model::control::{AccountRecord, AccountState, AccountTokens, Credentials};
 use musubi_model::store::RangeQuery;
 use musubi_model::{
-    AccountId, CalendarEvent, Codec, ControlStore, Decoded, Event, Raw, Storage, TenantId,
-    TenantStore, TimeWindow, TokenVault,
+    AccountId, CalendarEvent, Codec, ControlStore, Decoded, EntityKind, Event, Raw, Storage,
+    TenantId, TenantStore, TimeWindow, TokenVault,
 };
 use musubi_store_sqlite::{SqliteControl, SqliteStorage};
 use musubi_testkit::google::FakeGoogle;
@@ -132,6 +132,8 @@ async fn google_items_redecode_canonically_identical_with_nothing_journaled() {
                 )
                 .unwrap(),
                 collections: None,
+                kinds: vec![EntityKind::Event],
+                done: None,
                 zone: jiff::tz::TimeZone::UTC,
                 after: None,
                 limit: 100,

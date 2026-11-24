@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use crate::Result;
 
 /// `MAIN_MIGRATIONS[i]` takes a tenant file from version `i` to `i + 1`.
-pub(crate) const MAIN_MIGRATIONS: &[&str] = &[MAIN_V1, MAIN_V2];
+pub(crate) const MAIN_MIGRATIONS: &[&str] = &[MAIN_V1, MAIN_V2, MAIN_V3];
 
 /// Schema version this binary writes.
 pub(crate) const MAIN_VERSION: u32 = MAIN_MIGRATIONS.len() as u32;
@@ -69,6 +69,15 @@ CREATE TABLE changes(
 const MAIN_V2: &str = r#"
 ALTER TABLE collections ADD COLUMN push_resource TEXT;
 CREATE INDEX entities_kind ON entities(kind, id) WHERE tombstone = 0;
+"#;
+
+/// Version 3 (docs/plan/phase2.md 12.4): the done state of task occurrences.
+/// Live tasks are marked stale and their re-decode versions dropped, so the
+/// next start re-decodes them once from the raw layer and writes their rows.
+const MAIN_V3: &str = r#"
+ALTER TABLE occurrences ADD COLUMN done INTEGER NOT NULL DEFAULT 0;
+UPDATE items SET schema_version = 0 WHERE kind = 'task' AND tombstone = 0;
+DELETE FROM meta WHERE k GLOB 'mapping:*:task:schema' OR k GLOB 'mapping:*:task:mapping';
 "#;
 
 /// Occurrences longer than this (7 days, µs) are found through `occurrences_long`;
@@ -260,6 +269,79 @@ mod tests {
         assert!(MAIN_V1.contains(&format!("WHERE end - start > {LONG_SPAN};")));
     }
 
+    /// `MAIN_V3` marks live tasks stale and drops their re-decode versions;
+    /// events, their rows and other meta stay, existing rows are not done. A
+    /// binary that knows only `MAIN_V2` refuses the result.
+    #[test]
+    fn v3_marks_tasks_for_redecode() {
+        let mut c = Connection::open_in_memory().unwrap();
+        migrate(&mut c, &MAIN_MIGRATIONS[..2]).unwrap();
+        c.execute_batch(
+            "INSERT INTO items(id, collection, key, entity, kind, validator, raw_hash,
+               schema_version, mapping_version, tombstone) VALUES
+               (x'01', x'c0', 'task', x'e1', 'task', 'v', x'00', 1, 3, 0),
+               (x'02', x'c0', 'gone', x'e2', 'task', 'v', x'00', 1, 3, 1),
+               (x'03', x'c0', 'event', x'e3', 'event', 'v', x'00', 1, 3, 0);
+             INSERT INTO occurrences VALUES (10, 20, x'e3', 5, 0, x'c0', x'03');
+             INSERT INTO meta VALUES ('mapping:google:task:schema', 1),
+               ('mapping:google:task:mapping', 3), ('mapping:dav:task:schema', 1),
+               ('mapping:dav:task:mapping', 1), ('mapping:google:event:schema', 1),
+               ('mapping:google:event:mapping', 3);",
+        )
+        .unwrap();
+        migrate(&mut c, MAIN_MIGRATIONS).unwrap();
+        assert_eq!(main_version(&c).unwrap(), 3);
+        let versions: Vec<(String, i64)> = c
+            .prepare("SELECT key, schema_version FROM items ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let want = [("task", 0), ("gone", 1), ("event", 1)];
+        assert_eq!(versions, want.map(|(k, v)| (k.to_owned(), v)));
+        let mapping: Vec<String> = c
+            .prepare("SELECT k FROM meta WHERE k LIKE 'mapping:%' OR k = 'oldest' ORDER BY k")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            mapping,
+            [
+                "mapping:google:event:mapping",
+                "mapping:google:event:schema",
+                "oldest"
+            ]
+        );
+        let row: (i64, i64, Vec<u8>, i64, bool, bool) = c
+            .query_row(
+                "SELECT start, end, entity, rid, floating, done FROM occurrences",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row, (10, 20, vec![0xe3], 5, false, false));
+        let err = migrate(&mut c, &MAIN_MIGRATIONS[..2]).unwrap_err();
+        assert!(matches!(
+            err.0,
+            StoreError::SchemaTooNew {
+                found: 3,
+                supported: 2
+            }
+        ));
+    }
+
     /// A file written by an older binary is migrated in place on open and keeps
     /// its data; a step added later runs exactly once.
     #[test]
@@ -268,24 +350,25 @@ mod tests {
         migrate(&mut c, MAIN_MIGRATIONS).unwrap();
         c.execute("INSERT INTO raw VALUES (x'00', 'json', x'7b7d')", [])
             .unwrap();
-        let v3 = [
+        let next = [
             MAIN_V1,
             MAIN_V2,
+            MAIN_V3,
             "ALTER TABLE raw ADD COLUMN extra INTEGER NOT NULL DEFAULT 7",
         ];
-        migrate(&mut c, &v3).unwrap();
-        assert_eq!(main_version(&c).unwrap(), 3);
+        migrate(&mut c, &next).unwrap();
+        assert_eq!(main_version(&c).unwrap(), 4);
         let extra: i64 = c
             .query_row("SELECT extra FROM raw", [], |r| r.get(0))
             .unwrap();
         assert_eq!(extra, 7);
-        migrate(&mut c, &v3).unwrap(); // idempotent at the current version
+        migrate(&mut c, &next).unwrap(); // idempotent at the current version
         let err = migrate(&mut c, MAIN_MIGRATIONS).unwrap_err();
         assert!(matches!(
             err.0,
             StoreError::SchemaTooNew {
-                found: 3,
-                supported: 2
+                found: 4,
+                supported: 3
             }
         ));
     }

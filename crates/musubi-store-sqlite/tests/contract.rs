@@ -11,7 +11,9 @@ use musubi_model::store::{
     RangeQuery, SeriesExtension,
 };
 use musubi_model::store::{OccurrenceRow, Occurrences};
-use musubi_model::{Cursor, ReadId, RemoteKey, Seq, Storage, StoreError, TenantStore, TimeWindow};
+use musubi_model::{
+    Cursor, EntityKind, ReadId, RemoteKey, Seq, Storage, StoreError, TenantStore, TimeWindow,
+};
 
 fn setup() -> (
     TempDir,
@@ -40,6 +42,8 @@ fn window(a: i64, b: i64) -> RangeQuery {
     RangeQuery {
         window: TimeWindow::new(t(a), t(b)).unwrap(),
         collections: None,
+        kinds: vec![EntityKind::Event],
+        done: None,
         zone: TimeZone::UTC,
         after: None,
         limit: 1000,
@@ -374,6 +378,7 @@ fn range_overlap_and_filter() {
                 end: common::t(100),
                 recurrence_id: None,
                 floating: false,
+                done: false,
             }],
             series: None,
         },
@@ -438,6 +443,118 @@ fn exception_item_suppresses_master_occurrence() {
             recurrence_id: Some(common::t(25)),
         })
     );
+}
+
+/// `item` as a task whose rows are done where `done(row index)`.
+fn task(
+    mut w: musubi_model::store::ItemWrite,
+    done: impl Fn(usize) -> bool,
+) -> musubi_model::store::ItemWrite {
+    w.kind = EntityKind::Task;
+    for (i, r) in w.occurrences.rows.iter_mut().enumerate() {
+        r.done = done(i);
+    }
+    w
+}
+
+/// `kinds` and `done` filter every page; paging stays without duplicates or gaps.
+#[test]
+fn range_filters_kinds_and_done_across_pages() {
+    use EntityKind::{Event, Task};
+    let (_d, _s, mut t) = setup();
+    let col = collection(&mut t, "cal");
+    let mut items: Vec<_> = (0..10)
+        .map(|i| event(&format!("e{i}"), "1", i % 4))
+        .collect();
+    items.extend((0..10).map(|i| task(event(&format!("t{i}"), "1", i % 4), |_| i % 2 == 0)));
+    items.push(series("es", 1, 5, None));
+    items.push(task(series("ts", 2, 6, None), |r| r % 3 == 0));
+    t.apply_page(&page(col, items)).unwrap();
+    // A task row added by extension carries its done state.
+    let ts = t.items_by_remote(col, &keys(&["ts"])).unwrap()[0].entity;
+    let mut done = row(2 + 24 * 6, Some(2 + 24 * 6));
+    done.done = true;
+    t.extend_occurrences(&OccurrenceWrite {
+        extensions: vec![SeriesExtension {
+            entity: ts,
+            from: common::t(2 + 24 * 6),
+            rows: vec![done],
+            indexed_until: common::t(2 + 24 * 7),
+        }],
+    })
+    .unwrap();
+
+    let key = |o: &musubi_model::store::OccurrenceView| (o.start, o.entity, o.recurrence_id);
+    // (kinds, done, expected count): 10 + 5 event rows; 10 + 7 task rows, 5 + 3 done.
+    let cases = [
+        (vec![Event], None, 15),
+        (vec![Task], None, 17),
+        (vec![Task], Some(true), 8),
+        (vec![Task], Some(false), 9),
+        (vec![Event, Task], None, 32),
+        (vec![Event, Task], Some(false), 24),
+    ];
+    for (kinds, done, n) in cases {
+        let mut q = window(0, 24 * 10);
+        q.kinds = kinds.clone();
+        q.done = done;
+        let all = t.range(&q).unwrap();
+        assert!(all.next.is_none());
+        assert_eq!(all.occurrences.len(), n, "{kinds:?} {done:?}");
+        assert!(all.occurrences.iter().all(|o| kinds.contains(&o.kind)
+            && done.is_none_or(|d| o.done == d)
+            && (o.kind == Task || !o.done)));
+        assert!(all.occurrences.windows(2).all(|w| key(&w[0]) < key(&w[1])));
+
+        q.limit = 3;
+        let mut paged = Vec::new();
+        loop {
+            let p = t.range(&q).unwrap();
+            paged.extend(p.occurrences.iter().map(key));
+            match p.next {
+                Some(n) => q.after = Some(n),
+                None => break,
+            }
+        }
+        assert_eq!(paged, all.occurrences.iter().map(key).collect::<Vec<_>>());
+    }
+}
+
+/// `unindexed` lists only series of the requested kinds.
+#[test]
+fn unindexed_only_for_requested_kinds() {
+    use EntityKind::{Event, Task};
+    let (_d, _s, mut t) = setup();
+    let col = collection(&mut t, "cal");
+    t.apply_page(&page(
+        col,
+        vec![
+            series("es", 0, 2, None),
+            task(series("ts", 0, 2, None), |_| false),
+        ],
+    ))
+    .unwrap();
+    let id = |k: &str| t.items_by_remote(col, &keys(&[k])).unwrap()[0].entity;
+    let (es, ts) = (id("es"), id("ts"));
+    for (kinds, want) in [
+        (vec![Event], vec![es]),
+        (vec![Task], vec![ts]),
+        (vec![Event, Task], vec![es, ts]),
+    ] {
+        let mut q = window(0, 24 * 10);
+        q.kinds = kinds;
+        let mut got: Vec<_> = t
+            .range(&q)
+            .unwrap()
+            .unindexed
+            .iter()
+            .map(|s| s.entity)
+            .collect();
+        got.sort();
+        let mut want = want;
+        want.sort();
+        assert_eq!(got, want);
+    }
 }
 
 /// Series horizon: `unindexed`, `series_to_extend` and `extend_occurrences`.

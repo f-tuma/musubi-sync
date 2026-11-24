@@ -10,7 +10,7 @@ use common::*;
 use jiff::tz::TimeZone;
 use musubi_model::remote::MediaType;
 use musubi_model::store::RangeQuery;
-use musubi_model::{Raw, Seq, Storage, TenantStore, TimeWindow};
+use musubi_model::{EntityKind, Raw, Seq, Storage, TenantStore, TimeWindow};
 
 const EVENTS: usize = 50_000;
 const PAGE: usize = 500;
@@ -37,6 +37,8 @@ fn import_keeps_wal_bounded() {
                     tn.range(&RangeQuery {
                         window: TimeWindow::new(t(24 * day), t(24 * (day + 7))).unwrap(),
                         collections: Some(vec![col]),
+                        kinds: vec![EntityKind::Event],
+                        done: None,
                         zone: TimeZone::UTC,
                         after: None,
                         limit: 200,

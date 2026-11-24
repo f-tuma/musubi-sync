@@ -139,8 +139,8 @@ fn insert_occurrences(
     rows: &[OccurrenceRow],
 ) -> Result<()> {
     let mut st = c.prepare_cached(
-        "INSERT INTO occurrences(start, end, entity, rid, floating, collection, item)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO occurrences(start, end, entity, rid, floating, collection, item, done)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
     for r in rows {
         st.execute(params![
@@ -150,7 +150,8 @@ fn insert_occurrences(
             r.recurrence_id.map_or(NO_RID, us),
             r.floating,
             col,
-            item
+            item,
+            r.done
         ])?;
     }
     Ok(())
@@ -700,8 +701,15 @@ fn place(t: Timestamp, zone: &TimeZone) -> Result<Timestamp> {
 }
 
 fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
+    debug_assert!(
+        q.kinds
+            .iter()
+            .all(|k| matches!(k, EntityKind::Event | EntityKind::Task)),
+        "range over kinds without occurrences: {:?}",
+        q.kinds
+    );
     // `IN ()` folds the query to nothing, which `INDEXED BY` below refuses to plan.
-    if q.collections.as_ref().is_some_and(Vec::is_empty) {
+    if q.kinds.is_empty() || q.collections.as_ref().is_some_and(Vec::is_empty) {
         return Ok(RangePage {
             occurrences: Vec::new(),
             next: None,
@@ -715,6 +723,17 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
         .flatten()
         .map(|c| c.to_bytes())
         .collect();
+    // Kinds are literals of `EntityKind::as_str`, never caller text. Sorted
+    // and deduplicated, so one kind set is one cached statement.
+    let mut kinds: Vec<&str> = q.kinds.iter().map(|k| k.as_str()).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let kinds = kinds
+        .iter()
+        .map(|k| format!("'{k}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let kind_filter = |alias: &str| format!("AND {alias}.kind IN ({kinds})");
     // Collections bind as ?first, ?first+1, … (numbered: the range query uses them twice).
     let col_filter = |alias: &str, first: usize| match &q.collections {
         None => String::new(),
@@ -744,7 +763,7 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
     // planner would rather walk `occurrences_time` from ?3). Both halves share
     // the arguments.
     let rest = format!(
-        "{keyset} {cols}
+        "{keyset} {kinds} {done} {cols}
            AND NOT (o.rid <> {NO_RID} AND i.uid IS NOT NULL AND EXISTS (
              SELECT 1 FROM items x WHERE x.collection = i.collection AND x.uid = i.uid
                AND x.recurrence_id = o.rid AND x.tombstone = 0 AND x.id <> i.id))",
@@ -753,15 +772,21 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
         } else {
             ""
         },
+        kinds = kind_filter("i"),
+        done = match q.done {
+            None => "",
+            Some(true) => "AND o.done = 1",
+            Some(false) => "AND o.done = 0",
+        },
         cols = col_filter("o", 7),
     );
     let sql = format!(
-        "SELECT o.start, o.end, o.entity, o.rid, o.floating, {doc}
+        "SELECT o.start, o.end, o.entity, o.rid, o.floating, {doc}, i.kind, o.done
          FROM occurrences o JOIN items i ON i.id = o.item
          WHERE o.start >= max(?1 - {LONG_SPAN}, ?3) AND o.start < ?2 AND o.end >= ?1
            AND o.end - o.start <= {LONG_SPAN} {rest}
          UNION ALL
-         SELECT o.start, o.end, o.entity, o.rid, o.floating, {doc}
+         SELECT o.start, o.end, o.entity, o.rid, o.floating, {doc}, i.kind, o.done
          FROM occurrences o INDEXED BY occurrences_long JOIN items i ON i.id = o.item
          WHERE o.end - o.start > {LONG_SPAN} AND o.end >= ?1 AND o.start < ?2 AND o.start >= ?3
            {rest}
@@ -800,10 +825,12 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
         let rid: i64 = r.get(3)?;
         occurrences.push(OccurrenceView {
             entity: EntityId::from_bytes(r.get(2)?),
+            kind: parse_enum(r.get(6)?)?,
             recurrence_id: if rid == NO_RID { None } else { Some(ts(rid)?) },
             start,
             end,
             floating,
+            done: r.get(7)?,
             canonical: canonical(r.get(5)?)?,
         });
     }
@@ -824,8 +851,9 @@ fn range(c: &Connection, q: &RangeQuery) -> Result<RangePage> {
              WHERE e.indexed_until IS NOT NULL AND e.tombstone = 0 AND e.indexed_until < ?1
                AND e.series_first < ?1 AND (e.series_last IS NULL OR e.series_last >= ?2)
                AND (e.series_last IS NULL OR e.series_last > e.indexed_until)
-               AND EXISTS (SELECT 1 FROM items i WHERE i.entity = e.id {})
+               AND EXISTS (SELECT 1 FROM items i WHERE i.entity = e.id {} {})
              ORDER BY e.indexed_until, e.id LIMIT {UNINDEXED_MAX}",
+            kind_filter("i"),
             col_filter("i", 3)
         );
         let mut args: Vec<rusqlite::types::Value> = vec![
@@ -1417,7 +1445,7 @@ mod tests {
 
     const H: i64 = 3_600_000_000;
 
-    /// VM steps and occurrences of one first-page `range` over `[from, to)` hours.
+    /// VM steps and occurrences of one first-page event `range` over `[from, to)` hours.
     fn range_steps(c: &mut Connection, from: i64, to: i64) -> (u64, usize) {
         let n = Arc::new(AtomicU64::new(0));
         let counter = n.clone();
@@ -1436,6 +1464,8 @@ mod tests {
             )
             .unwrap(),
             collections: None,
+            kinds: vec![EntityKind::Event],
+            done: None,
             zone: TimeZone::UTC,
             after: None,
             limit: 10_000,
@@ -1458,7 +1488,7 @@ mod tests {
         .unwrap();
         let add = |c: &Connection, start: i64, end: i64| {
             c.execute(
-                "INSERT INTO occurrences VALUES (?1, ?2, x'00000000000000000000000000000003', ?3, 0, x'00000000000000000000000000000002', x'00000000000000000000000000000001')",
+                "INSERT INTO occurrences VALUES (?1, ?2, x'00000000000000000000000000000003', ?3, 0, x'00000000000000000000000000000002', x'00000000000000000000000000000001', 0)",
                 params![start * H, end * H, NO_RID],
             )
             .unwrap();
@@ -1480,5 +1510,56 @@ mod tests {
             steps < 2 * base && steps < rows,
             "{steps} VM steps, {base} without it, {rows} rows"
         );
+    }
+
+    /// R1 (docs/plan/phase2.md 12.9): an event range filters kinds through the
+    /// `items` join, so it visits the task rows in its window, at a bounded
+    /// number of VM steps each (an index step, the row and its item).
+    #[test]
+    fn task_rows_in_the_window_cost_an_event_range() {
+        let mut c = Connection::open_in_memory().unwrap();
+        migrate(&mut c, MAIN_MIGRATIONS).unwrap();
+        // Item `n` and its entity as 16-byte ids.
+        let id = |n: u8| (n as u128).to_be_bytes();
+        c.execute(
+            "INSERT INTO items(id, collection, key, entity, kind, validator, raw_hash,
+               schema_version, mapping_version) VALUES
+               (?1, x'c0', 'e', ?3, 'event', 'v', x'00', 1, 1),
+               (?2, x'c0', 't', ?4, 'task', 'v', x'00', 1, 1)",
+            params![id(1), id(2), id(0xe1), id(0xe2)],
+        )
+        .unwrap();
+        let add = |c: &Connection, item: u8, start: i64, rid: i64| {
+            c.execute(
+                "INSERT INTO occurrences VALUES (?1, ?2, ?3, ?4, 0, x'c0', ?5, 0)",
+                params![start * H, (start + 1) * H, id(0xe0 | item), rid, id(item)],
+            )
+            .unwrap();
+        };
+        // A 30-day window with an event every 3 hours.
+        let window = 24 * 30;
+        for h in (0..window).step_by(3) {
+            add(&c, 1, h, h);
+        }
+        let (base, events) = range_steps(&mut c, 0, window);
+        assert_eq!(events, 240);
+        for n in [1_500i64, 15_000] {
+            let have: i64 = c
+                .query_row(
+                    "SELECT count(*) FROM occurrences WHERE item = ?1",
+                    [id(2)],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            for i in have..n {
+                add(&c, 2, i * window / n, i);
+            }
+            let (steps, found) = range_steps(&mut c, 0, window);
+            assert_eq!(found, events, "task rows are filtered out");
+            assert!(
+                steps - base < 16 * n as u64,
+                "{steps} VM steps with {n} task rows, {base} without"
+            );
+        }
     }
 }
