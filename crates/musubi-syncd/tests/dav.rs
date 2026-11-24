@@ -705,16 +705,18 @@ async fn a_recurring_dav_task_is_in_the_range_with_its_overrides() {
     d.put(&cal, "water.ics", tasks::RECURRING_TODO);
     d.put(&cal, "standup.ics", tasks::EVENT);
     let t = tenant(&n).await;
+    let mut sse = n.stream(&t.read).await;
     let (s, v) = connect(&n, &t, generic(&d, "secret")).await;
     assert_eq!(s, 200, "{v}");
 
     let range = |q: &str| format!("/v1/entities?{}&{q}", tasks::NOVEMBER);
-    let all = until("the task and the event", async || {
-        let (s, v) = n.get(&range("kind=event,task"), &t.read).await;
-        assert_eq!(s, 200, "{v}");
-        (v["occurrences"].as_array().map(Vec::len) == Some(5)).then_some(v)
-    })
-    .await;
+    let all = sse
+        .until("task and event", Duration::from_secs(20), async || {
+            let (s, v) = n.get(&range("kind=event,task"), &t.read).await;
+            assert_eq!(s, 200, "{v}");
+            (v["occurrences"].as_array().map(Vec::len) == Some(5)).then_some(v)
+        })
+        .await;
     let (s, open) = n.get(&range("kind=event,task&done=false"), &t.read).await;
     assert_eq!(s, 200, "{open}");
     tasks::check_ranges(&all, &open);
@@ -733,8 +735,9 @@ async fn a_google_task_due_on_a_date_is_in_that_day_of_the_query_zone() {
         json!({ "title": "pay rent", "due": "2026-11-20T15:30:00.000Z" }),
     );
     let t = tenant(&n).await;
+    let mut sse = n.stream(&t.read).await;
     google_account(&n, &t).await;
-    until("the task", async || {
+    sse.until("task", Duration::from_secs(20), async || {
         (listed(&n, &t, "task").await.len() == 1).then_some(())
     })
     .await;

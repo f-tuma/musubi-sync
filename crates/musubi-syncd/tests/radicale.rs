@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use common::tasks;
 use musubi_testkit::google::FakeGoogle;
-use musubi_testkit::harness::{self, Api, Daemon};
+use musubi_testkit::harness::{self, Api, Daemon, Sse};
 use musubi_testkit::radicale::{PASSWORD, Radicale, USER};
 use serde_json::{Value, json};
 
@@ -42,9 +42,11 @@ async fn names(api: &Api, read: &str) -> Vec<String> {
         .collect()
 }
 
-/// The binary with a tenant whose DAV account is on `r`.
+/// The binary with a tenant whose DAV account is on `r`, and the tenant's
+/// stream opened before the account.
 struct Node {
     // Field order is drop order: the daemon dies before its directory goes.
+    sse: Sse,
     daemon: Daemon,
     api: Api,
     read: String,
@@ -67,6 +69,7 @@ async fn connected(r: &Radicale) -> Node {
         api.key(&tenant, "admin").await,
         api.key(&tenant, "read").await,
     );
+    let sse = Sse::open(&api, &read).await;
 
     let v = ok(
         &api,
@@ -81,6 +84,7 @@ async fn connected(r: &Radicale) -> Node {
     .await;
     assert_eq!(v["username"], USER, "{v}");
     Node {
+        sse,
         daemon,
         api,
         read,
@@ -178,22 +182,17 @@ async fn a_recurring_radicale_task_is_in_the_range_with_its_overrides() {
     r.put(&r.calendar(), "water.ics", tasks::RECURRING_TODO)
         .await;
     r.put(&r.calendar(), "standup.ics", tasks::EVENT).await;
-    let n = connected(&r).await;
+    let mut n = connected(&r).await;
 
     let range = |q: &str| format!("/v1/entities?{}&{q}", tasks::NOVEMBER);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let all = loop {
-        let v = ok(&n.api, "GET", &range("kind=event,task"), &n.read, None).await;
-        if v["occurrences"].as_array().map(Vec::len) == Some(5) {
-            break v;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "no task and event: {v}\n{}",
-            n.daemon.tail(40)
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    };
+    let (api, read) = (&n.api, n.read.as_str());
+    let all = n
+        .sse
+        .until("task and event", Duration::from_secs(30), async || {
+            let v = ok(api, "GET", &range("kind=event,task"), read, None).await;
+            (v["occurrences"].as_array().map(Vec::len) == Some(5)).then_some(v)
+        })
+        .await;
     let open = ok(
         &n.api,
         "GET",

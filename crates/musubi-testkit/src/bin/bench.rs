@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use jiff::SignedDuration;
 use musubi_testkit::dav::{self, Config as DavConfig, FakeDav, Kind, Quirk};
 use musubi_testkit::google::{self, FakeGoogle, Seed};
-use musubi_testkit::harness::{Api, Daemon, Rng, config, free_addr};
+use musubi_testkit::harness::{Api, Daemon, Rng, Sse, config, free_addr};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
@@ -243,64 +243,6 @@ async fn b1(o: &Opts) -> Vec<Row> {
     )]
 }
 
-/// A client of `/v1/stream`.
-struct Sse {
-    resp: reqwest::Response,
-    buf: String,
-}
-
-impl Sse {
-    async fn open(n: &Node, t: &Tenant) -> Self {
-        let resp = n
-            .api
-            .http
-            .get(format!("{}/v1/stream", n.api.base))
-            .bearer_auth(&t.read)
-            // The client's 60 s cap covers the whole body; `past` bounds each event.
-            .timeout(Duration::from_secs(24 * 3600))
-            .send()
-            .await
-            .expect("stream");
-        assert_eq!(resp.status(), 200);
-        Self {
-            resp,
-            buf: String::new(),
-        }
-    }
-
-    /// The id (head seq) of the next event.
-    async fn next_id(&mut self) -> u64 {
-        loop {
-            if let Some(i) = self.buf.find("\n\n") {
-                let ev: String = self.buf.drain(..i + 2).collect();
-                if let Some(id) = ev.lines().find_map(|l| l.strip_prefix("id: ")) {
-                    return id.trim().parse().expect("seq");
-                }
-                continue;
-            }
-            let chunk = self
-                .resp
-                .chunk()
-                .await
-                .expect("stream")
-                .expect("stream open");
-            self.buf.push_str(&String::from_utf8_lossy(&chunk));
-        }
-    }
-
-    /// Waits for an event past `last`; returns its id.
-    async fn past(&mut self, last: u64) -> u64 {
-        loop {
-            let id = tokio::time::timeout(Duration::from_secs(120), self.next_id())
-                .await
-                .expect("no SSE event");
-            if id > last {
-                return id;
-            }
-        }
-    }
-}
-
 /// Notification → SSE event, `iters` times, at `latency` per fake request.
 async fn push_to_sse(o: &Opts, latency: Duration, iters: usize) -> Vec<Duration> {
     let fake = google::Config {
@@ -321,7 +263,7 @@ async fn push_to_sse(o: &Opts, latency: Duration, iters: usize) -> Vec<Duration>
     }
     // The delta right after the full read.
     tokio::time::sleep(COALESCE + latency * 2 + Duration::from_millis(200)).await;
-    let mut sse = Sse::open(&n, &t).await;
+    let mut sse = Sse::open(&n.api, &t.read).await;
     let mut last = sse.next_id().await;
     let primary = n.fake.primary();
     let mut out = Vec::new();
@@ -1033,7 +975,7 @@ async fn d4(o: &Opts) -> Vec<Row> {
             }
         })
     };
-    let mut sse = Sse::open(&n, &t).await;
+    let mut sse = Sse::open(&n.api, &t.read).await;
     let mut last = n.head(&t).await;
     let mut rng = Rng::new(4);
     let mut lat = Vec::new();

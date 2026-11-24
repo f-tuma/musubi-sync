@@ -23,7 +23,7 @@ use musubi_model::{
 use musubi_store_sqlite::{SqliteControl, SqliteStorage};
 use musubi_testkit::dav::{Config as DavConfig, FakeDav, Kind};
 use musubi_testkit::google::FakeGoogle;
-use musubi_testkit::harness::{self, Api, Daemon};
+use musubi_testkit::harness::{self, Api, Daemon, Sse};
 use musubi_testkit::{ManualClock, MemoryVault};
 use secrecy::SecretString;
 use serde_json::json;
@@ -193,6 +193,7 @@ async fn tasks_of_a_k11_tenant_are_in_the_range_after_the_new_binary_starts() {
         api.key(&tenant, "admin").await,
         api.key(&tenant, "read").await,
     );
+    let mut sse = Sse::open(&api, &read).await;
     let body = json!({
         "profile": "generic", "server_url": d.server_url(),
         "username": "alice", "password": "secret",
@@ -208,15 +209,11 @@ async fn tasks_of_a_k11_tenant_are_in_the_range_after_the_new_binary_starts() {
         assert_eq!(s, 200, "{v}");
         v
     };
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while tasks::occurrences(&tasks_in_range().await) != tasks::expected_tasks() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no task occurrences:\n{}",
-            daemon.tail(40)
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    sse.until("task occurrences", Duration::from_secs(30), async || {
+        (tasks::occurrences(&tasks_in_range().await) == tasks::expected_tasks()).then_some(())
+    })
+    .await;
+    drop(sse);
 
     // The file as the K11 binary left it, and no DAV server to read from.
     daemon.kill();

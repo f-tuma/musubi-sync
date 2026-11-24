@@ -4,8 +4,9 @@
 //! [`Daemon`] collects the child's stderr, waits for lines in it (the
 //! `listening on` banner, `musubi-crashpoint:` markers) and sends SIGKILL on
 //! demand and on drop. [`Api`] is the HTTP client side: tenants, keys, the
-//! OAuth sign-in against the fake, `/v1/changes`. [`Rng`] makes every random
-//! choice reproducible from a printed seed.
+//! OAuth sign-in against the fake, `/v1/changes`. [`Sse`] follows
+//! `/v1/stream`, the signal a test waits on for committed changes. [`Rng`]
+//! makes every random choice reproducible from a printed seed.
 
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
@@ -180,6 +181,84 @@ impl Rng {
     /// Uniform in `0..n` (`n > 0`).
     pub fn below(&mut self, n: u64) -> u64 {
         self.next_u64() % n
+    }
+}
+
+/// A client of `/v1/stream`: each event is a committed journal head.
+pub struct Sse {
+    resp: reqwest::Response,
+    buf: String,
+}
+
+impl Sse {
+    /// Opens the stream of the tenant whose read credential is `token`.
+    /// Open it before the action whose commits it waits for.
+    pub async fn open(api: &Api, token: &str) -> Self {
+        let resp = api
+            .http
+            .get(format!("{}/v1/stream", api.base))
+            .bearer_auth(token)
+            // The client's 60 s cap covers the whole body; callers bound each wait.
+            .timeout(Duration::from_secs(24 * 3600))
+            .send()
+            .await
+            .expect("stream");
+        assert_eq!(resp.status(), 200, "stream");
+        Self {
+            resp,
+            buf: String::new(),
+        }
+    }
+
+    /// The id (head seq) of the next event.
+    pub async fn next_id(&mut self) -> u64 {
+        loop {
+            if let Some(i) = self.buf.find("\n\n") {
+                let ev: String = self.buf.drain(..i + 2).collect();
+                if let Some(id) = ev.lines().find_map(|l| l.strip_prefix("id: ")) {
+                    return id.trim().parse().expect("seq");
+                }
+                continue;
+            }
+            let chunk = self
+                .resp
+                .chunk()
+                .await
+                .expect("stream")
+                .expect("stream open");
+            self.buf.push_str(&String::from_utf8_lossy(&chunk));
+        }
+    }
+
+    /// Waits for an event past `last`; returns its id.
+    pub async fn past(&mut self, last: u64) -> u64 {
+        loop {
+            let id = tokio::time::timeout(Duration::from_secs(120), self.next_id())
+                .await
+                .expect("no SSE event");
+            if id > last {
+                return id;
+            }
+        }
+    }
+
+    /// `check` now and after each event until it returns a value; panics
+    /// with `what` when `timeout` passes first.
+    pub async fn until<T>(
+        &mut self,
+        what: &str,
+        timeout: Duration,
+        mut check: impl AsyncFnMut() -> Option<T>,
+    ) -> T {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(v) = check().await {
+                return v;
+            }
+            tokio::time::timeout_at(deadline, self.next_id())
+                .await
+                .unwrap_or_else(|_| panic!("no {what} within {timeout:?}"));
+        }
     }
 }
 
