@@ -965,6 +965,11 @@ async fn a_range_reads_events_and_tasks_by_kind_and_done() {
 
     let all = vec![e1.clone(), t1.clone(), e2.clone(), t2.clone()];
     assert_eq!(rows(&get(window).await), all, "default: every kind");
+    assert_eq!(
+        rows(&get(&format!("{window}&kind=event,event,task")).await),
+        all,
+        "duplicates"
+    );
     let both = get(&format!("{window}&kind=task,event")).await;
     assert_eq!(rows(&both), all);
     assert_eq!(both["unindexed"], json!([]));
@@ -1013,6 +1018,8 @@ async fn a_range_reads_events_and_tasks_by_kind_and_done() {
         format!("{window}&kind=contact"),
         format!("{window}&kind=contact_group"),
         format!("{window}&kind=event,contact"),
+        format!("{window}&kind=Event"),
+        format!("{window}&kind=event,%20task"),
         format!("{window}&kind=meeting"),
         format!("{window}&kind="),
         format!("{window}&done=maybe"),

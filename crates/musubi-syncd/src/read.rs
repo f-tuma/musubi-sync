@@ -230,8 +230,11 @@ pub(crate) async fn entities(
             if p.done.is_some() {
                 return Err(ApiError::bad_request("done applies only to a range"));
             }
-            let kind =
-                parse_kind(kind).ok_or_else(|| ApiError::bad_request("unknown kind to list"))?;
+            let kind = parse_kind(kind).ok_or_else(|| {
+                ApiError::bad_request(
+                    "kind without from and to must be one of task, contact, contact_group",
+                )
+            })?;
             return list(&app, tenant, kind, collections, p.after, limit).await;
         }
         (None, None, None) => {

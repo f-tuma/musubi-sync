@@ -173,9 +173,9 @@ paths:
         range (`kind=event` answers `400`).
       parameters:
         - { name: kind, in: query, description: "Range: comma-separated event, task. Listing: one of task, contact, contact_group", schema: { type: string } }
-        - { name: from, in: query, description: "Range start; with to", schema: { type: string, format: date-time } }
+        - { name: from, in: query, description: "Range start; only together with to (one alone answers 400)", schema: { type: string, format: date-time } }
         - { name: to, in: query, description: "Range end; with from", schema: { type: string, format: date-time } }
-        - { name: done, in: query, description: "Range only: completed or failed task occurrences (events are never done); default all", schema: { type: boolean } }
+        - { name: done, in: query, description: "Range only: keep occurrences with this done (true = completed or failed task; events are always false); default all", schema: { type: boolean } }
         - { name: zone, in: query, description: "IANA zone for floating times; default UTC", schema: { type: string } }
         - { name: collection, in: query, description: Comma-separated collection ids, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
