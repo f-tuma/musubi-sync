@@ -20,6 +20,7 @@ use musubi_model::{
     AccountId, CollectionId, ControlStore, EntityId, EntityKind, ItemId, Seq, Storage, TenantId,
     TenantStore, TimeWindow,
 };
+use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -148,11 +149,15 @@ fn collection_json(c: &CollectionState) -> Value {
 
 #[derive(Deserialize)]
 pub(crate) struct RangeParams {
-    /// `task`, `contact` or `contact_group`: a listing of that kind instead
-    /// of the event range (`from`, `to`, `zone`, `ids_only`, `expand` unused).
-    kind: Option<EntityKind>,
+    /// With `from` and `to`: comma-separated kinds with occurrences (`event`,
+    /// `task`), default both. Without them: one kind to list (`task`,
+    /// `contact`, `contact_group`; `from`, `to`, `zone`, `ids_only`, `expand`
+    /// unused).
+    kind: Option<String>,
     from: Option<Timestamp>,
     to: Option<Timestamp>,
+    /// Range only: only occurrences with this `done`; default all.
+    done: Option<bool>,
     /// IANA zone floating times are read in; default UTC.
     zone: Option<String>,
     /// Comma-separated collection ids; default all.
@@ -166,6 +171,26 @@ pub(crate) struct RangeParams {
     expand: Option<String>,
 }
 
+/// An entity kind by its API name; `None` for an unknown name.
+fn parse_kind(name: &str) -> Option<EntityKind> {
+    EntityKind::deserialize(StrDeserializer::<serde::de::value::Error>::new(name)).ok()
+}
+
+/// The `kind` list of a range: kinds with occurrences only, default all of them.
+fn range_kinds(kind: Option<&str>) -> Result<Vec<EntityKind>, ApiError> {
+    let Some(list) = kind else {
+        return Ok(vec![EntityKind::Event, EntityKind::Task]);
+    };
+    list.split(',')
+        .map(|name| match parse_kind(name) {
+            Some(k @ (EntityKind::Event | EntityKind::Task)) => Ok(k),
+            _ => Err(ApiError::bad_request(format!(
+                "kind in a range must be a comma-separated list of event and task, not {name:?}"
+            ))),
+        })
+        .collect()
+}
+
 /// The opaque `after` cursor of `GET /v1/entities`.
 #[derive(Serialize, Deserialize)]
 struct After {
@@ -174,8 +199,9 @@ struct After {
     r: Option<Timestamp>,
 }
 
-/// `GET /v1/entities?from&to`: occurrences in a window, paged; with `kind`,
-/// the entities of a kind without occurrences.
+/// `GET /v1/entities?from&to`: occurrences of events and tasks in a window,
+/// paged; `kind` and `done` narrow them and must be the same on every page,
+/// like `collection`. Without `from` and `to`, `kind` lists one kind.
 pub(crate) async fn entities(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -198,14 +224,27 @@ pub(crate) async fn entities(
             "limit must be 1..={RANGE_LIMIT_MAX}"
         )));
     }
-    if let Some(kind) = p.kind {
-        return list(&app, tenant, kind, collections, p.after, limit).await;
-    }
-    let (Some(from), Some(to)) = (p.from, p.to) else {
-        return Err(ApiError::bad_request(
-            "from and to are required without kind",
-        ));
+    let (from, to) = match (p.from, p.to, p.kind.as_deref()) {
+        (Some(from), Some(to), _) => (from, to),
+        (None, None, Some(kind)) => {
+            if p.done.is_some() {
+                return Err(ApiError::bad_request("done applies only to a range"));
+            }
+            let kind = parse_kind(kind).ok_or_else(|| {
+                ApiError::bad_request(
+                    "kind without from and to must be one of task, contact, contact_group",
+                )
+            })?;
+            return list(&app, tenant, kind, collections, p.after, limit).await;
+        }
+        (None, None, None) => {
+            return Err(ApiError::bad_request(
+                "from and to are required without kind",
+            ));
+        }
+        _ => return Err(ApiError::bad_request("from and to go together")),
     };
+    let kinds = range_kinds(p.kind.as_deref())?;
     let window =
         TimeWindow::new(from, to).ok_or_else(|| ApiError::bad_request("from must be before to"))?;
     if p.expand.as_deref().is_some_and(|e| e != "occurrences") {
@@ -232,8 +271,8 @@ pub(crate) async fn entities(
     let q = RangeQuery {
         window,
         collections,
-        kinds: vec![EntityKind::Event],
-        done: None,
+        kinds,
+        done: p.done,
         zone,
         after,
         limit,
@@ -248,10 +287,12 @@ pub(crate) async fn entities(
         .map(|o| {
             json!({
                 "entity": o.entity,
+                "kind": o.kind,
                 "recurrence_id": o.recurrence_id,
                 "start": o.start,
                 "end": o.end,
                 "floating": o.floating,
+                "done": o.done,
                 "canonical": o.canonical,
             })
         })
