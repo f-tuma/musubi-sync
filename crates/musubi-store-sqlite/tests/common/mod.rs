@@ -103,6 +103,7 @@ pub fn row(h: i64, rid: Option<i64>) -> OccurrenceRow {
         end: t(h + 1),
         recurrence_id: rid.map(t),
         floating: false,
+        done: false,
     }
 }
 

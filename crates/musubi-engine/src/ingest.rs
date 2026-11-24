@@ -346,6 +346,7 @@ fn single(
         end: end.timestamp(),
         recurrence_id: rid,
         floating: zone.is_none(),
+        done: false,
     })
 }
 
@@ -398,6 +399,7 @@ fn expand_rows(
             end: i.end,
             recurrence_id: Some(i.recurrence_id),
             floating,
+            done: false,
         })
         .collect())
 }

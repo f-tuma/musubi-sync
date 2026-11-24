@@ -14,7 +14,7 @@ use jiff::tz::TimeZone;
 use musubi_model::journal::ChangeTarget;
 use musubi_model::remote::MediaType;
 use musubi_model::store::{ItemWrite, RangeQuery};
-use musubi_model::{Raw, Seq, Storage, StoreError, TenantId, TenantStore, TimeWindow};
+use musubi_model::{EntityKind, Raw, Seq, Storage, StoreError, TenantId, TenantStore, TimeWindow};
 use musubi_store_sqlite::SqliteStorage;
 use rusqlite::Connection;
 use serde_json::value::RawValue;
@@ -27,6 +27,8 @@ fn all(limit: u32) -> RangeQuery {
     RangeQuery {
         window: TimeWindow::new(t(-24), t(24 * 400)).unwrap(),
         collections: None,
+        kinds: vec![EntityKind::Event],
+        done: None,
         zone: TimeZone::UTC,
         after: None,
         limit,
@@ -87,7 +89,7 @@ fn older_file_migrates_and_newer_is_refused_untouched() {
         s.open(new),
         Err(StoreError::SchemaTooNew {
             found: 99,
-            supported: 2
+            supported: 3
         })
     ));
     assert_eq!(std::fs::read(&path).unwrap(), before, "file untouched");
@@ -325,10 +327,11 @@ fn wal_reset_fails_backs_off_and_recovers() {
     println!("{st:?}");
 }
 
-/// docs/plan/phase2.md 4.1: a phase-1 tenant file (version 1) with data
-/// migrates to `MAIN_V2` on open and keeps its data.
+/// docs/plan/phase2.md 4.1 and 12.4: a phase-1 tenant file (version 1) with
+/// data migrates to the last version on open and keeps its data; its live
+/// task is marked for re-decode.
 #[test]
-fn phase1_tenant_file_migrates_to_version_2() {
+fn phase1_tenant_file_migrates_to_last_version() {
     use musubi_model::EntityKind;
     use musubi_model::store::{Include, Occurrences};
     let d = TempDir::new();
@@ -342,17 +345,31 @@ fn phase1_tenant_file_migrates_to_version_2() {
         tn.apply_page(&page(col, vec![event("e", "1", 1), task]))
             .unwrap();
     }
-    // Back to the phase-1 schema: version 1 had neither the column nor the index.
+    // Back to the phase-1 schema: version 1 had none of the columns or the index.
     {
         let c = Connection::open(main_db(d.path(), TENANT)).unwrap();
         c.execute_batch(
             "DROP INDEX entities_kind;
              ALTER TABLE collections DROP COLUMN push_resource;
+             ALTER TABLE occurrences DROP COLUMN done;
              UPDATE meta SET v = 1 WHERE k = 'schema';",
         )
         .unwrap();
     }
-    let before = tables(&main_db(d.path(), TENANT));
+    let mut before = tables(&main_db(d.path(), TENANT));
+    // v3 marks the live task stale.
+    for (t, cols, rows) in &mut before {
+        if t == "items" {
+            let kind = cols.iter().position(|c| c == "kind").unwrap();
+            let version = cols.iter().position(|c| c == "schema_version").unwrap();
+            for r in rows
+                .iter_mut()
+                .filter(|r| r[kind] == "task".to_owned().into())
+            {
+                r[version] = 0.into();
+            }
+        }
+    }
     let s = SqliteStorage::new(d.path(), 4).unwrap();
     let mut tn = s.open(TENANT).unwrap();
     assert_eq!(
@@ -360,14 +377,19 @@ fn phase1_tenant_file_migrates_to_version_2() {
         tables(&main_db(d.path(), TENANT))
             .into_iter()
             .map(|(t, mut cols, rows)| {
-                // The one column v2 adds, always NULL after the migration.
-                if t == "collections" {
-                    let i = cols.iter().position(|c| c == "push_resource").unwrap();
+                // The columns v2 and v3 add, with their value after the migration.
+                let added = match t.as_str() {
+                    "collections" => Some(("push_resource", rusqlite::types::Value::Null)),
+                    "occurrences" => Some(("done", 0.into())),
+                    _ => None,
+                };
+                if let Some((col, value)) = added {
+                    let i = cols.iter().position(|c| c == col).unwrap();
                     cols.remove(i);
                     let rows = rows
                         .into_iter()
                         .map(|mut r| {
-                            assert_eq!(r.remove(i), rusqlite::types::Value::Null);
+                            assert_eq!(r.remove(i), value);
                             r
                         })
                         .collect();
@@ -382,7 +404,7 @@ fn phase1_tenant_file_migrates_to_version_2() {
         .unwrap()
         .query_row("SELECT v FROM meta WHERE k = 'schema'", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(schema, 2);
+    assert_eq!(schema, 3);
     assert_eq!(tn.stats().unwrap().items, 2);
     assert_eq!(tn.range(&all(10)).unwrap().occurrences.len(), 1);
     let tasks = tn

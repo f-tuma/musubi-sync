@@ -229,6 +229,7 @@ pub fn event(key: &str, version: &str, h: i64) -> ItemWrite {
                 end: t(h + 1),
                 recurrence_id: None,
                 floating: false,
+                done: false,
             }],
             series: None,
         },

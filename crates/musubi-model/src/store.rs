@@ -148,8 +148,7 @@ pub trait TenantStore: Send {
     /// paging: a full page continues after its last id). Never tombstones,
     /// never entities of another kind. With `inc.placements` the views carry
     /// their placements; `inc.raw` is ignored (entities have no raw layer).
-    /// For kinds without occurrences (tasks, contacts,
-    /// groups; docs/plan/phase2.md 4.1).
+    /// Reads tasks, contacts and groups (docs/plan/phase2.md 4.1).
     fn list_entities(
         &self,
         kind: EntityKind,
@@ -459,6 +458,9 @@ pub struct OccurrenceRow {
     /// Floating or all-day: the store widens the search by ±14 hours and filters
     /// exactly with [`RangeQuery::zone`].
     pub floating: bool,
+    /// The occurrence of a task is completed or failed; always `false` for
+    /// events (docs/plan/phase2.md 12.3).
+    pub done: bool,
 }
 
 /// Span of a series (proposal 2.5, "index of series spans").
@@ -509,6 +511,12 @@ pub struct RangeQuery {
     /// Only entities placed in these collections; `None` means all. An entity in
     /// several of them is returned once.
     pub collections: Option<Vec<CollectionId>>,
+    /// Only occurrences and `unindexed` series of these kinds; non-empty, only
+    /// kinds with occurrences (events, tasks). The same on every page.
+    pub kinds: Vec<EntityKind>,
+    /// Only occurrences with this [`OccurrenceRow::done`]; `None` means all.
+    /// The same on every page.
+    pub done: Option<bool>,
     /// Zone in which floating and all-day occurrences are placed for filtering.
     pub zone: TimeZone,
     /// Continue after this position (from [`RangePage::next`]).
@@ -548,6 +556,8 @@ pub struct RangePage {
 pub struct OccurrenceView {
     /// The entity (the master for occurrences of a series).
     pub entity: EntityId,
+    /// The entity's kind.
+    pub kind: EntityKind,
     /// Recurrence id for occurrences of a series ([`OccurrenceRow::recurrence_id`]).
     pub recurrence_id: Option<Timestamp>,
     /// Start (index convention, see [`OccurrenceRow`]).
@@ -556,6 +566,8 @@ pub struct OccurrenceView {
     pub end: Timestamp,
     /// Floating or all-day.
     pub floating: bool,
+    /// See [`OccurrenceRow::done`].
+    pub done: bool,
     /// The entity's canonical document; `None` with `ids_only` or without a view.
     pub canonical: Option<CanonicalJson>,
 }

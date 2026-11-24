@@ -323,6 +323,8 @@ impl H {
             .range(&RangeQuery {
                 window: TimeWindow::new(start, end).unwrap(),
                 collections: None,
+                kinds: vec![EntityKind::Event],
+                done: None,
                 zone: TimeZone::UTC,
                 after: None,
                 limit: 1000,
