@@ -1,0 +1,4 @@
+{
+  "sent": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//k13b//EN\r\nBEGIN:VTODO\r\nUID:k13-d\r\nDTSTAMP:20261125T100000Z\r\nSUMMARY:musubi-k13 d undated\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
+  "got": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//musubi//k13b//EN\r\nBEGIN:VTODO\r\nUID:k13-d\r\nDTSTAMP:20261125T100000Z\r\nSUMMARY:musubi-k13 d undated\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+}
