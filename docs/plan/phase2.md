@@ -372,7 +372,7 @@ Profil je data v `musubi-dav::profile`, ne větvení kódu:
 | souběžnost na účet | 2 | 2 (kapitola 2.6 návrhu, I5) |
 | `multiget` dávka | 50 | 20 **(neověřeno; T11 bez dat)** |
 | oprávnění kolekce | z `current-user-privilege-set` | z `current-user-privilege-set` (T11); kalendáře a adresář `write` → `Writer` |
-| VTODO | ano | ano, kolekce jen s VTODO na CalDAV jako u obecného profilu (K13a). Připomínky od iOS 13 jsou mimo CalDAV (kapitola 2.6 návrhu). Seznam „Reminders ⚠️“, který po nich zůstane, se synchronizuje jako každý jiný kalendář úkolů; podle lokalizovaného názvu se nic neskrývá |
+| VTODO | ano | ano, kolekce jen s VTODO na CalDAV jako u obecného profilu (K13a). Připomínky od iOS 13 jsou mimo CalDAV (kapitola 2.6 návrhu). Seznam „Reminders ⚠️“, který po nich zůstane, se synchronizuje jako každý jiný kalendář úkolů; podle lokalizovaného názvu se nic neskrývá. Existující účty dostanou kalendáře úkolů při příštím plánovaném objevování (`rediscover_every`, výchozí 6 h), bez migrace |
 | vCard | 3.0 i 4.0 | 3.0 |
 | `sync-collection` u CardDAV | z `supported-report-set` | z `supported-report-set`; potvrzeno T11. Neplatný token: CalDAV `403`, CardDAV `412` (oba `D:valid-sync-token`) → `CursorExpired`. První čtení vrací i kolekci samotnou se `200` (CalDAV s lomítkem, CardDAV bez); ta není objekt. `addressbook-multiget` s adresou kolekce selže celý `400` |
 | `503` dávky | běžné zpomalení | běžné zpomalení; I5 |
@@ -677,7 +677,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 - **Crates:** `musubi-dav`, `musubi-testkit` (režim `icloud` falešného DAV).
 - **Přijetí:**
   - zjišťování přes partition host, včetně home setů s výslovným `:443`; adresa mimo povolené hosty nebo jiný origin objektu se odmítne;
-  - kolekce jen s VTODO se přeskočí; vCard 3.0 a Apple skupiny projdou;
+  - vCard 3.0 a Apple skupiny projdou (kolekce jen s VTODO čte profil `icloud` od K13a);
   - souběžnost 2 a dávka `multiget` podle T11;
   - `401` vede na `ReauthRequired` s textem o hesle pro aplikace;
   - kalendář a adresář na různých partition hostech projdou zjišťováním i čtením.
@@ -1047,4 +1047,4 @@ K12d ─ K13a čtení kolekcí úkolů ─ K13b živá kontrola
 
 - **Potřebuje:** K13a v `main`, heslo pro aplikace a souhlas uživatele se zápisy do jeho Apple ID (jen do objektů, které skript založí a na konci smaže).
 - **Hotovo:** proti iCloudu ověřené čtení, delta (změna a smazání) a prošlý token na kalendáři úkolů; opakovaný VTODO po obou tvarech dokončení; negativní kontrola, že úkol z aplikace Připomínky na CalDAV nepřijde. Zjištění v `docs/research/phase2/live-k13.md`, anonymizované fixtures v `crates/musubi-testkit/fixtures/dav/icloud-k13/`.
-- **Přijetí:** odchylky se opraví jako data profilu nebo podmíněnou opravou kodeku (dokončený VTODO s `COMPLETED` bez `STATUS`), nikdy změnou kontraktu.
+- **Přijetí:** přijetí K13 je splněné; odchylky se opraví jako data profilu nebo podmíněnou opravou kodeku (dokončený VTODO s `COMPLETED` bez `STATUS`), nikdy změnou kontraktu.

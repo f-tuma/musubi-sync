@@ -28,6 +28,7 @@ fn event(uid: &str) -> String {
 }
 
 /// A legacy Apple reminder: date-only dates and Apple's own properties.
+/// Legacy shape, not verified live (K13b).
 fn reminder(uid: &str) -> String {
     format!(
         "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Apple Inc.//iOS 12.4//EN\r\nBEGIN:VTODO\r\n\

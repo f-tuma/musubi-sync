@@ -1239,7 +1239,7 @@ Tři stupně přísnosti při umisťování:
 | --- | --- |
 | doplňková pole (popis, kategorie, formátování) | umístit a označit |
 | pole, která mění, **kdy se něco děje** (opakování, čas, zóna) | umístění se odmítne typovanou chybou, pokud aplikace výslovně nepošle `allow_lossy`; pravidlo má vlastní `allow_lossy` a bez něj takový záznam přeskočí |
-| druh, který poskytovatel nemá vůbec (úkol do Připomínek iCloudu; na iCloud jde jen do kalendáře úkolů na CalDAV) | odmítnout |
+| druh, který cílová kolekce nemá (úkol do kalendáře jen s VEVENT) | odmítnout |
 
 Důvod druhého řádku: kalendář, který ukazuje jiné termíny než pravda, je horší než chybějící kopie.
 
