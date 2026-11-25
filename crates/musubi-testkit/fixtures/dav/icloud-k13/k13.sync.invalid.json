@@ -1,0 +1,5 @@
+{
+  "status": 403,
+  "headers": {},
+  "xml": "<?xml version='1.0' encoding='UTF-8'?>\n<error xmlns='DAV:'>\n<valid-sync-token/>\n</error>\n"
+}

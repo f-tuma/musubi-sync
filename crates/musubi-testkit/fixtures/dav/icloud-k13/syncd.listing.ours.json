@@ -1,0 +1,110 @@
+[
+  {
+    "canonical": {
+      "due": "2026-11-27T12:00:00",
+      "hidden": false,
+      "priority": 0,
+      "progress": "needs-action",
+      "progressUpdated": "2026-11-25T09:00:00Z",
+      "sequence": 0,
+      "showWithoutTime": false,
+      "timeZone": "Europe/Prague",
+      "title": "musubi-k13 e completed no status",
+      "uid": "k13-e"
+    },
+    "id": "0eubs6t1jh8ftq4oi0bprvjnuk",
+    "kind": "task",
+    "rev": 1,
+    "seq": 10,
+    "tombstone": false
+  },
+  {
+    "canonical": {
+      "due": "2026-11-24T00:00:00",
+      "hidden": false,
+      "priority": 0,
+      "progress": "needs-action",
+      "recurrenceRules": [
+        "FREQ=DAILY;COUNT=3"
+      ],
+      "sequence": 0,
+      "showWithoutTime": true,
+      "start": "2026-11-24T00:00:00",
+      "title": "musubi-k13 b daily date-only",
+      "uid": "k13-b"
+    },
+    "id": "1q5sb630a6tjpu95e9anhu19r0",
+    "kind": "task",
+    "rev": 1,
+    "seq": 8,
+    "tombstone": false
+  },
+  {
+    "canonical": {
+      "hidden": false,
+      "priority": 0,
+      "progress": "needs-action",
+      "sequence": 0,
+      "showWithoutTime": false,
+      "title": "musubi-k13 d undated",
+      "uid": "k13-d"
+    },
+    "id": "30adc3g6scag1obktt92sf66t4",
+    "kind": "task",
+    "rev": 1,
+    "seq": 12,
+    "tombstone": false
+  },
+  {
+    "canonical": {
+      "due": "2026-11-27T17:00:00",
+      "hidden": false,
+      "priority": 0,
+      "progress": "needs-action",
+      "sequence": 0,
+      "showWithoutTime": false,
+      "timeZone": "Europe/Prague",
+      "title": "musubi-k13 c one-off",
+      "uid": "k13-c"
+    },
+    "id": "81r7lamj01cq6bpmr8el5jgvg0",
+    "kind": "task",
+    "rev": 1,
+    "seq": 16,
+    "tombstone": false
+  },
+  {
+    "canonical": {
+      "due": "2026-11-24T09:30:00",
+      "hidden": false,
+      "priority": 0,
+      "progress": "needs-action",
+      "recurrenceOverrides": {
+        "2026-11-25T09:00:00": {
+          "due": "2026-11-25T09:30:00",
+          "percentComplete": 100,
+          "progress": "completed",
+          "progressUpdated": "2026-11-25T08:15:00Z"
+        },
+        "2026-11-26T09:00:00": {
+          "due": "2026-11-26T15:30:00",
+          "start": "2026-11-26T15:00:00"
+        }
+      },
+      "recurrenceRules": [
+        "FREQ=DAILY;COUNT=7"
+      ],
+      "sequence": 0,
+      "showWithoutTime": false,
+      "start": "2026-11-24T09:00:00",
+      "timeZone": "Europe/Prague",
+      "title": "musubi-k13 a daily timed",
+      "uid": "k13-a"
+    },
+    "id": "hu6i46so4rvovg2s89t6pl5orc",
+    "kind": "task",
+    "rev": 1,
+    "seq": 14,
+    "tombstone": false
+  }
+]

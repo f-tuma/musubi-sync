@@ -1,0 +1,1055 @@
+{
+  "when": "2026-11-25T09:17:48+00:00",
+  "home": "https://pNN-caldav.icloud.com:443/DSID/calendars/",
+  "home_before": [
+    {
+      "href": "/DSID/calendars/",
+      "types": [
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT",
+        "VFREEBUSY",
+        "VTODO"
+      ],
+      "has_sync_token": true
+    },
+    {
+      "href": "/DSID/calendars/id1/",
+      "types": [
+        "calendar",
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT"
+      ],
+      "has_sync_token": true
+    },
+    {
+      "href": "/DSID/calendars/id2/",
+      "types": [
+        "calendar",
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VTODO"
+      ],
+      "has_sync_token": true
+    },
+    {
+      "href": "/DSID/calendars/id3/",
+      "types": [
+        "calendar",
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT"
+      ],
+      "has_sync_token": true
+    },
+    {
+      "href": "/DSID/calendars/inbox/",
+      "types": [
+        "collection",
+        "schedule-inbox"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "schedule-deliver",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VEVENT"
+      ],
+      "has_sync_token": true
+    },
+    {
+      "href": "/DSID/calendars/notification/",
+      "types": [
+        "collection",
+        "notification"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "read",
+        "read-current-user-privilege-set",
+        "unbind"
+      ],
+      "comps": [],
+      "has_sync_token": true
+    },
+    {
+      "href": "/DSID/calendars/outbox/",
+      "types": [
+        "collection",
+        "schedule-outbox"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "schedule-send"
+      ],
+      "comps": [
+        "VEVENT",
+        "VTODO"
+      ]
+    }
+  ],
+  "task_collections_before": [
+    {
+      "href": "/DSID/calendars/id2/",
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "displayname_has_warning_sign": false,
+      "has_color": true,
+      "has_order": true,
+      "propnames": [
+        "{DAV:}propname"
+      ],
+      "vtodo_resources": 1,
+      "query_status": 207,
+      "vtodo_propnames": [],
+      "reminder_found": false,
+      "vtodo_resources_note": "calendar-query counted the collection's own response; PROPFIND depth 1 lists 0 members",
+      "propnames_note": "iCloud does not support PROPFIND propname: it answers <propname/> as an unknown property"
+    }
+  ],
+  "reminder_found_any_before": false,
+  "mkcalendar": 201,
+  "k13_collection": [
+    {
+      "href": "/DSID/calendars/musubi-k13/",
+      "types": [
+        "calendar",
+        "collection"
+      ],
+      "reports": [
+        "acl-principal-prop-set",
+        "calendar-multiget",
+        "calendar-query",
+        "calendar-search",
+        "free-busy-query",
+        "principal-match",
+        "principal-property-search",
+        "sync-collection"
+      ],
+      "privileges": [
+        "bind",
+        "read",
+        "read-current-user-privilege-set",
+        "read-free-busy",
+        "unbind",
+        "write",
+        "write-content",
+        "write-properties"
+      ],
+      "comps": [
+        "VTODO"
+      ],
+      "has_sync_token": true
+    }
+  ],
+  "k13_propnames": [
+    "{DAV:}propname"
+  ],
+  "sync_initial_empty": {
+    "status": 207,
+    "count": 1,
+    "members": [
+      [
+        "<collection>",
+        "200 OK"
+      ]
+    ]
+  },
+  "put": {
+    "k13-a.ics": {
+      "status": 201,
+      "etag_in_put_response": true,
+      "get_status": 200,
+      "etag_put_equals_get": true,
+      "diff": {
+        "vtodo_and_vcalendar_props_identical": true,
+        "vtimezone_sent_subcomponents": 2,
+        "vtimezone_got_subcomponents": 17,
+        "vtimezone_got_props": [
+          "TZID:Europe/Prague",
+          "X-LIC-LOCATION:Europe/Prague"
+        ],
+        "order_sent": [
+          "VTIMEZONE",
+          "VTODO",
+          "VTODO",
+          "VTODO"
+        ],
+        "order_got": [
+          "VTODO",
+          "VTODO",
+          "VTODO",
+          "VTIMEZONE"
+        ],
+        "bytes_identical": false
+      }
+    },
+    "k13-b.ics": {
+      "status": 201,
+      "etag_in_put_response": true,
+      "get_status": 200,
+      "etag_put_equals_get": true,
+      "diff": {
+        "vtodo_and_vcalendar_props_identical": true,
+        "vtimezone_sent_subcomponents": 0,
+        "vtimezone_got_subcomponents": 0,
+        "vtimezone_got_props": [],
+        "order_sent": [
+          "VTODO"
+        ],
+        "order_got": [
+          "VTODO"
+        ],
+        "bytes_identical": true
+      }
+    },
+    "k13-c.ics": {
+      "status": 201,
+      "etag_in_put_response": true,
+      "get_status": 200,
+      "etag_put_equals_get": true,
+      "diff": {
+        "vtodo_and_vcalendar_props_identical": true,
+        "vtimezone_sent_subcomponents": 2,
+        "vtimezone_got_subcomponents": 17,
+        "vtimezone_got_props": [
+          "TZID:Europe/Prague",
+          "X-LIC-LOCATION:Europe/Prague"
+        ],
+        "order_sent": [
+          "VTIMEZONE",
+          "VTODO"
+        ],
+        "order_got": [
+          "VTODO",
+          "VTIMEZONE"
+        ],
+        "bytes_identical": false
+      }
+    },
+    "k13-d.ics": {
+      "status": 201,
+      "etag_in_put_response": true,
+      "get_status": 200,
+      "etag_put_equals_get": true,
+      "diff": {
+        "vtodo_and_vcalendar_props_identical": true,
+        "vtimezone_sent_subcomponents": 0,
+        "vtimezone_got_subcomponents": 0,
+        "vtimezone_got_props": [],
+        "order_sent": [
+          "VTODO"
+        ],
+        "order_got": [
+          "VTODO"
+        ],
+        "bytes_identical": true
+      }
+    },
+    "k13-e.ics": {
+      "status": 201,
+      "etag_in_put_response": true,
+      "get_status": 200,
+      "etag_put_equals_get": true,
+      "diff": {
+        "vtodo_and_vcalendar_props_identical": true,
+        "vtimezone_sent_subcomponents": 2,
+        "vtimezone_got_subcomponents": 17,
+        "vtimezone_got_props": [
+          "TZID:Europe/Prague",
+          "X-LIC-LOCATION:Europe/Prague"
+        ],
+        "order_sent": [
+          "VTIMEZONE",
+          "VTODO"
+        ],
+        "order_got": [
+          "VTODO",
+          "VTIMEZONE"
+        ],
+        "bytes_identical": false
+      }
+    }
+  },
+  "put_if_none_match_existing": 204,
+  "sync_initial": {
+    "status": 207,
+    "count": 6,
+    "members": [
+      [
+        "<collection>",
+        "200 OK"
+      ],
+      [
+        "k13-a.ics",
+        "200 OK"
+      ],
+      [
+        "k13-b.ics",
+        "200 OK"
+      ],
+      [
+        "k13-c.ics",
+        "200 OK"
+      ],
+      [
+        "k13-d.ics",
+        "200 OK"
+      ],
+      [
+        "k13-e.ics",
+        "200 OK"
+      ]
+    ]
+  },
+  "connect": 200,
+  "syncd_collection": {
+    "seconds_to_synced": 2.0,
+    "collection": {
+      "account": "2tjg40t6u5oit8n1ouka48rnuo",
+      "coverage": {
+        "type": "full"
+      },
+      "error": null,
+      "full_read_at": "2026-11-25T09:18:00.115891Z",
+      "gone": false,
+      "id": "tefoeb3odsndcm292m2n9b94vg",
+      "remote": {
+        "access": "writer",
+        "delta": "sync_token",
+        "kind": "task",
+        "name": "musubi-k13",
+        "primary": false,
+        "push": "none",
+        "remote": "/DSID/calendars/musubi-k13/",
+        "time_zone": null
+      },
+      "synced_at": "2026-11-25T09:18:00.115891Z"
+    },
+    "all_collections": 5,
+    "errors": []
+  },
+  "listing_task": {
+    "ours": [
+      "musubi-k13 a daily timed progress=needs-action,completed",
+      "musubi-k13 b daily date-only progress=needs-action",
+      "musubi-k13 c one-off progress=needs-action",
+      "musubi-k13 d undated progress=needs-action",
+      "musubi-k13 e completed no status progress=needs-action"
+    ],
+    "others_count": 0,
+    "next": null
+  },
+  "range[kind=task]": {
+    "status": 200,
+    "ours": [
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-24T00:00:00Z",
+        "start": "2026-11-24T00:00:00Z",
+        "end": "2026-11-25T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-24T08:00:00Z",
+        "start": "2026-11-24T08:00:00Z",
+        "end": "2026-11-24T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-25T00:00:00Z",
+        "start": "2026-11-25T00:00:00Z",
+        "end": "2026-11-26T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-25T08:00:00Z",
+        "start": "2026-11-25T08:00:00Z",
+        "end": "2026-11-25T08:30:00Z",
+        "floating": false,
+        "done": true,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-26T00:00:00Z",
+        "start": "2026-11-26T00:00:00Z",
+        "end": "2026-11-27T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-26T08:00:00Z",
+        "start": "2026-11-26T14:00:00Z",
+        "end": "2026-11-26T14:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-27T08:00:00Z",
+        "start": "2026-11-27T08:00:00Z",
+        "end": "2026-11-27T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 e completed no status progress=needs-action",
+        "recurrence_id": null,
+        "start": "2026-11-27T11:00:00Z",
+        "end": "2026-11-27T11:00:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 c one-off progress=needs-action",
+        "recurrence_id": null,
+        "start": "2026-11-27T16:00:00Z",
+        "end": "2026-11-27T16:00:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-28T08:00:00Z",
+        "start": "2026-11-28T08:00:00Z",
+        "end": "2026-11-28T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-29T08:00:00Z",
+        "start": "2026-11-29T08:00:00Z",
+        "end": "2026-11-29T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-30T08:00:00Z",
+        "start": "2026-11-30T08:00:00Z",
+        "end": "2026-11-30T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      }
+    ],
+    "others_count": 0,
+    "other_kinds": [],
+    "unindexed": 0
+  },
+  "range[kind=task&done=false]": {
+    "status": 200,
+    "ours": [
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-24T00:00:00Z",
+        "start": "2026-11-24T00:00:00Z",
+        "end": "2026-11-25T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-24T08:00:00Z",
+        "start": "2026-11-24T08:00:00Z",
+        "end": "2026-11-24T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-25T00:00:00Z",
+        "start": "2026-11-25T00:00:00Z",
+        "end": "2026-11-26T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-26T00:00:00Z",
+        "start": "2026-11-26T00:00:00Z",
+        "end": "2026-11-27T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-26T08:00:00Z",
+        "start": "2026-11-26T14:00:00Z",
+        "end": "2026-11-26T14:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-27T08:00:00Z",
+        "start": "2026-11-27T08:00:00Z",
+        "end": "2026-11-27T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 e completed no status progress=needs-action",
+        "recurrence_id": null,
+        "start": "2026-11-27T11:00:00Z",
+        "end": "2026-11-27T11:00:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 c one-off progress=needs-action",
+        "recurrence_id": null,
+        "start": "2026-11-27T16:00:00Z",
+        "end": "2026-11-27T16:00:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-28T08:00:00Z",
+        "start": "2026-11-28T08:00:00Z",
+        "end": "2026-11-28T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-29T08:00:00Z",
+        "start": "2026-11-29T08:00:00Z",
+        "end": "2026-11-29T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-30T08:00:00Z",
+        "start": "2026-11-30T08:00:00Z",
+        "end": "2026-11-30T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      }
+    ],
+    "others_count": 0,
+    "other_kinds": [],
+    "unindexed": 0
+  },
+  "range[kind=event,task]": {
+    "status": 200,
+    "ours": [
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-24T00:00:00Z",
+        "start": "2026-11-24T00:00:00Z",
+        "end": "2026-11-25T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-24T08:00:00Z",
+        "start": "2026-11-24T08:00:00Z",
+        "end": "2026-11-24T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-25T00:00:00Z",
+        "start": "2026-11-25T00:00:00Z",
+        "end": "2026-11-26T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-25T08:00:00Z",
+        "start": "2026-11-25T08:00:00Z",
+        "end": "2026-11-25T08:30:00Z",
+        "floating": false,
+        "done": true,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 b daily date-only progress=needs-action",
+        "recurrence_id": "2026-11-26T00:00:00Z",
+        "start": "2026-11-26T00:00:00Z",
+        "end": "2026-11-27T00:00:00Z",
+        "floating": true,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-26T08:00:00Z",
+        "start": "2026-11-26T14:00:00Z",
+        "end": "2026-11-26T14:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-27T08:00:00Z",
+        "start": "2026-11-27T08:00:00Z",
+        "end": "2026-11-27T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 e completed no status progress=needs-action",
+        "recurrence_id": null,
+        "start": "2026-11-27T11:00:00Z",
+        "end": "2026-11-27T11:00:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 c one-off progress=needs-action",
+        "recurrence_id": null,
+        "start": "2026-11-27T16:00:00Z",
+        "end": "2026-11-27T16:00:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-28T08:00:00Z",
+        "start": "2026-11-28T08:00:00Z",
+        "end": "2026-11-28T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-29T08:00:00Z",
+        "start": "2026-11-29T08:00:00Z",
+        "end": "2026-11-29T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      },
+      {
+        "title": "musubi-k13 a daily timed progress=needs-action,completed",
+        "recurrence_id": "2026-11-30T08:00:00Z",
+        "start": "2026-11-30T08:00:00Z",
+        "end": "2026-11-30T08:30:00Z",
+        "floating": false,
+        "done": false,
+        "kind": "task"
+      }
+    ],
+    "others_count": 0,
+    "other_kinds": [],
+    "unindexed": 0
+  },
+  "put_if_match_current": 204,
+  "put_if_match_stale": {
+    "status": 412,
+    "body_elements": 0
+  },
+  "delete_if_match_stale": 412,
+  "delete": 204,
+  "etag_changed_after_modify": true,
+  "sync_delta": {
+    "status": 207,
+    "count": 3,
+    "members": [
+      [
+        "<collection>",
+        "200 OK"
+      ],
+      [
+        "k13-c.ics",
+        "200 OK"
+      ],
+      [
+        "k13-d.ics",
+        "404 Not Found"
+      ]
+    ]
+  },
+  "syncd_delta_seconds_after_delete": 29.1,
+  "syncd_delta_seconds_after_modify": 30.4,
+  "range_after_delta": [
+    {
+      "title": "musubi-k13 b daily date-only progress=needs-action",
+      "recurrence_id": "2026-11-24T00:00:00Z",
+      "start": "2026-11-24T00:00:00Z",
+      "end": "2026-11-25T00:00:00Z",
+      "floating": true,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 a daily timed progress=needs-action,completed",
+      "recurrence_id": "2026-11-24T08:00:00Z",
+      "start": "2026-11-24T08:00:00Z",
+      "end": "2026-11-24T08:30:00Z",
+      "floating": false,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 b daily date-only progress=needs-action",
+      "recurrence_id": "2026-11-25T00:00:00Z",
+      "start": "2026-11-25T00:00:00Z",
+      "end": "2026-11-26T00:00:00Z",
+      "floating": true,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 a daily timed progress=needs-action,completed",
+      "recurrence_id": "2026-11-25T08:00:00Z",
+      "start": "2026-11-25T08:00:00Z",
+      "end": "2026-11-25T08:30:00Z",
+      "floating": false,
+      "done": true,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 b daily date-only progress=needs-action",
+      "recurrence_id": "2026-11-26T00:00:00Z",
+      "start": "2026-11-26T00:00:00Z",
+      "end": "2026-11-27T00:00:00Z",
+      "floating": true,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 a daily timed progress=needs-action,completed",
+      "recurrence_id": "2026-11-26T08:00:00Z",
+      "start": "2026-11-26T14:00:00Z",
+      "end": "2026-11-26T14:30:00Z",
+      "floating": false,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 a daily timed progress=needs-action,completed",
+      "recurrence_id": "2026-11-27T08:00:00Z",
+      "start": "2026-11-27T08:00:00Z",
+      "end": "2026-11-27T08:30:00Z",
+      "floating": false,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 e completed no status progress=needs-action",
+      "recurrence_id": null,
+      "start": "2026-11-27T11:00:00Z",
+      "end": "2026-11-27T11:00:00Z",
+      "floating": false,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 c one-off progress=completed",
+      "recurrence_id": null,
+      "start": "2026-11-27T16:00:00Z",
+      "end": "2026-11-27T16:00:00Z",
+      "floating": false,
+      "done": true,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 a daily timed progress=needs-action,completed",
+      "recurrence_id": "2026-11-28T08:00:00Z",
+      "start": "2026-11-28T08:00:00Z",
+      "end": "2026-11-28T08:30:00Z",
+      "floating": false,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 a daily timed progress=needs-action,completed",
+      "recurrence_id": "2026-11-29T08:00:00Z",
+      "start": "2026-11-29T08:00:00Z",
+      "end": "2026-11-29T08:30:00Z",
+      "floating": false,
+      "done": false,
+      "kind": "task"
+    },
+    {
+      "title": "musubi-k13 a daily timed progress=needs-action,completed",
+      "recurrence_id": "2026-11-30T08:00:00Z",
+      "start": "2026-11-30T08:00:00Z",
+      "end": "2026-11-30T08:30:00Z",
+      "floating": false,
+      "done": false,
+      "kind": "task"
+    }
+  ],
+  "listing_after_delta": [
+    "musubi-k13 a daily timed progress=needs-action,completed",
+    "musubi-k13 b daily date-only progress=needs-action",
+    "musubi-k13 c one-off progress=completed",
+    "musubi-k13 e completed no status progress=needs-action"
+  ],
+  "sync_invalid": {
+    "status": 403,
+    "error_elements": [
+      "error",
+      "valid-sync-token"
+    ]
+  },
+  "sync_foreign": {
+    "status": 403,
+    "error_elements": [
+      "error",
+      "valid-sync-token"
+    ]
+  },
+  "syncd_errors_end": [],
+  "cleanup_delete": 204,
+  "cleanup_gone": true,
+  "cleanup_propfind_collection_status": 404,
+  "followup": {
+    "if_none_match_and_if_match_star": {
+      "when": "2026-11-25T10:19:15+0100",
+      "reminder_found": false,
+      "mkcalendar": 201,
+      "inm_first": 201,
+      "inm_existing_different_body": {
+        "status": 204,
+        "body": ""
+      },
+      "inm_overwritten": true,
+      "if_match_star_existing": 412,
+      "if_match_star_missing": 201,
+      "if_match_star_missing_created": true,
+      "cleanup_delete": 204,
+      "cleanup_gone": true,
+      "cleanup_status": 404
+    },
+    "delete_collection_keeps_members": {
+      "when": "2026-11-25T10:20:04+0100",
+      "mkcalendar": 201,
+      "members_after_recreate": [
+        "k13-a.ics",
+        "k13-b.ics",
+        "k13-c.ics",
+        "k13-e.ics",
+        "x.ics",
+        "y.ics"
+      ],
+      "sync_initial_after_recreate": {
+        "status": 207,
+        "count": 7,
+        "members": [
+          [
+            "<collection>",
+            "200 OK"
+          ],
+          [
+            "k13-a.ics",
+            "200 OK"
+          ],
+          [
+            "k13-b.ics",
+            "200 OK"
+          ],
+          [
+            "k13-c.ics",
+            "200 OK"
+          ],
+          [
+            "k13-e.ics",
+            "200 OK"
+          ],
+          [
+            "x.ics",
+            "200 OK"
+          ],
+          [
+            "y.ics",
+            "200 OK"
+          ]
+        ]
+      },
+      "member_deletes": {
+        "k13-a.ics": 204,
+        "k13-b.ics": 204,
+        "k13-c.ics": 204,
+        "k13-e.ics": 204,
+        "x.ics": 204,
+        "y.ics": 204
+      },
+      "cleanup_delete": 204,
+      "cleanup_status": 404
+    },
+    "after_member_deletes": {
+      "mkcalendar": 201,
+      "members_after_recreate": [],
+      "cleanup_delete": 204,
+      "cleanup_status": 404
+    }
+  }
+}
