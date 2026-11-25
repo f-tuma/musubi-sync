@@ -236,7 +236,7 @@ async fn collections(
                     };
                     if comp("VEVENT") {
                         EntityKind::Event
-                    } else if comp("VTODO") && s.net.profile.tasks() {
+                    } else if comp("VTODO") {
                         EntityKind::Task
                     } else {
                         continue;

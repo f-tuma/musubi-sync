@@ -27,6 +27,15 @@ fn event(uid: &str) -> String {
     )
 }
 
+/// A legacy Apple reminder: date-only dates and Apple's own properties.
+fn reminder(uid: &str) -> String {
+    format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Apple Inc.//iOS 12.4//EN\r\nBEGIN:VTODO\r\n\
+         UID:{uid}\r\nDTSTAMP:20261101T000000Z\r\nDUE;VALUE=DATE:20261113\r\nSUMMARY:{uid}\r\n\
+         X-APPLE-SORT-ORDER:576543210\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+    )
+}
+
 fn contact(uid: &str) -> String {
     format!("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:{uid}\r\nFN:{uid}\r\nN:{uid};;;;\r\nEND:VCARD\r\n")
 }
@@ -131,6 +140,7 @@ async fn discovers_and_reads_across_partition_hosts() {
     let tasks = dav.add_collection(Kind::Calendar(&["VTODO"]), "tasks", "Reminders");
     let book = dav.add_collection(Kind::AddressBook, "card", "Contacts");
     dav.put(&cal, "e.ics", &event("e"));
+    dav.put(&tasks, "r.ics", &reminder("r"));
     dav.put(&book, "a.vcf", &contact("a"));
     dav.put(&book, "g.vcf", &group("g", "a"));
     let p = icloud();
@@ -138,11 +148,18 @@ async fn discovers_and_reads_across_partition_hosts() {
     let (cx, d) = connected(&p, &dav).await;
     let mut found: Vec<&str> = d.collections.iter().map(|c| c.remote.0.as_str()).collect();
     found.sort();
-    // VTODO-only, inbox, outbox and notification are skipped.
-    assert_eq!(found, [&book, &cal]);
-    assert!(!found.contains(&tasks.as_str()));
+    // Inbox, outbox and notification are skipped.
+    assert_eq!(found, [&book, &cal, &tasks]);
+    let kind_of = |col: &str| {
+        d.collections
+            .iter()
+            .find(|c| c.remote.0 == col)
+            .unwrap()
+            .kind
+    };
+    assert_eq!(kind_of(&tasks), EntityKind::Task);
     for c in &d.collections {
-        // T11: iCloud reports write privileges on both.
+        // T11: iCloud reports write privileges on every one.
         assert_eq!(c.access, Access::Writer, "{}", c.remote.0);
     }
     // Calendar and address book homes are on their own partition hosts.
@@ -160,6 +177,8 @@ async fn discovers_and_reads_across_partition_hosts() {
     // without its slash) is not an object.
     let pages = read(&p, &cx, &cal, None).await.unwrap();
     assert_eq!(keys(&pages), [format!("{cal}e.ics")]);
+    let pages = read(&p, &cx, &tasks, None).await.unwrap();
+    assert_eq!(keys(&pages), [format!("{tasks}r.ics")]);
     let pages = read(&p, &cx, &book, None).await.unwrap();
     let (a, g) = (format!("{book}a.vcf"), format!("{book}g.vcf"));
     assert_eq!(keys(&pages), [a.clone(), g.clone()]);
@@ -176,6 +195,7 @@ async fn discovers_and_reads_across_partition_hosts() {
                 rref(&book, a.clone()),
                 rref(&book, g.clone()),
                 rref(&cal, format!("{cal}e.ics")),
+                rref(&tasks, format!("{tasks}r.ics")),
             ],
         )
         .await
@@ -184,6 +204,7 @@ async fn discovers_and_reads_across_partition_hosts() {
     assert_eq!(kind(&a), EntityKind::Contact);
     assert_eq!(kind(&g), EntityKind::ContactGroup);
     assert_eq!(kind(&format!("{cal}e.ics")), EntityKind::Event);
+    assert_eq!(kind(&format!("{tasks}r.ics")), EntityKind::Task);
     assert_eq!(
         objs.iter().find(|o| o.key.0 == g).unwrap().raw.body,
         group("g", "a").as_bytes()
@@ -217,12 +238,14 @@ async fn partition_hosts_outside_the_allowed_origins_are_refused() {
 async fn invalid_tokens_are_cursor_expired_on_both() {
     let dav = fake().await;
     let cal = dav.add_collection(Kind::Calendar(&["VEVENT"]), "home", "Home");
+    let tasks = dav.add_collection(Kind::Calendar(&["VTODO"]), "tasks", "Reminders");
     let book = dav.add_collection(Kind::AddressBook, "card", "Contacts");
     dav.put(&cal, "e.ics", &event("e"));
+    dav.put(&tasks, "r.ics", &reminder("r"));
     dav.put(&book, "a.vcf", &contact("a"));
     let p = icloud();
     let (cx, _) = connected(&p, &dav).await;
-    for col in [&cal, &book] {
+    for col in [&cal, &tasks, &book] {
         let pages = read(&p, &cx, col, None).await.unwrap();
         let cursor = pages.last().unwrap().cursor.clone().unwrap();
         dav.expire_sync_tokens(col);
@@ -251,10 +274,10 @@ async fn limits_and_multiget_batches_of_20() {
         kinds,
         [
             EntityKind::Event,
+            EntityKind::Task,
             EntityKind::Contact,
             EntityKind::ContactGroup
-        ],
-        "iCloud tasks are not in v1"
+        ]
     );
 
     let (cx, _) = connected(&p, &dav).await;
