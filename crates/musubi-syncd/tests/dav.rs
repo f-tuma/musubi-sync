@@ -1053,8 +1053,8 @@ const CARD3: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:card-1\r\nFN:Bob Builder\
 const GROUP3: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:group-1\r\nFN:Family\r\nN:Family;;;;\r\nX-ADDRESSBOOKSERVER-KIND:group\r\nX-ADDRESSBOOKSERVER-MEMBER:urn:uuid:card-1\r\nEND:VCARD\r\n";
 const RANGE: &str = "/v1/entities?from=2026-11-01T00:00:00Z&to=2026-12-01T00:00:00Z&kind=event";
 
-/// A fake iCloud: an event calendar, a reminders list (VTODO only, not
-/// synced) and an address book with a contact and a group.
+/// A fake iCloud: an event calendar, a reminders list (VTODO only) and an
+/// address book with a contact and a group.
 async fn apple(config: DavConfig) -> FakeDav {
     let d = FakeDav::start(DavConfig {
         profile: Profile::Icloud,
@@ -1138,18 +1138,22 @@ async fn an_icloud_account_connects_with_only_the_apple_id_and_reads_its_data() 
     assert!(!v.to_string().contains("secret"), "{v}");
     let id = v["id"].as_str().expect("id").to_owned();
 
-    let (events, cards, groups) = until("the event, the contact and the group", async || {
-        let (s, events) = n.get(RANGE, &t.read).await;
-        assert_eq!(s, 200, "{events}");
-        let events = events["occurrences"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let cards = listed(&n, &t, "contact").await;
-        let groups = listed(&n, &t, "contact_group").await;
-        (events.len() == 1 && cards.len() == 1 && groups.len() == 1)
-            .then_some((events, cards, groups))
-    })
+    let (events, tasks, cards, groups) = until(
+        "the event, the task, the contact and the group",
+        async || {
+            let (s, events) = n.get(RANGE, &t.read).await;
+            assert_eq!(s, 200, "{events}");
+            let events = events["occurrences"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let tasks = listed(&n, &t, "task").await;
+            let cards = listed(&n, &t, "contact").await;
+            let groups = listed(&n, &t, "contact_group").await;
+            (events.len() == 1 && tasks.len() == 1 && cards.len() == 1 && groups.len() == 1)
+                .then_some((events, tasks, cards, groups))
+        },
+    )
     .await;
     assert!(
         events[0]["canonical"].to_string().contains("standup"),
@@ -1157,9 +1161,9 @@ async fn an_icloud_account_connects_with_only_the_apple_id_and_reads_its_data() 
     );
     assert!(cards[0].to_string().contains("Bob Builder"), "{cards:?}");
     assert_eq!(groups[0]["name"], "Family", "{groups:?}");
-    // iCloud's reminders are not in v1: no task collection, no tasks.
-    assert!(listed(&n, &t, "task").await.is_empty());
-    assert_eq!(collections(&n, &t).await.len(), 2);
+    // The VTODO-only list is a task collection like any other.
+    assert!(tasks[0].to_string().contains("buy milk"), "{tasks:?}");
+    assert_eq!(collections(&n, &t).await.len(), 3);
 
     let entity = |v: &Value| v["entity"].as_str().expect("entity").to_owned();
     let item = first_item(&n, &t, &entity(&events[0])).await;
@@ -1183,6 +1187,83 @@ async fn an_icloud_account_connects_with_only_the_apple_id_and_reads_its_data() 
         .expect("read")
         .expect("account");
     assert_eq!(rec.provider, ProviderId("icloud".into()));
+}
+
+/// Connects a fake iCloud whose VTODO-only list holds `todos` (and whose
+/// event calendar holds [`tasks::EVENT`]) and returns the [`tasks::NOVEMBER`]
+/// ranges `kind=<kinds>` and `kind=<kinds>&done=false` once `count`
+/// occurrences are in the first.
+async fn icloud_task_ranges(todos: &[(&str, &str)], kinds: &str, count: usize) -> (Value, Value) {
+    let d = FakeDav::start(DavConfig {
+        profile: Profile::Icloud,
+        ..DavConfig::default()
+    })
+    .await
+    .expect("fake dav");
+    let cal = d.add_collection(Kind::Calendar(&["VEVENT"]), "home", "Home");
+    d.put(&cal, "standup.ics", tasks::EVENT);
+    let list = d.add_collection(Kind::Calendar(&["VTODO"]), "tasks", "Reminders");
+    for (name, body) in todos {
+        d.put(&list, name, body);
+    }
+    let n = icloud_node(&d).await;
+    let _engine = n.app.engine().start();
+    let t = tenant(&n).await;
+    let mut sse = n.stream(&t.read).await;
+    let (s, v) = connect(&n, &t, icloud("secret")).await;
+    assert_eq!(s, 200, "{v}");
+
+    let range = |q: &str| format!("/v1/entities?{}&{q}", tasks::NOVEMBER);
+    let all = sse
+        .until("the occurrences", Duration::from_secs(20), async || {
+            let (s, v) = n.get(&range(&format!("kind={kinds}")), &t.read).await;
+            assert_eq!(s, 200, "{v}");
+            (v["occurrences"].as_array().map(Vec::len) == Some(count)).then_some(v)
+        })
+        .await;
+    let (s, open) = n
+        .get(&range(&format!("kind={kinds}&done=false")), &t.read)
+        .await;
+    assert_eq!(s, 200, "{open}");
+    (all, open)
+}
+
+/// K13a: a recurring VTODO completed through a `RECURRENCE-ID` override (as
+/// CalDAV clients write it) in an iCloud task list.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_icloud_recurring_task_with_overrides_is_in_the_range() {
+    let (all, open) =
+        icloud_task_ranges(&[("water.ics", tasks::RECURRING_TODO)], "event,task", 5).await;
+    tasks::check_ranges(&all, &open);
+}
+
+/// K13a, plan 12.9 R5: legacy Apple copy-and-advance. The copy is a one-off
+/// done task on its day, the advanced master is open from the next day on;
+/// nothing correlates the two.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_icloud_copy_and_advance_task_is_in_the_range() {
+    let (all, open) = icloud_task_ranges(
+        &[
+            ("bins.ics", tasks::APPLE_ADVANCED),
+            ("bins-done-1.ics", tasks::APPLE_COMPLETED_COPY),
+        ],
+        "task",
+        3,
+    )
+    .await;
+    let want = |v: &[(Option<&str>, &str, bool)]| -> Vec<(String, Option<String>, String, bool)> {
+        v.iter()
+            .map(|&(rid, start, done)| ("task".into(), rid.map(Into::into), start.into(), done))
+            .collect()
+    };
+    let master = [
+        (Some("2026-11-04T00:00:00Z"), "2026-11-04T00:00:00Z", false),
+        (Some("2026-11-05T00:00:00Z"), "2026-11-05T00:00:00Z", false),
+    ];
+    let mut every = vec![(None, "2026-11-03T00:00:00Z", true)];
+    every.extend(master);
+    assert_eq!(tasks::occurrences(&all), want(&every), "{all}");
+    assert_eq!(tasks::occurrences(&open), want(&master), "{open}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

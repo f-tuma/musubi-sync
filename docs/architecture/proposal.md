@@ -48,7 +48,7 @@ Doporučení:
 15. **Adaptér poskytovatele:** oddělený **transport** (HTTP, kurzory, push) a **kodek** (čisté funkce mezi surovými daty a kanonickým tvarem, verzované). Schopnosti jsou strukturovaná data vystavená aplikaci. Rozhraní se zmrazí až po dvou adaptérech.
 16. **Rust ano.** Dnešní pomalost způsobila architektura, ne jazyk, a propustnost jednoho účtu omezuje poskytovatel. Jazyk rozhoduje při růstu.
 17. **Plán:** fáze 0 je hotová (úložiště, calcard, rekurence, dokumentace poskytovatelů). Živé testy na účtech (T1–T12) se přesunuly před fázi, která je potřebuje; série v Graphu (T1) blokují jen fázi 7. Potom Google pro čtení, CalDAV a CardDAV, zápisy, více umístění, **pravidla synchronizace**, **plánování mezi tenanty**, Microsoft a vydání 1.0. Sdílení kalendářů ke čtení a federace přicházejí po něm. Kapitola 11.1.
-18. **Rozsah první vlny:** celá rodina Cal (události, úkoly, kontakty, free/busy) u Googlu, Microsoftu, iCloudu a obecného CalDAV/CardDAV. Výjimka: úkoly z iCloudu nejsou přes CalDAV dostupné.
+18. **Rozsah první vlny:** celá rodina Cal (události, úkoly, kontakty, free/busy) u Googlu, Microsoftu, iCloudu a obecného CalDAV/CardDAV. Úkoly z iCloudu jsou jen kalendáře úkolů (VTODO) na CalDAV; Připomínky Apple od iOS 13 přes CalDAV dostupné nejsou.
 
 ---
 
@@ -270,13 +270,13 @@ U korelace platí dál: **propojení, ne sloučení.** Sloučení by při zápis
 | Část sady | API | Delta a push | Co chybí nebo je ztrátové |
 | --- | --- | --- | --- |
 | Kalendáře, události | CalDAV na `caldav.icloud.com`, po přihlášení přesměrování na oddílové hostitele | `sync-collection` tam, kde ji kolekce inzeruje (tak ji používá Musubi), jinak ctag a ETagy; **žádný push pro třetí strany** | chybějící hlášení oprávnění u zdrojů, vlastní chování `calendar-query` (obojí zjištění Musubi) |
-| Úkoly | prakticky nedostupné | — | Připomínky od iOS 13 nejsou na CalDAV; staré VTODO kolekce jsou oddělený svět |
+| Úkoly | CalDAV, kalendáře jen s VTODO | jako kalendáře (`sync-collection`, ctag, ETagy; T11) | Připomínky od iOS 13 mají vlastní úložiště mimo CalDAV; na CalDAV jsou jen kalendáře úkolů od klientů CalDAV a seznam „Reminders ⚠️“, který po přechodu Připomínek zůstane |
 | Kontakty | CardDAV | viz kapitola 2.7 | |
 
 - Přihlášení jen heslem pro aplikaci: vyžaduje dvoufázové ověření, nejvýš 25 hesel na účet, při změně hlavního hesla se zruší všechna. OAuth neexistuje. Odpověď `401` znamená výzvu uživateli k novému heslu, ne opakování.
 - Limity nejsou dokumentované. Výchozí souběžnost 2 na účet, respektovat `Retry-After` a přizpůsobit se při `503`/`429`.
 - `SCHEDULE-AGENT=CLIENT` iCloud podle jediné sekundární zkoušky ignoruje (T12), takže pro plánování se chová jako Graph (kapitola 14.6).
-- Poctivý závěr: **iCloud úkoly do první verze nepatří.**
+- Poctivý závěr: **úkoly iCloudu jsou jen kalendáře úkolů na CalDAV.** Musubi je čte jako každý kalendář úkolů (plán fáze 2, K13); Připomínky z aplikace v nich nejsou.
 
 **Obecný CalDAV**
 
@@ -1031,7 +1031,7 @@ Beta `events/delta` se sleduje, ale návrh na ní nestojí.
 
 - **Veřejné API:** vlastní REST s proudem změn, ne JMAP od začátku.
 - **Historie:** poslední stav, žurnál změn a záznamy o konfliktech; žádná auditní historie verzí.
-- **Úkoly z iCloudu** v první verzi nejsou.
+- **Úkoly z iCloudu** jsou v první verzi jen kalendáře úkolů na CalDAV, ne Připomínky.
 - **Série v Graphu:** rozhodne živý test T1 na začátku fáze 7; cíl je jedna položka na sérii ve v1.0 a dokumentace ho podporuje.
 - **Komprese surové vrstvy** (zstd po řádcích): ve fázi 1 rozhodnuto nekomprimovat. Živá těla Googlu mají průměrně 1 000 B (K8); syntetický odhad byl ~4,4 KB na celou událost bez komprese, ~2,3 KB s ní.
 
@@ -1239,7 +1239,7 @@ Tři stupně přísnosti při umisťování:
 | --- | --- |
 | doplňková pole (popis, kategorie, formátování) | umístit a označit |
 | pole, která mění, **kdy se něco děje** (opakování, čas, zóna) | umístění se odmítne typovanou chybou, pokud aplikace výslovně nepošle `allow_lossy`; pravidlo má vlastní `allow_lossy` a bez něj takový záznam přeskočí |
-| druh, který poskytovatel nemá vůbec (úkol na iCloudu) | odmítnout |
+| druh, který cílová kolekce nemá (úkol do kalendáře jen s VEVENT) | odmítnout |
 
 Důvod druhého řádku: kalendář, který ukazuje jiné termíny než pravda, je horší než chybějící kopie.
 

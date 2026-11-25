@@ -1115,8 +1115,8 @@ impl Target for GoogleTarget {
 }
 
 /// The fake DAV server, profile `generic` (one host, a calendar, a task
-/// calendar, an address book) or `icloud` (T11's hosts and shapes; no
-/// tasks, vCard 3 only). Handles are object and collection paths.
+/// calendar, an address book) or `icloud` (T11's hosts and shapes; vCard 3
+/// only). Handles are object and collection paths.
 struct DavTarget {
     d: FakeDav,
     /// Only for the node configuration, which needs a `google` section.
@@ -1141,17 +1141,14 @@ impl DavTarget {
         let icloud = profile == dav::Profile::Icloud;
         let cal = d.add_collection(dav::Kind::Calendar(&["VEVENT"]), "calendar", "Calendar");
         let book = d.add_collection(dav::Kind::AddressBook, "contacts", "Contacts");
-        let mut defaults = BTreeMap::from([
+        let tasks = d.add_collection(dav::Kind::Calendar(&["VTODO"]), "tasks", "Tasks");
+        let defaults = BTreeMap::from([
             (Kind::Event, cal.clone()),
+            (Kind::Task, tasks.clone()),
             (Kind::Contact, book.clone()),
             (Kind::Group, book.clone()),
         ]);
-        let mut collections = vec![cal, book];
-        if !icloud {
-            let tasks = d.add_collection(dav::Kind::Calendar(&["VTODO"]), "tasks", "Tasks");
-            defaults.insert(Kind::Task, tasks.clone());
-            collections.push(tasks);
-        }
+        let collections = vec![cal, book, tasks];
         Self {
             d,
             g: FakeGoogle::start(google::Config::default())
@@ -1192,11 +1189,7 @@ impl Target for DavTarget {
     }
 
     fn kinds(&self) -> &[Kind] {
-        if self.icloud {
-            &[Kind::Event, Kind::Contact, Kind::Group]
-        } else {
-            &[Kind::Event, Kind::Task, Kind::Contact, Kind::Group]
-        }
+        &[Kind::Event, Kind::Task, Kind::Contact, Kind::Group]
     }
 
     fn config(&self, listen: SocketAddr, data: &Path) -> Value {

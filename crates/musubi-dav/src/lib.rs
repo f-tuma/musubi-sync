@@ -125,7 +125,6 @@ impl Provider for DavProvider {
             EntityKind::ContactGroup,
         ]
         .into_iter()
-        .filter(|&k| k != EntityKind::Task || profile.tasks())
         .map(|k| KindCapabilities::new(k, DeltaSupport::SyncToken, PushSupport::None))
         .collect();
         let mut limits = Limits::new(MAX_PAGE);

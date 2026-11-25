@@ -372,7 +372,7 @@ Profil je data v `musubi-dav::profile`, ne větvení kódu:
 | souběžnost na účet | 2 | 2 (kapitola 2.6 návrhu, I5) |
 | `multiget` dávka | 50 | 20 **(neověřeno; T11 bez dat)** |
 | oprávnění kolekce | z `current-user-privilege-set` | z `current-user-privilege-set` (T11); kalendáře a adresář `write` → `Writer` |
-| VTODO | ano | kolekce jen s VTODO se přeskočí (úkoly iCloudu nejsou ve v1, kapitola 2.6 návrhu) |
+| VTODO | ano | ano, kolekce jen s VTODO na CalDAV jako u obecného profilu (K13a). Připomínky od iOS 13 jsou mimo CalDAV (kapitola 2.6 návrhu). Seznam „Reminders ⚠️“, který po nich zůstane, se synchronizuje jako každý jiný kalendář úkolů; podle lokalizovaného názvu se nic neskrývá. Existující účty dostanou kalendáře úkolů při příštím plánovaném objevování (`rediscover_every`, výchozí 6 h), bez migrace |
 | vCard | 3.0 i 4.0 | 3.0 |
 | `sync-collection` u CardDAV | z `supported-report-set` | z `supported-report-set`; potvrzeno T11. Neplatný token: CalDAV `403`, CardDAV `412` (oba `D:valid-sync-token`) → `CursorExpired`. První čtení vrací i kolekci samotnou se `200` (CalDAV s lomítkem, CardDAV bez); ta není objekt. `addressbook-multiget` s adresou kolekce selže celý `400` |
 | `503` dávky | běžné zpomalení | běžné zpomalení; I5 |
@@ -677,7 +677,7 @@ Závislosti, které diagram zjednodušuje: K5 závisí jen na K0 a K1, ne na K2 
 - **Crates:** `musubi-dav`, `musubi-testkit` (režim `icloud` falešného DAV).
 - **Přijetí:**
   - zjišťování přes partition host, včetně home setů s výslovným `:443`; adresa mimo povolené hosty nebo jiný origin objektu se odmítne;
-  - kolekce jen s VTODO se přeskočí; vCard 3.0 a Apple skupiny projdou;
+  - vCard 3.0 a Apple skupiny projdou (kolekce jen s VTODO čte profil `icloud` od K13a);
   - souběžnost 2 a dávka `multiget` podle T11;
   - `401` vede na `ReauthRequired` s textem o hesle pro aplikace;
   - kalendář a adresář na různých partition hostech projdou zjišťováním i čtením.
@@ -789,7 +789,6 @@ Latence u DAV, Tasks a People je omezená dotazováním. Cíl „do 500 ms od oz
 
 - Jakýkoli zápis k poskytovateli a vrstva záplat (fáze 3).
 - WebDAV-Push (W1, po 1.0).
-- Úkoly iCloudu: kolekce jen s VTODO profil `icloud` zatím přeskočí (návrh, shrnutí bod 18, kapitoly 2.6 a 11.4). Přijdou v K13 po K12.
 - Plánování a T12 (fáze 6).
 - Přeskočení dopředu u drahých sérií (kapitola 10, bod 5).
 - Google `contactGroups` a `otherContacts`; členství osob ve skupinách v kanonickém tvaru.
@@ -818,7 +817,7 @@ Všechny otázky jsou vyřešené; otázka 4 čeká jen na živá data.
 
 - **Kontrakt adaptéru v0 se nemění.** Moduly `kind`, `task`, `event` ani `time` se nemění a `contract_freeze` zůstane zelený. Mění se jen `store` (není v kontraktu, `docs/contract/v0.md`, ř. 18), `musubi-store-sqlite`, `musubi-engine` a `musubi-syncd`.
 - **Kodeky se nemění.** `musubi-ical` už dnes skládá výjimky VTODO do `recurrence_overrides` s klíčem podle `start ?? due` (`ical.rs:838`). Zrušená výjimka je `{"excluded": true}` (`ical.rs:147`). Google dává `due` jen jako datum s `showWithoutTime` (`tasks.rs:396–399`).
-- **Úkoly iCloudu zůstávají mimo v1** (kapitola 11.3): profil `icloud` kolekce jen s VTODO dál přeskakuje. Opakované úkoly tak přicházejí z obecného CalDAV (Radicale a další).
+- **Úkoly iCloudu jsou kolekce jen s VTODO na CalDAV** (K13, kapitola 5.4): profil `icloud` je čte stejně jako obecný. Opakované úkoly tak přicházejí z obecného CalDAV (Radicale a další) i z kalendářů úkolů iCloudu. Připomínky Apple od iOS 13 na CalDAV nejsou.
 - `musubi-recurrence` se nemění. `Series` potřebuje jen kotvu (`DateTime`), zónu, délku, pravidla a výjimky. Úkol je dodá stejně jako událost.
 
 ### 12.2 Co je výskyt úkolu
@@ -1019,7 +1018,7 @@ K11 ─ K12a úložiště ─┬─ K12b engine ─┬─ K12d důkaz
   - **Výsledek K12d (B3t):** 250 denních a 250 týdenních otevřených sérií úkolů dá 536 149 řádků výskytů proti 18 456 řádkům událostí. `main.db` má 137,0 MB proti 11,0 MB bez úkolů. Z toho asi 32 MB připadá na sloupec `kind` a indexy z R1 (105 MB před nimi). Rozsah `kind=event` tím nezpomalí (11.2). Kdyby velikost začala vadit, rozsah přes všechny druhy může jít přes indexy s druhem na začátku (čtyři větve `UNION ALL`) a `occurrences_time` s `occurrences_long` odpadnou; sloupec `kind` jako celé číslo zmenší i položky indexů.
 - **R3, přepočet při přechodu.** Do konce přepočtu po startu `kind=task` neukáže všechno a nic to nesignalizuje (jen log). Dekódování VTODO zvládá asi 82 MB/s (D3), takže tisíce úkolů jsou otázka sekund.
 - **R4, žádný záznam v žurnálu.** Když se změní jen index (kanonický tvar je stejný), `redecode` nic nežurnáluje (`tenant.rs:667`). Klient, který si drží rozsahy v mezipaměti, se o nových výskytech úkolů po přechodu nedozví ze SSE. Provozní poznámka: po přechodu načíst rozsahy znovu.
-- **R5, různé chování klientů při dokončení opakovaného úkolu.** Thunderbird zapisuje výjimku s `RECURRENCE-ID`, Apple posouvá `DTSTART` předlohy. Index ukazuje to, co je v datech; úkoly iCloudu ve v1 nejsou.
+- **R5, různé chování klientů při dokončení opakovaného úkolu.** Thunderbird zapisuje výjimku s `RECURRENCE-ID`, staré Připomínky Apple (do iOS 12) kopírují a posouvají: dokončená kopie je nový prostředek s novým UID, `STATUS:COMPLETED` a bez `RRULE`, předloze se `DTSTART` a `DUE` posunou na další výskyt. Index ukazuje to, co je v datech. Kopie je jednorázový úkol s `done = true` v den dokončení, předloha má otevřené výskyty od dalšího dne. Rozsah s `done=false` je proto správný; historie výskytu N série S kopii nenajde, protože má jiné UID a žádné `recurrence_id`. Kopie se s předlohou nepáruje: párování podle názvu a data by bylo hádání a kopie je na serveru skutečný samostatný objekt. Tvar Apple je sekundární znalost, živě neověřená (K13b); pokrývají ho fixture `apple_reminder.ics` v `musubi-ical` a e2e test v `tests/dav.rs`.
 
 **Rozhodnuto 24. 11. 2026**
 
@@ -1030,7 +1029,22 @@ K11 ─ K12a úložiště ─┬─ K12b engine ─┬─ K12d důkaz
 
 ### K13. Úkoly iCloudu
 
-- **Cíl:** úkoly iCloudu ve stejném indexu a rozsahu jako ostatní úkoly (kapitola 12). Dnes profil `icloud` kolekce jen s VTODO přeskakuje (kapitoly 5.4 a 11.3, návrh kapitola 2.6). Uživatel 24. 11. 2026 rozhodl, že je to další položka po K12 a nesmí se ztratit.
-- **Hotovo:** profil `icloud` kolekce jen s VTODO čte; konformační sada a falešný DAV s profilem `icloud` je pokrývají; živá kontrola proti iCloudu (čtení, delta, opakovaný VTODO, dokončení výskytu podle chování klientů Apple, riziko R5).
-- **Přijetí:** opakovaný úkol vytvořený v aplikaci Připomínky je v rozsahu se správnými výskyty a `done`; zjištění zapsaná v `docs/research/phase2/`.
+- **Cíl:** úkoly iCloudu ve stejném indexu a rozsahu jako ostatní úkoly (kapitola 12). Úkoly iCloudu jsou kolekce jen s VTODO na CalDAV; Připomínky od iOS 13 mají vlastní úložiště mimo CalDAV (návrh kapitola 2.6). Uživatel 24. 11. 2026 rozhodl, že je to další položka po K12 a nesmí se ztratit.
+- **Přijetí:** opakovaný VTODO vytvořený přes CalDAV v kalendáři úkolů iCloudu je v rozsahu se správnými výskyty a `done`; to, že Připomínky (od iOS 13) do CalDAV nezapisují, je ověřené a zapsané.
 - **Závisí na:** K12d.
+
+```
+K12d ─ K13a čtení kolekcí úkolů ─ K13b živá kontrola
+```
+
+#### K13a. Čtení kolekcí úkolů iCloudu
+
+- **Crates:** `musubi-dav` (zjišťování a deskriptor), testy v `musubi-dav`, `musubi-testkit` (konformační sada), `musubi-syncd` a `musubi-ical`.
+- **Hotovo:** profil `icloud` čte kolekce jen s VTODO jako `Task` a deskriptor `icloud` má `Task` (kapitola 5.4). Konformační sada na `dav-icloud` provádí i kroky s úkoly; tabulka (kapitola 8.1) se nemění. Falešný DAV v režimu `icloud` slouží opakovaný VTODO s výjimkami s `RECURRENCE-ID` i dvojici kopie a posunuté předlohy starých Připomínek (R5). Kontrakt v0 se nemění.
+- **Přijetí:** zjišťování `icloud` vrací kolekce jen s VTODO jako `Task`; e2e test v `tests/dav.rs` dává pro oba tvary správné výskyty a `done`; `contract_freeze` zelený bez změny `v0.md`; `cargo test --workspace` a konformační job s Radicale zelené.
+
+#### K13b. Živá kontrola
+
+- **Potřebuje:** K13a v `main`, heslo pro aplikace a souhlas uživatele se zápisy do jeho Apple ID (jen do objektů, které skript založí a na konci smaže).
+- **Hotovo:** proti iCloudu ověřené čtení, delta (změna a smazání) a prošlý token na kalendáři úkolů; opakovaný VTODO po obou tvarech dokončení; negativní kontrola, že úkol z aplikace Připomínky na CalDAV nepřijde. Zjištění v `docs/research/phase2/live-k13.md`, anonymizované fixtures v `crates/musubi-testkit/fixtures/dav/icloud-k13/`.
+- **Přijetí:** přijetí K13 je splněné; odchylky se opraví jako data profilu nebo podmíněnou opravou kodeku (dokončený VTODO s `COMPLETED` bez `STATUS`), nikdy změnou kontraktu.

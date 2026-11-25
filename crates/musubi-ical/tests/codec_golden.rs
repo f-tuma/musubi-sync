@@ -72,7 +72,8 @@ mod events {
 
 mod tasks {
     use super::task;
-    golden!(task: child, completed, recurring);
+    // `apple_reminder` is the legacy Apple shape, not verified live (K13b).
+    golden!(task: child, completed, recurring, apple_reminder);
 }
 
 mod contacts {

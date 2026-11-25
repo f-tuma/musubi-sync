@@ -46,12 +46,6 @@ impl Profile {
         }
     }
 
-    /// Whether calendars with only VTODO are synced (iCloud's tasks are not
-    /// in v1).
-    pub(crate) fn tasks(self) -> bool {
-        self == Profile::Generic
-    }
-
     /// What to tell the user when the server rejects the password (`401`,
     /// `ReauthRequired` with `Rejected`), if more than "wrong password".
     pub fn reauth_hint(self) -> Option<&'static str> {

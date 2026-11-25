@@ -69,3 +69,22 @@ pub fn check_ranges(all: &Value, open: &Value) {
     want.remove(1);
     assert_eq!(occurrences(open), want, "{open}");
 }
+
+/// Legacy Apple Reminders after completing the 3 November occurrence of a
+/// daily reminder (copy-and-advance, plan 12.9 R5; secondary knowledge, not
+/// verified live): the master's dates moved to the next occurrence, with
+/// Apple's own properties and a location alarm.
+pub const APPLE_ADVANCED: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Apple Inc.//iOS 12.4//EN\r\n\
+BEGIN:VTODO\r\nUID:bins\r\nDTSTAMP:20261103T183000Z\r\nDTSTART;VALUE=DATE:20261104\r\n\
+DUE;VALUE=DATE:20261104\r\nRRULE:FREQ=DAILY;COUNT=2\r\nSUMMARY:take out the bins\r\n\
+X-APPLE-SORT-ORDER:576543210\r\n\
+BEGIN:VALARM\r\nX-WR-ALARMUID:A1\r\nACTION:DISPLAY\r\nDESCRIPTION:Reminder\r\n\
+TRIGGER;VALUE=DATE-TIME:19760401T005545Z\r\nX-APPLE-PROXIMITY:ARRIVE\r\nEND:VALARM\r\n\
+END:VTODO\r\nEND:VCALENDAR\r\n";
+
+/// The completed copy [`APPLE_ADVANCED`] leaves behind: its own resource with
+/// a new UID and no `RRULE`.
+pub const APPLE_COMPLETED_COPY: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Apple Inc.//iOS 12.4//EN\r\n\
+BEGIN:VTODO\r\nUID:bins-done-1\r\nDTSTAMP:20261103T183000Z\r\nDUE;VALUE=DATE:20261103\r\n\
+STATUS:COMPLETED\r\nCOMPLETED:20261103T183000Z\r\nSUMMARY:take out the bins\r\n\
+END:VTODO\r\nEND:VCALENDAR\r\n";
